@@ -1,0 +1,12 @@
+**/dist/**
+**/build/**
+**/coverage/**
+**/node_modules/**
+package-lock.json
+*.tsbuildinfo
+LICENSE
+NOTICE
+
+# Docs & specs are prose (specs/ is the harness-neutral source of truth) —
+# not reformatted by the build's code formatter.
+**/*.md

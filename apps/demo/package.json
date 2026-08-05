@@ -1,0 +1,18 @@
+{
+  "name": "@mapatlas/demo",
+  "version": "0.0.0",
+  "description": "MAP-ATLAS generic field-logger demo (no real domain)",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@mapatlas/core": "*",
+    "@mapatlas/leaflet": "*",
+    "@mapatlas/react": "*",
+    "@mapatlas/storage-idb": "*"
+  }
+}

@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+*.tsbuildinfo
+
+# Hand-authored docs / specs (canonical source — not reformatted by tooling)
+*.md
+specs
+.claude
+.github

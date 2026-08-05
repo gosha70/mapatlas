@@ -1,0 +1,17 @@
+MAP-ATLAS
+Copyright 2026 The MAP-ATLAS Authors
+
+This product includes software developed by the MAP-ATLAS project and its contributors.
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+---
+
+This software renders third-party map data at runtime. Deployments are responsible
+for honoring the applicable data-source licenses, including but not limited to:
+
+  - OpenStreetMap        © OpenStreetMap contributors, ODbL
+  - OpenSeaMap seamarks  © OpenSeaMap contributors, ODbL (share-alike)
+  - NOAA charts / bathymetry — U.S. Government work, public domain
+
+MAP-ATLAS itself bundles no map tiles, no trained models, and no third-party data.

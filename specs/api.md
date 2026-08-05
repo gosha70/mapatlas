@@ -248,3 +248,11 @@ export function geoJSONToTrack(fc: GeoJSON.FeatureCollection): { track: Track; e
 
 **Contract:** export/import round-trips without losing geometry, timestamps, comments, tags,
 `fields`, or `analysis` (media travels by reference + a manifest, not inlined bytes).
+
+**Encoding (see ADR-0008).** Each feature carries a standard GeoJSON geometry (a track is a
+`LineString`; a single-point track degrades to `Point`, an empty track to an empty
+`GeometryCollection`, so geometry is never `null`; an event is a `Point`) *plus* a canonical
+copy of the engine object under a namespaced foreign member (`mapatlas:track` /
+`mapatlas:event`, tagged by `mapatlas:kind`). Import reconstructs from the foreign member,
+making the round-trip loss-free; a bare externally-authored `LineString` still imports as a
+minimal track. `MediaRef`s carry `blobKey`/`url` only (the manifest) — never inlined bytes.

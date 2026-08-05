@@ -64,3 +64,19 @@ consumers; contributions arrive under the same permissive terms.
 implemented by the consumer.
 **Consequences.** The engine stays honest and general; consumers (e.g. HookAtlas's PI-28
 track-egress rule) own and test their own privacy guarantees.
+
+## ADR-0008 — GeoJSON portability: standard geometry + canonical foreign member
+**Context.** `trackToGeoJSON`/`geoJSONToTrack` (api.md §8) must round-trip *without loss*
+(geometry, timestamps, comment, tags, `fields`, `analysis`), yet a plain GeoJSON `LineString`
+can only hold `[lng, lat]` coordinates — it cannot carry per-point timestamps/accuracy or the
+rich event/analysis model. Media must not be inlined.
+**Decision.** Emit a standard geometry per feature (track ⇒ `LineString`; 1-point track ⇒
+`Point`; empty ⇒ empty `GeometryCollection`, so never `null`; event ⇒ `Point`) for external
+tools, **and** attach a canonical copy of the engine object under a namespaced foreign member
+(`mapatlas:track` / `mapatlas:event`, discriminated by `mapatlas:kind`). Import reads the
+foreign member when present; otherwise it falls back to reading a bare `LineString`. Media
+travels by reference (`MediaRef.blobKey`/`url`) only.
+**Consequences.** Loss-free round-trips and interoperable output, at the cost of some
+redundancy (geometry duplicates part of the foreign member). Third-party GeoJSON still imports
+as a minimal track. The foreign-member schema is now part of the on-disk format (versionable
+via the `mapatlas:` prefix).

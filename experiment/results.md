@@ -13,6 +13,8 @@ Legend: **✓ = 2 · △ = 1 · ✗ = 0** (per dimension, out of 16).
 
 ## Phase 0 — Toolchain & skeleton (T0.1–T0.6)
 
+> **Model (both harnesses): `claude-opus-4-8`** — locked for parity. pi selected it at login; Claude Code forced via `--model claude-opus-4-8`. Run mode — pi: `disciplined` (watched, sandbox-gate fallback on host); Claude: `dontAsk` + trusted workspace.
+
 | # | Dimension | pi.dev | Claude Code |
 |---|---|:---:|:---:|
 | 1 | Gates green | ✓ | — |

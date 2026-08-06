@@ -64,3 +64,31 @@ consumers; contributions arrive under the same permissive terms.
 implemented by the consumer.
 **Consequences.** The engine stays honest and general; consumers (e.g. HookAtlas's PI-28
 track-egress rule) own and test their own privacy guarantees.
+
+## ADR-0008 — `@mapatlas/core` references Web-Platform + GeoJSON standard types
+**Context.** The public API in `api.md` uses `Blob` (media bytes in `StorageAdapter`/`AnalyzeInput`)
+and `GeoJSON.FeatureCollection` (portability §8). Neither resolves under core's strict base
+config (`lib: ["ES2022"]`, `types: []`), yet core must stay framework-agnostic.
+**Decision.** Give `@mapatlas/core` `lib: ["ES2022", "DOM"]` and `types: ["geojson"]` (with a
+type-only `@types/geojson` dependency). These add **types only** — no runtime, no bundled code.
+Framework-agnosticism keeps being enforced at the source level by the import-isolation scan
+(T0.5), which still forbids DOM *globals* (`window`/`document`/`navigator`/`localStorage`),
+`react`/`react-dom`/`leaflet` imports, and domain tokens. `Blob` and the `GeoJSON` namespace are
+neutral Web-Platform standards available in both browsers and modern Node, not consumer-specific.
+**Consequences.** Core compiles against the exact `api.md` signatures with zero runtime deps; the
+architectural rule is still machine-checked by the scan rather than by the absence of the DOM lib.
+Consumers get the `GeoJSON` types transitively via the `@types/geojson` dependency.
+
+## ADR-0009 — GeoJSON portability stores a lossless payload in feature `properties`
+**Context.** `trackToGeoJSON`/`geoJSONToTrack` (§8) must round-trip geometry **and** all
+non-spatial data (per-fix timestamps/accuracy/speed/heading, `simplified`, `tags`, `meta`,
+event `comment`/`category`/`fields`/`analysis`) — none of which fit in bare `[lng, lat]`
+coordinates.
+**Decision.** Emit standard geometry (track → `LineString`, event → `Point`) for interoperability,
+and carry the full structured payload in each feature's `properties` under a `mapatlas:*` `kind`
+tag. Per-point metadata rides in a `pointMeta` array parallel to the coordinates. Media travels
+**by reference** (`MediaRef` has `blobKey`/`url`, never bytes) plus a collection-level
+`mapatlas:manifest` feature (an empty `GeometryCollection`, so the result stays a valid
+`GeoJSON.FeatureCollection`). Unknown/manifest features are ignored on import.
+**Consequences.** External tools render the geometry; MAP-ATLAS reconstructs losslessly from
+`properties`. Blob bytes are the consumer's to export alongside the manifest.

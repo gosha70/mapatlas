@@ -68,6 +68,47 @@ export interface MapEvent {
 }
 ```
 
+### 1a. Core utilities (`@mapatlas/core`)
+
+Concrete helpers implemented in Phase 1 against the types above. Additive to the seams
+below; adding a helper here never changes an existing interface signature.
+
+```ts
+// Ids — ULID (26-char Crockford base32), lexicographically sortable.
+export function newId(): Id;
+export const ID_LENGTH: number;                 // 26
+
+// Geometry (metres, WGS-84 haversine).
+export const EARTH_RADIUS_M: number;
+export function haversineMeters(a: LatLng, b: LatLng): number;
+export function pathLengthMeters(points: readonly LatLng[]): number;
+
+// Sampling decision (pure). Accuracy filter runs first, so a recorder built on
+// this never emits a point that fails the accuracy gate.
+export const DEFAULT_SAMPLING_POLICY: SamplingPolicy;   // { 10, 15000, 50 }
+export type SampleReason =
+  | "first" | "interval" | "distance" | "too-close" | "low-accuracy";
+export interface SampleDecision { keep: boolean; reason: SampleReason; }
+export function sample(
+  prev: TrackPoint | undefined, candidate: TrackPoint, policy: SamplingPolicy,
+): SampleDecision;
+
+// Track geometry.
+export function simplify(points: TrackPoint[], toleranceM: number): TrackPoint[]; // Douglas–Peucker
+export const DEFAULT_SIMPLIFY_TOLERANCE_M: number;      // 5
+export interface FinalizedTrack { simplified: TrackPoint[]; distanceM: number; }
+export function finalizeTrack(points: TrackPoint[], toleranceM?: number): FinalizedTrack;
+
+// Event log — create/update/delete map events against a StorageAdapter.
+export class EventLog {
+  constructor(store: StorageAdapter, trackId?: Id);
+  list(): Promise<MapEvent[]>;                          // scoped to trackId when given
+  create(input: Omit<MapEvent, "id">): Promise<MapEvent>;
+  update(event: MapEvent): Promise<void>;
+  delete(id: Id): Promise<void>;
+}
+```
+
 ## 2. Track recording (`@mapatlas/core`)
 
 ```ts

@@ -19,5 +19,9 @@
   "scripts": {
     "build": "tsc -b",
     "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@mapatlas/core": "*",
+    "idb": "^8.0.0"
   }
 }

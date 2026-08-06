@@ -92,3 +92,19 @@ tag. Per-point metadata rides in a `pointMeta` array parallel to the coordinates
 `GeoJSON.FeatureCollection`). Unknown/manifest features are ignored on import.
 **Consequences.** External tools render the geometry; MAP-ATLAS reconstructs losslessly from
 `properties`. Blob bytes are the consumer's to export alongside the manifest.
+
+## ADR-0010 — One StorageAdapter conformance suite; in-memory fake is the reference
+**Context.** T2.1 wants a reusable adapter test suite runnable against *any* `StorageAdapter`
+(the in-memory fake, the IndexedDB default, a consumer's remote/sync store), living in `core`.
+The suite must import the test runner (`vitest`), yet `core` must stay a dependency-light,
+DOM-free library whose `dist` carries no test tooling.
+**Decision.** Ship `runStorageAdapterConformance(name, make)` at
+`@mapatlas/core/src/testing/` and **exclude `src/testing/**` from the compiled build**, so
+`vitest` never enters `core`'s `dist`; test files import it by source path. Ship
+`createMemoryStorageAdapter()` as a first-class, built export — it is both the reference the
+suite is proven against (T2.1 AC) and a genuinely useful SSR/preview fallback. The IndexedDB
+adapter (`createIdbStorageAdapter`) in `@mapatlas/storage-idb` passes the same suite under
+`fake-indexeddb` (T2.2).
+**Consequences.** Every adapter is held to one machine-checked contract; adding a store means
+adding one `runStorageAdapterConformance(...)` line. The suite is not part of the public
+runtime surface (no `vitest` in `dist`); the in-memory adapter is.

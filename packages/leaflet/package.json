@@ -19,5 +19,13 @@
   "scripts": {
     "build": "tsc -b",
     "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@mapatlas/core": "*",
+    "leaflet": "^1.9.4",
+    "pmtiles": "^3.2.1"
+  },
+  "devDependencies": {
+    "@types/leaflet": "^1.9.12"
   }
 }

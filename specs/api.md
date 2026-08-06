@@ -169,6 +169,26 @@ export interface StorageAdapter {
 **Contract:** all methods are async and side-effect-local by default; `clearAll()` must
 remove every track, event, and blob (consumers rely on this for a clean device wipe).
 
+Additive helpers (never change the interface above; ADR-0010):
+
+```ts
+// In-memory StorageAdapter — a fake for tests and an SSR/preview fallback.
+export function createMemoryStorageAdapter(): StorageAdapter;
+
+// Reusable conformance suite (ships in @mapatlas/core, imported from *.test.ts).
+// Verifies any adapter against the contract above; excluded from the built dist
+// because it imports the test runner.
+export function runStorageAdapterConformance(
+  name: string, make: () => StorageAdapter | Promise<StorageAdapter>,
+): void;
+```
+
+The default IndexedDB implementation ships in `@mapatlas/storage-idb`:
+
+```ts
+export function createIdbStorageAdapter(dbName?: string): StorageAdapter;
+```
+
 ## 4. AI analyzer seam (`@mapatlas/core`)
 
 ```ts

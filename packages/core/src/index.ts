@@ -38,6 +38,9 @@ export { DEFAULT_SIMPLIFY_TOLERANCE_M, finalizeTrack } from "./track";
 // Event log
 export { EventLog } from "./event-log";
 
+// In-memory persistence (a StorageAdapter fake / SSR fallback; api.md §3)
+export { createMemoryStorageAdapter } from "./memory-storage";
+
 // Seams (api.md §3–5)
 export type {
   StorageAdapter,

@@ -7,6 +7,24 @@
   "license": "Apache-2.0",
   "scripts": {
     "build": "tsc -b",
-    "clean": "tsc -b --clean"
+    "clean": "tsc -b --clean",
+    "dev": "vite",
+    "preview": "vite build && vite preview"
+  },
+  "dependencies": {
+    "@mapatlas/core": "*",
+    "@mapatlas/leaflet": "*",
+    "@mapatlas/offline-pmtiles": "*",
+    "@mapatlas/react": "*",
+    "@mapatlas/recorder-web": "*",
+    "@mapatlas/storage-idb": "*",
+    "idb": "^8.0.0",
+    "leaflet": "^1.9.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.3",
+    "vite": "^5.4.10"
   }
 }

@@ -15,13 +15,15 @@ import type { MapController } from "@mapatlas/leaflet";
 
 export interface MapCanvasProps {
   sources: TileSource[];
-  track?: Track;
-  events?: MapEvent[];
-  livePoint?: TrackPoint;
+  // `| undefined` on the optionals so callers may pass a possibly-undefined
+  // value directly under `exactOptionalPropertyTypes` (e.g. `track={maybeTrack}`).
+  track?: Track | undefined;
+  events?: MapEvent[] | undefined;
+  livePoint?: TrackPoint | undefined;
   onMapTap?(at: LatLng): void;
   onEventClick?(id: Id): void;
-  className?: string;
-  style?: React.CSSProperties;
+  className?: string | undefined;
+  style?: React.CSSProperties | undefined;
 }
 
 export function MapCanvas(props: MapCanvasProps): React.JSX.Element {

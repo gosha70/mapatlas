@@ -21,10 +21,27 @@ privacy/sharing rules live in the consuming application.
 
 ## Status
 
-**Pre-implementation.** This repository currently contains the **specification and
-architecture** an autonomous coding agent (or a human) needs to plan and build the
-product. See [`specs/`](specs/). No runtime code has been written yet — that is the
-build phase, driven from these artifacts.
+**v1 engine implemented.** All roadmap phases (0–7) are built against the
+[`specs/api.md`](specs/api.md) contract and green on every gate (`build`, `typecheck`,
+`lint`, `test`, plus the import-isolation and SPDX scans). New here → the
+[**getting-started guide**](docs/getting-started.md) embeds the record → pin → review
+loop in an afternoon.
+
+### Packages
+
+| Package | Role |
+|---|---|
+| [`@mapatlas/core`](packages/core) | Framework-agnostic model, sampling/simplify, `EventLog`, GeoJSON, seams, `noopAnalyzer`, in-memory store + conformance suite |
+| [`@mapatlas/storage-idb`](packages/storage-idb) | Default `StorageAdapter` over IndexedDB |
+| [`@mapatlas/recorder-web`](packages/recorder-web) | Web `TrackRecorder` (`watchPosition` + Screen Wake Lock) |
+| [`@mapatlas/leaflet`](packages/leaflet) | Leaflet `MapController`, tile + offline layers |
+| [`@mapatlas/react`](packages/react) | `<MapCanvas>`, `<EventComposer>`, `<TripReview>` + hooks |
+| [`@mapatlas/offline-pmtiles`](packages/offline-pmtiles) | PMTiles `OfflineRegionStore` + storage-persistence helpers |
+| [`apps/demo`](apps/demo) | A generic field-logger demo wiring the whole engine (`npm run dev`) |
+
+The engine core stays DOM-free and domain-free — an [import-isolation
+scan](scripts/check-isolation.mjs) fails the build on any `react`/`leaflet`/DOM import or
+domain token in `@mapatlas/core` (or `react` in `@mapatlas/leaflet`).
 
 ## What's here now (the build seed)
 

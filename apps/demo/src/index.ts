@@ -2,8 +2,10 @@
 
 /**
  * MAP-ATLAS demo — a generic field logger (no real domain) that wires the whole
- * engine together and doubles as the manual test bed.
- *
- * Phase 0 skeleton: the full record→pin→photo→review loop lands in Phase 7.
+ * engine together (recorder + map + events + storage + offline) and doubles as
+ * the manual test bed. The full record→pin→photo→review loop, offline behaviour,
+ * reload survival, and GeoJSON export are proven headlessly in `loop.test.ts`.
  */
-export const APP_NAME = "@mapatlas/demo";
+export { App, DEMO_SOURCES } from "./App";
+export type { AppProps } from "./App";
+export { createIdbTileCache } from "./idb-tile-cache";

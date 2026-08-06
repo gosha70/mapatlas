@@ -2,14 +2,19 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "lib": ["ES2022", "DOM"],
+    "jsx": "react-jsx",
+    "types": ["react", "react-dom"]
   },
   "references": [
     { "path": "../../packages/core" },
     { "path": "../../packages/storage-idb" },
+    { "path": "../../packages/recorder-web" },
     { "path": "../../packages/leaflet" },
+    { "path": "../../packages/offline-pmtiles" },
     { "path": "../../packages/react" }
   ],
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts", "dist"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "dist"]
 }

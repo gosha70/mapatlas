@@ -22,7 +22,8 @@
   },
   "dependencies": {
     "@mapatlas/core": "*",
-    "@mapatlas/leaflet": "*"
+    "@mapatlas/leaflet": "*",
+    "@mapatlas/recorder-web": "*"
   },
   "peerDependencies": {
     "react": ">=18",

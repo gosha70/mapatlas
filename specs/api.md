@@ -309,18 +309,25 @@ export function useOfflineRegions(store: OfflineRegionStore): {
   remove(id: Id): Promise<void>;
 };
 
-// Components
+// Components. MapCanvas is SSR-safe (loads Leaflet dynamically on mount, so no
+// `window` at import). `className`/`style` are additive, optional layout props.
 export function MapCanvas(props: {
   sources: TileSource[]; track?: Track; events?: MapEvent[]; livePoint?: TrackPoint;
   onMapTap?(at: LatLng): void; onEventClick?(id: Id): void;
+  className?: string; style?: React.CSSProperties;
 }): JSX.Element;
 
+// `store?` is additive (ADR-0012): given a store, captured photos persist via
+// putBlob → blobKey (durable across reload); without one, they use object URLs.
 export function EventComposer(props: {
-  at: LatLng; analyzer?: MediaAnalyzer;
+  at: LatLng; analyzer?: MediaAnalyzer; store?: StorageAdapter;
   onSave(input: Omit<MapEvent, "id" | "position">): void; onCancel(): void;
-}): JSX.Element;   // comment field + in-place photo capture; if analyzer, "Analyze photo" → suggested labels the user confirms
+}): JSX.Element;   // comment field + in-place photo capture; if analyzer, "Analyze photo" → suggested labels the user confirms (remote analyzers disclosed)
 
-export function TripReview(props: { track: Track; events: MapEvent[] }): JSX.Element;
+// `store?` is additive: resolves photo previews stored by blobKey.
+export function TripReview(props: {
+  track: Track; events: MapEvent[]; store?: StorageAdapter;
+}): JSX.Element;
 ```
 
 ## 8. Portability (`@mapatlas/core`)

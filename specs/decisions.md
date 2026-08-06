@@ -125,3 +125,20 @@ updated in the same change.
 fakes (no live hardware); consumers add one dependency to get the v1 recorder. It mirrors
 ADR-0003 (native background recorders are also out-of-tree adapters implementing the same seam)
 and matches the layering already used for `@mapatlas/leaflet`/`@mapatlas/react`.
+
+## ADR-0012 — Photo-bearing components take an optional `store`; SSR loads Leaflet lazily
+**Context.** T5.3/T5.4: `<EventComposer>` captures photo *bytes* and `<TripReview>` displays
+them, but the `api.md §7` signatures carried no persistence handle — so media could only live
+as in-memory object URLs that do not survive a reload, defeating the offline durability the
+demo (T7.1) must prove. Separately, `<MapCanvas>` must be SSR-safe, yet Leaflet reads `window`
+the moment it is imported.
+**Decision.** Add an **optional, additive** `store?: StorageAdapter` prop to `<EventComposer>`
+(captured photos persist via `putBlob` → `blobKey`; without a store, object URLs) and to
+`<TripReview>` (resolves `blobKey` previews). Load `@mapatlas/leaflet` with a **dynamic
+`import()` inside `<MapCanvas>`'s mount effect** — the only static reference is a type-only
+import (erased) — so importing `@mapatlas/react` on a server never evaluates Leaflet. `api.md §7`
+is updated in the same change. The hook return objects use `T | undefined` fields (read-compatible
+with the `?:` optionals in `api.md`).
+**Consequences.** Media is durable when a store is supplied (the demo does), the components stay
+usable store-free, and the React entry point imports cleanly under SSR (verified by a node-env
+test). No public interface was removed or changed — only additive optionals.

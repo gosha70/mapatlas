@@ -275,7 +275,15 @@ export interface MapController {
   destroy(): void;
 }
 export declare function createMapController(o: MapControllerOptions): MapController;
+
+// Additive helper: build a Leaflet layer for any TileSource kind (xyz | wms |
+// pmtiles). pmtiles renders raster tiles read from the archive by (z, x, y).
+export declare function createTileLayer(source: TileSource, mime?: string): L.Layer;
 ```
+
+Rendering notes: event markers are keyboard-reachable Leaflet `DivIcon`s (no image
+assets); a visible-focus stylesheet is injected once; `fitTrack`/`recenter` pass
+`animate: false` when `prefers-reduced-motion: reduce` is set.
 
 ## 7. React bindings (`@mapatlas/react`)
 

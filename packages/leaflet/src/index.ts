@@ -2,8 +2,9 @@
 
 /**
  * MAP-ATLAS Leaflet renderer — mounts a Leaflet map, composites an ordered
- * TileSource stack, and renders the track + event markers.
- *
- * Phase 0 skeleton: the renderer (MapController) lands in Phase 4.
+ * TileSource stack, and renders the live position, track polyline, and event
+ * markers. Framework-agnostic below React: this package imports no React.
  */
-export const PACKAGE_NAME = "@mapatlas/leaflet";
+export { createMapController } from "./map-controller";
+export type { MapController, MapControllerOptions } from "./map-controller";
+export { createTileLayer } from "./tile-layers";

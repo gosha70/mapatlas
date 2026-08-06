@@ -8,3 +8,5 @@
 export { createMapController } from "./map-controller";
 export type { MapController, MapControllerOptions } from "./map-controller";
 export { createTileLayer } from "./tile-layers";
+export { createOfflineTileLayer } from "./offline-layer";
+export type { TileReader, OfflineTileLayerOptions } from "./offline-layer";

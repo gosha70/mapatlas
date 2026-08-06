@@ -255,6 +255,38 @@ export interface OfflineRegionStore {
 }
 ```
 
+The default implementation ships in **`@mapatlas/offline-pmtiles`** (renderer-neutral;
+ADR-0013). It downloads every tile covering a bbox × zoom range from a `TileByteSource`
+(a PMTiles archive in production) into a `TileCache`, and adds `readTile(regionId, z, x, y)`
+so a renderer can serve a downloaded region offline:
+
+```ts
+// @mapatlas/offline-pmtiles
+export interface TileCache { put; get; delete; keys(prefix): Promise<string[]>; }
+export interface TileByteSource { getTile(z, x, y): Promise<ArrayBuffer | undefined>; }
+export function pmtilesTileByteSource(url: string): TileByteSource;
+export function createMemoryTileCache(): TileCache;
+export interface PMTilesOfflineRegionStore extends OfflineRegionStore {
+  readTile(regionId: Id, z: number, x: number, y: number): Promise<ArrayBuffer | undefined>;
+}
+export function createPMTilesOfflineRegionStore(opts: {
+  source: TileByteSource; cache: TileCache; avgTileBytes?: number; now?: () => number;
+}): PMTilesOfflineRegionStore;
+
+// Storage-persistence helpers (T6.2), surfaced by the demo.
+export function requestPersistentStorage(nav?): Promise<boolean>; // navigator.storage.persist()
+export function isStoragePersisted(nav?): Promise<boolean>;
+export function installGuidance(userAgent?): { platform; reason; steps: string[] };
+```
+
+The offline render side is a decoupled Leaflet layer (`@mapatlas/leaflet`):
+
+```ts
+export function createOfflineTileLayer(
+  read: (z, x, y) => Promise<ArrayBuffer | undefined>, options?,
+): L.GridLayer;   // wire `store.readTile.bind(store, regionId)` as `read`
+```
+
 ## 6. Renderer (`@mapatlas/leaflet`)
 
 ```ts

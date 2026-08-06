@@ -4,6 +4,7 @@
     { "path": "packages/core" },
     { "path": "packages/storage-idb" },
     { "path": "packages/recorder-web" },
+    { "path": "packages/offline-pmtiles" },
     { "path": "packages/leaflet" },
     { "path": "packages/react" },
     { "path": "apps/demo" }

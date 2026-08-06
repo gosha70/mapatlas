@@ -142,3 +142,19 @@ with the `?:` optionals in `api.md`).
 **Consequences.** Media is durable when a store is supplied (the demo does), the components stay
 usable store-free, and the React entry point imports cleanly under SSR (verified by a node-env
 test). No public interface was removed or changed — only additive optionals.
+
+## ADR-0013 — Offline regions are a renderer-neutral package with a decoupled render layer
+**Context.** T6.1 needs a PMTiles-backed `OfflineRegionStore` whose downloaded regions render
+with the network disabled. ADR-0004 says PMTiles is renderer-neutral, so the store should not
+depend on Leaflet; but the *render* of a downloaded tile does need the renderer.
+**Decision.** Split the concern. `@mapatlas/offline-pmtiles` (depends on `core` + `pmtiles`,
+no Leaflet/React) owns the store, its `TileCache`/`TileByteSource` seams, tile math, and the
+T6.2 storage-persistence + install-guidance helpers. The store exposes `readTile(regionId, …)`.
+`@mapatlas/leaflet` gains `createOfflineTileLayer(read, opts)` — a `GridLayer` decoupled from the
+store via a plain `read(z, x, y)` function, so Leaflet takes no dependency on the offline package.
+The consumer wires `store.readTile.bind(store, regionId)` as `read`. Both the store (download →
+`readTile` with the source switched offline) and the layer (renders from a local reader, no
+network) are tested; the demo (T7.1) wires the full path. `api.md §5` is updated.
+**Consequences.** The store is reusable by any future renderer (e.g. a MapLibre sibling) without
+change; Leaflet stays offline-store-agnostic; the network-disabled render path is machine-tested.
+Seams (source/cache) are faked in tests — no live tile host, no bundled tiles.

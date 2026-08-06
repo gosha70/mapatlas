@@ -162,3 +162,85 @@ autonomous commit). They are trading strengths, not one dominating.
 _Method: gates + coverage + isolation posture verified by the reviewer from a
 clean `npm install`; Claude's Phase 1 scored from its staged tree (commit pending
 user approval — code is final)._
+
+---
+
+## Phases 2–7 — storage, recorder, renderer, React, offline, demo (consolidated)
+
+> Both harnesses **completed all of Phases 2–7 autonomously overnight** on
+> `claude-opus-4-8`. pi ran `--profile unattended` + `CCT_SANDBOX_OVERRIDE=1`
+> (deny-floor intact); Claude ran headless `--dangerously-skip-permissions` (no
+> guardrails). **Method note:** all gates below were re-run by the reviewer from
+> a clean `npm install`; the per-dimension read is a *consolidated* assessment of
+> Phases 2–7 with the key differentiators verified — not a deep six-phase forensic.
+
+**Both, verified green from a clean checkout:** build · typecheck · lint · test ·
+scan:isolation · scan:spdx — **all pass**, every commit **DCO-signed**, `leaflet`
+imports no `react`, core isolation intact.
+
+| | pi.dev | Claude Code |
+|---|---|---|
+| Phases committed | 8 (0→7) | 9 (0→7) |
+| Total tests | 79 | **107** |
+| Core coverage tooling | none (unprovable) | **v8, measurable** |
+| Packages | **5 — exactly `architecture.md`** | 7 (added `recorder-web`, `offline-pmtiles`) |
+| `api.md` growth | +9 (built to contract) | **+130 / −7 (documented the surface)** |
+| ADRs | 2 | **6** |
+| Demo record→review loop test (T7.1) | — | **`App.test.tsx`** ✓ |
+| Finished autonomously | **✓ all 7 committed, clean** | Phase 7 built green but **needed a manual commit** |
+
+| # | Dimension | pi.dev | Claude Code |
+|---|---|:---:|:---:|
+| 1 | Gates green | ✓ | ✓ |
+| 2 | Task completeness | ✓ | ✓ |
+| 3 | Spec fidelity | ✓ | △ |
+| 4 | Scope discipline | ✓ | ✓ |
+| 5 | Enforcement / test rigor | △ | ✓ |
+| 6 | Conventions | ✓ | ✓ |
+| 7 | Code quality | ✓ | ✓ |
+| 8 | Operability | ✓ | △ |
+| | **Consolidated / 16** | **15** | **14** |
+
+- **[3] Spec fidelity → pi.** pi matched `architecture.md` to the letter (5
+  packages, web recorder in core, +9 lines to `api.md`). Claude split into 7
+  packages (`recorder-web`, `offline-pmtiles`) and evolved `api.md` heavily — a
+  **well-reasoned, ADR-documented deviation** (cleaner isolation), but a
+  deviation from the prescribed layout nonetheless.
+- **[5] Test rigor → Claude.** Measurable coverage (v8), 107 tests vs 79, and an
+  actual offline record→review **loop test** for the T7.1 exit criterion; pi has
+  no coverage tooling and no explicit loop test.
+- **[8] Operability → pi.** pi finished all 7 phases and committed each,
+  hands-off and clean. Claude — despite running with *no* permission guardrails —
+  ended its `-p` session with **Phase 7 uncommitted** (you committed it), so it
+  did not fully self-complete.
+
+### Final verdict — the whole feature
+
+**Both harnesses built a complete, all-green, DCO-signed, isolation-clean v1 of a
+real TypeScript monorepo (5–7 packages, 79–107 tests) autonomously overnight,
+from the same neutral brief.** That is the headline: on raw capability they are
+**peers**, and the experiment's premise — hands-off cross-harness building —
+worked on both.
+
+Per-phase the scores stayed within a point and **kept trading the lead**, which
+reflects a real and *consistent* character difference, not a quality gap:
+
+| Phase(s) | pi.dev | Claude Code | won on |
+|---|:---:|:---:|---|
+| 0 | 14 | **15** | Claude — operability + scanner unit-test |
+| 1 | **15** | 14 | pi — stricter core isolation + autonomous commit |
+| 2–7 | **15** | 14 | pi — spec-faithful layout + finished autonomously |
+
+- **pi.dev = faithful, lean, autonomous.** Builds exactly to the prescribed
+  architecture, minimal contract drift, finished and committed every phase
+  hands-off. Lighter on verification (no coverage tooling) and documentation.
+- **Claude Code = thorough, rigorous, well-documented.** Measurable coverage,
+  more tests, 6 ADRs, a documented public surface, more modular. Took reasoned
+  architectural liberties, and needed one manual commit to finish.
+
+**Overall: a near-tie that comes down to what you value.** Want a build that
+adheres tightly to your spec and runs to completion untouched → pi. Want maximum
+test rigor, documentation, and modularity, and don't mind reviewing well-argued
+deviations → Claude. Neither dominated; each is strong exactly where the other is
+lighter. _Cost: pi metered ≈ a few dollars for the whole run; Claude plan-included._
+

@@ -80,3 +80,16 @@ travels by reference (`MediaRef.blobKey`/`url`) only.
 redundancy (geometry duplicates part of the foreign member). Third-party GeoJSON still imports
 as a minimal track. The foreign-member schema is now part of the on-disk format (versionable
 via the `mapatlas:` prefix).
+
+## ADR-0009 — `<EventComposer>` takes an optional `store` for photo bytes
+**Context.** T5.3's in-place photo capture produces `Blob`s, but a `MediaRef` carries only a
+`blobKey`/`url` — not bytes. To persist a photo durably (so it survives reload, per T7.1) the
+composer needs somewhere to put the bytes, and the engine's persistence seam is
+`StorageAdapter`.
+**Decision.** Add an optional `store?: StorageAdapter` prop to `<EventComposer>` (api.md §7).
+When present, captured photos are `putBlob`'d and referenced by `blobKey`; when absent, the
+composer falls back to an ephemeral object `url`. No other component gains a storage
+dependency — `<TripReview>` stays `{ track, events }` and consumers resolve `blobKey`→URL
+before passing events in.
+**Consequences.** Durable media capture with one optional, backward-compatible prop; the
+storage seam stays the single place bytes live; the composer works with or without persistence.

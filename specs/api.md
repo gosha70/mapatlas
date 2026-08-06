@@ -233,6 +233,7 @@ export function MapCanvas(props: {
 
 export function EventComposer(props: {
   at: LatLng; analyzer?: MediaAnalyzer;
+  store?: StorageAdapter;   // persists captured photo bytes → MediaRef.blobKey (ADR-0009)
   onSave(input: Omit<MapEvent, "id" | "position">): void; onCancel(): void;
 }): JSX.Element;   // comment field + in-place photo capture; if analyzer, "Analyze photo" → suggested labels the user confirms
 

@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@mapatlas/core": "*",
-    "leaflet": "^1.9.4"
+    "leaflet": "^1.9.4",
+    "pmtiles": "^3.2.1"
   }
 }

@@ -16,3 +16,20 @@ export {
   setPmtilesRasterFactory,
   type PmtilesRasterFactory,
 } from "./tile-layers.js";
+
+// Offline regions (PMTiles) + cache-backed offline renderer
+export {
+  PmtilesOfflineRegionStore,
+  MemoryTileCache,
+  createOfflineTileLayer,
+  enumerateTiles,
+  countTiles,
+  lonToTileX,
+  latToTileY,
+} from "./offline.js";
+export type {
+  TileCache,
+  TileCoord,
+  TileFetcher,
+  PmtilesOfflineRegionStoreOptions,
+} from "./offline.js";

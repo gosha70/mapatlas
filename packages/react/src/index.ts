@@ -25,3 +25,12 @@ export type { EventComposerProps } from "./EventComposer.js";
 
 export { TripReview } from "./TripReview.js";
 export type { TripReviewProps } from "./TripReview.js";
+
+// Storage-persistence + install guidance (T6.2)
+export {
+  requestPersistentStorage,
+  estimateStorage,
+  detectPlatform,
+  installPromptGuidance,
+} from "./persistence.js";
+export type { PersistResult, Platform } from "./persistence.js";

@@ -76,6 +76,9 @@ export function MapCanvas(props: MapCanvasProps): React.JSX.Element {
   }, [props.sources]);
   useEffect(() => {
     controllerRef.current?.renderTrack(props.track ?? null);
+    // Demo fix: keep the recorded track in view as it appears / grows.
+    const n = props.track?.simplified?.length ?? props.track?.points.length ?? 0;
+    if (props.track && n >= 2) controllerRef.current?.fitTrack(props.track);
   }, [props.track]);
   useEffect(() => {
     controllerRef.current?.renderEvents(props.events ?? []);

@@ -10,6 +10,12 @@
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     />
+    <style>
+      /* Field logger: clicking the map drops an event → crosshair affordance. */
+      .leaflet-container { cursor: crosshair; }
+      .leaflet-container.leaflet-dragging,
+      .leaflet-dragging .leaflet-container { cursor: grabbing; }
+    </style>
   </head>
   <body>
     <div id="root"></div>

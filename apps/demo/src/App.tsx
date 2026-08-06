@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   noopAnalyzer,
   trackToGeoJSON,
@@ -10,6 +10,7 @@ import {
   type StorageAdapter,
   type TileSource,
   type Track,
+  type TrackPoint,
 } from "@mapatlas/core";
 import { createIdbStorageAdapter } from "@mapatlas/storage-idb";
 import {
@@ -46,11 +47,18 @@ export interface AppProps {
 // placeholder keeps the demo domain- and vendor-neutral (see architecture §8).
 export const DEMO_SOURCES: TileSource[] = [
   {
-    id: "demo-base",
+    id: "ocean-base",
     kind: "xyz",
-    url: "https://tile.example/{z}/{x}/{y}.png",
+    url: "https://services.arcgisonline.com/arcgis/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}",
     attribution:
-      "© OpenStreetMap contributors (ODbL) — replace with a self-hosted source",
+      "Esri Ocean Basemap — Esri, GEBCO, NOAA & others (temporary demo source)",
+  },
+  {
+    id: "seamarks-overlay",
+    kind: "xyz",
+    url: "https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png",
+    attribution: "Seamarks © OpenSeaMap contributors (ODbL, share-alike)",
+    opacity: 1,
   },
 ];
 
@@ -107,6 +115,32 @@ export function App(props: AppProps): React.JSX.Element {
   const recorder = useTrackRecorder({ store });
   const events = useEventLog(store, recorder.track?.id);
   const offline = useOfflineRegions(offlineStore);
+
+  // Demo: accumulate live points into a growing track so a line draws WHILE
+  // recording (the hook exposes only the latest livePoint + the finalized track).
+  const [livePts, setLivePts] = useState<TrackPoint[]>([]);
+  const prevStatus = useRef(recorder.status);
+  useEffect(() => {
+    if (recorder.status === "recording" && prevStatus.current !== "recording") {
+      setLivePts([]);
+    }
+    prevStatus.current = recorder.status;
+  }, [recorder.status]);
+  useEffect(() => {
+    if (recorder.status === "recording" && recorder.livePoint) {
+      setLivePts((prev) => [...prev, recorder.livePoint as TrackPoint]);
+    }
+  }, [recorder.livePoint, recorder.status]);
+  const liveTrack: Track | undefined =
+    recorder.status === "recording" && livePts.length >= 2
+      ? {
+          id: "live",
+          startedAt: livePts[0]!.t,
+          status: "recording",
+          points: livePts,
+          simplified: livePts,
+        }
+      : undefined;
 
   const [composerAt, setComposerAt] = useState<LatLng | null>(null);
   const [persisted, setPersisted] = useState(false);
@@ -182,7 +216,7 @@ export function App(props: AppProps): React.JSX.Element {
       <div className="mapatlas-demo__map" style={{ height: 360 }}>
         <MapCanvas
           sources={sources}
-          track={recorder.track}
+          track={recorder.track ?? liveTrack}
           events={events.events}
           livePoint={recorder.livePoint}
           onMapTap={(at) => setComposerAt(at)}

@@ -115,6 +115,10 @@ export function createMapController(o: MapControllerOptions): MapController {
     renderer: new L.SVG(),
   });
 
+  // Drop Leaflet's branded/flagged default attribution prefix; keep only the
+  // per-source data attributions (the legally required ones).
+  map.attributionControl.setPrefix(false);
+
   let tileLayers: L.Layer[] = [];
   let trackPolyline: L.Polyline | undefined;
   const eventMarkers = new Map<Id, L.Marker>();

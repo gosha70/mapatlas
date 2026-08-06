@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/core" },
     { "path": "packages/storage-idb" },
+    { "path": "packages/recorder-web" },
     { "path": "packages/leaflet" },
     { "path": "packages/react" },
     { "path": "apps/demo" }

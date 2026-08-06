@@ -109,9 +109,16 @@ export class EventLog {
 }
 ```
 
-## 2. Track recording (`@mapatlas/core`)
+## 2. Track recording
+
+The `TrackRecorder` interface, `SamplingPolicy`, and error types live in
+`@mapatlas/core` (framework-agnostic). The **web recorder implementation**
+(`createWebTrackRecorder`) uses `navigator.geolocation` + the Screen Wake Lock,
+so it ships in a separate DOM-facing package, **`@mapatlas/recorder-web`** — this
+keeps `core` DOM-free and passing the import-isolation scan (ADR-0011).
 
 ```ts
+// @mapatlas/core
 export interface SamplingPolicy {
   minDistanceM: number;   // keep a fix only after moving this far (default ~10)
   maxIntervalMs: number;  // ...or after this long (default ~15000)
@@ -133,8 +140,16 @@ export type TrackRecorderErrorKind =
   | "permission-denied" | "position-unavailable" | "timeout" | "unsupported";
 export interface TrackRecorderError { kind: TrackRecorderErrorKind; message: string; }
 
-/** Web (foreground) recorder: watchPosition + Screen Wake Lock. Ships in v1. */
-export declare function createWebTrackRecorder(store?: StorageAdapter): TrackRecorder;
+// @mapatlas/recorder-web — the v1 web (foreground) recorder.
+// `deps` is optional and defaults to the ambient `navigator` at start() time
+// (never at import, so construction is SSR-safe); tests inject fakes.
+export interface WebRecorderDeps {
+  geolocation?: Geolocation;
+  wakeLock?: { request(type: "screen"): Promise<{ release(): Promise<void> }> } | null;
+}
+export declare function createWebTrackRecorder(
+  store?: StorageAdapter, deps?: WebRecorderDeps,
+): TrackRecorder;
 /** Native background recorders (Capacitor/Cordova) are out-of-tree adapters
  *  that also implement TrackRecorder and are injected by the consumer. */
 ```

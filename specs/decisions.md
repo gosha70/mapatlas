@@ -108,3 +108,20 @@ adapter (`createIdbStorageAdapter`) in `@mapatlas/storage-idb` passes the same s
 **Consequences.** Every adapter is held to one machine-checked contract; adding a store means
 adding one `runStorageAdapterConformance(...)` line. The suite is not part of the public
 runtime surface (no `vitest` in `dist`); the in-memory adapter is.
+
+## ADR-0011 — The web recorder ships in `@mapatlas/recorder-web`, not `@mapatlas/core`
+**Context.** `api.md §2` originally declared `createWebTrackRecorder` under `@mapatlas/core`,
+but the recorder's implementation needs `navigator.geolocation` and the Screen Wake Lock.
+The import-isolation scan (T0.5) — a hard, non-negotiable gate — forbids the DOM globals
+`window`/`document`/`navigator`/`localStorage` in `core`. The two requirements cannot both hold
+in one package: a DOM-using recorder in `core` fails the scan.
+**Decision.** Keep the *interface* (`TrackRecorder`, `SamplingPolicy`, error types) in `core`,
+and ship the *web implementation* in a new DOM-facing package **`@mapatlas/recorder-web`** that
+depends on `core`. The public factory keeps its `store?` parameter and gains an optional,
+additive `deps?` for injecting a fake `geolocation`/`wakeLock` in tests; both default to the
+ambient `navigator` resolved lazily at `start()` (construction stays SSR-safe). `api.md §2` is
+updated in the same change.
+**Consequences.** `core` stays DOM-free and scan-clean; the recorder is fully unit-tested with
+fakes (no live hardware); consumers add one dependency to get the v1 recorder. It mirrors
+ADR-0003 (native background recorders are also out-of-tree adapters implementing the same seam)
+and matches the layering already used for `@mapatlas/leaflet`/`@mapatlas/react`.

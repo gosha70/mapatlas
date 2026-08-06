@@ -16,7 +16,7 @@ The heart, with no browser or renderer.
 - Data types; `SamplingPolicy`; GPS sampling; `simplify` (Douglas–Peucker); `Track` finalize
   (distance); `EventLog` logic; interface definitions (`StorageAdapter`, `MediaAnalyzer`,
   `TileSource`, `OfflineRegionStore`, `TrackRecorder`); `noopAnalyzer`; GeoJSON export/import.
-- **Exit:** `@mapatlas/core` is 100% unit-tested in Node with fakes; no DOM/leaflet/react import.
+- **Exit:** `@mapatlas/core` is 100% unit-tested in Node with fakes; no DOM/maplibre/react import.
 
 ## Phase 2 — Persistence
 - `@mapatlas/storage-idb`: IndexedDB `StorageAdapter` (tracks, events, blobs) + `clearAll()`.
@@ -28,7 +28,7 @@ The heart, with no browser or renderer.
 - **Exit:** recorder tested against a mocked geolocation; emits only accuracy-passing points;
   Wake Lock acquired on start / released on stop.
 
-## Phase 4 — Leaflet renderer
+## Phase 4 — MapLibre renderer
 - `createMapController`: layered `TileSource` stack, live position, track polyline, event
   DivIcon markers, tap-to-place, fit/recenter; keyboard-accessible controls.
 - **Exit:** renders a track + events from fixtures in the demo shell; a11y checks pass.
@@ -50,5 +50,5 @@ The heart, with no browser or renderer.
 
 ## Post-v1 (documented extension points, not v1 scope)
 - Native background `TrackRecorder` adapter (Capacitor/Cordova) as a separate package.
-- A MapLibre renderer sibling to `@mapatlas/leaflet` (vector basemaps), same `core`.
+- An alternative (raster) renderer sibling to `@mapatlas/maplibre`, same `core` — the renderer stays swappable.
 - Reference analyzers (on-device ONNX; remote vision) as separate, optional packages.

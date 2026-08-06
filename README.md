@@ -43,7 +43,7 @@ the same `specs/`. Any other harness should read `specs/` directly.
 
 ## Design at a glance
 
-- **TypeScript**, framework-agnostic **core** + a **Leaflet** renderer + thin **React** bindings.
+- **TypeScript**, framework-agnostic **core** + a **MapLibre GL** renderer + thin **React** bindings.
 - **Offline-first**: PMTiles offline map regions; a pluggable storage adapter (default IndexedDB).
 - **Track recording** behind a `TrackRecorder` abstraction (web `watchPosition` + Wake Lock;
   a native adapter for background tracking in a Capacitor/Cordova shell).

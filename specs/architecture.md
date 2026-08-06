@@ -14,7 +14,7 @@ consuming app (HookAtlas, a foraging app, a survey tool)
 ┌───────────────────────────────────────────────────────────────┐
 │ @mapatlas/react     React components + hooks (integration face)│
 ├───────────────────────────────────────────────────────────────┤
-│ @mapatlas/leaflet   Leaflet renderer: layered basemap, track,  │
+│ @mapatlas/maplibre  MapLibre renderer: vector basemap, track,  │
 │                     event markers, offline-region UI           │
 ├───────────────────────────────────────────────────────────────┤
 │ @mapatlas/core      framework-agnostic: data model, TrackRecorder,│
@@ -28,7 +28,7 @@ consuming app (HookAtlas, a foraging app, a survey tool)
 ```
 
 **The invariant:** arrows only point downward and outward. `core` imports nothing from
-`leaflet`, `react`, the DOM, or any consumer. This is what makes the engine reusable and
+`maplibre-gl`, `react`, the DOM, or any consumer. This is what makes the engine reusable and
 testable, and it is CI-enforceable with an import scan (see §8).
 
 ## 2. Packages
@@ -36,8 +36,8 @@ testable, and it is CI-enforceable with an import scan (see §8).
 | Package | Depends on | Responsibility |
 |---|---|---|
 | `@mapatlas/core` | nothing (pure TS) | Types, `TrackRecorder` interface + web recorder, `EventLog`, GPS sampling + `simplify`, `StorageAdapter`/`MediaAnalyzer`/`TileSource`/`OfflineRegionStore` interfaces, GeoJSON export/import |
-| `@mapatlas/leaflet` | `core`, `leaflet` | `MapController`: mount a Leaflet map, layered `TileSource` stack, render live position + track polyline + event markers, region-download UX hooks |
-| `@mapatlas/react` | `core`, `leaflet`, `react` | `<MapCanvas>`, `<EventComposer>`, `<TripReview>`, `useTrackRecorder`, `useEventLog`, `useOfflineRegions` |
+| `@mapatlas/maplibre` | `core`, `maplibre-gl` | `MapController`: mount a MapLibre GL map, layered `TileSource` stack, render live position + track line + event markers, region-download UX hooks |
+| `@mapatlas/react` | `core`, `maplibre`, `react` | `<MapCanvas>`, `<EventComposer>`, `<TripReview>`, `useTrackRecorder`, `useEventLog`, `useOfflineRegions` |
 | `@mapatlas/storage-idb` | `core`, `idb` | Default `StorageAdapter` over IndexedDB (tracks, events, media blobs) |
 | `apps/demo` | all above | A generic field-logger (no real domain) proving the loop; also the manual test bed |
 
@@ -104,15 +104,21 @@ The engine is usable end-to-end with zero network after a region is downloaded.
   `Point` features (events). A consumer with PostGIS stores this as `geography(LineString)` —
   but the engine has no database opinion.
 
-## 7. Rendering (Leaflet)
+## 7. Rendering (MapLibre GL)
 
-- Leaflet chosen over MapLibre: the engine's dynamic content is one track + a handful of
-  markers (trivial for Leaflet, lighter on an all-day mobile battery), and expected overlays
-  (nautical charts, seamarks) are raster. PMTiles keeps a future MapLibre renderer possible
-  as a sibling package without changing `core`. (ADR-0002.)
+- MapLibre GL chosen (ADR-0008, superseding ADR-0002): vector tiles + GPU rendering give
+  richer graphics and smooth zoom, and — importantly for marine/outdoor use — proper vector
+  **bathymetry / water-depth styling** that raster Leaflet cannot. `core` stays
+  renderer-agnostic, so an alternative (e.g. raster) renderer remains a sibling package, not a
+  rewrite. PMTiles (ADR-0004) is renderer-neutral and works with either.
 - The renderer takes an **ordered `TileSource[]`** (base → overlays), a `Track`, and a
   `MapEvent[]`, and exposes imperative controls (recenter, fit-track, add/tap event) that the
-  React layer wraps. Markers use DivIcons (no image assets). Controls are keyboard-accessible.
+  React layer wraps. Event markers use HTML/symbol markers (no bundled image assets). Controls
+  are keyboard-accessible.
+- **Attribution is engine-owned, not library-default.** The renderer sets its attribution
+  prefix explicitly (neutral, brandable) rather than inheriting a mapping library's built-in
+  default — a product must never ship third-party editorial/branding content it did not
+  choose (see §8 and ADR-0008).
 
 ## 8. Map data & licensing
 
@@ -126,11 +132,11 @@ The engine bundles no tiles. It documents, and consumers must honor:
 
 ## 9. Enforcement (build-time invariants)
 
-- **Import isolation:** `@mapatlas/core` must import nothing from `leaflet`/`react`/DOM/
+- **Import isolation:** `@mapatlas/core` must import nothing from `maplibre-gl`/`react`/DOM/
   consumer packages — an import scan in CI fails the build otherwise (mirrors the isolation
   discipline used by the HookAtlas consumer).
 - **No domain tokens:** a scan rejects domain words (fish, species, mushroom, etc.) and
-  secret-shaped strings in `core`/`leaflet`.
+  secret-shaped strings in `core`/`maplibre`.
 - **API contract:** any change to a `specs/api.md` interface requires the same PR to update
   that file (checked in review / by the PR template).
 - **Gates:** `build`, `typecheck` (strict), `lint`, `test` (seams mocked) must pass per task.

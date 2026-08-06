@@ -23,6 +23,7 @@ seamarks) are raster; target is all-day mobile battery.
 MapLibre sibling can be added without touching `core`. PMTiles (ADR-0004) is renderer-neutral.
 **Consequences.** Lighter/faster for the expected load; a future vector-basemap need is a new
 package, not a rewrite.
+**Status.** Superseded by ADR-0008 (renderer is MapLibre GL).
 
 ## ADR-0003 — TrackRecorder is a seam; v1 ships web (foreground) only
 **Context.** Reliable background GPS (screen-locked) is impossible in a pure web app on iOS; it
@@ -64,3 +65,23 @@ consumers; contributions arrive under the same permissive terms.
 implemented by the consumer.
 **Consequences.** The engine stays honest and general; consumers (e.g. HookAtlas's PI-28
 track-egress rule) own and test their own privacy guarantees.
+
+
+## ADR-0008 — Renderer is MapLibre GL (supersedes ADR-0002)
+**Context.** The renderer was originally Leaflet (ADR-0002; raster/DOM). Target consumers
+include marine/outdoor apps that need rich graphics and **water-depth (bathymetry) styling**,
+which raster Leaflet renders poorly. ADR-0002 always anticipated a vector renderer as a sibling.
+**Decision.** Ship the renderer as **MapLibre GL** (`@mapatlas/maplibre`): vector tiles, GPU
+rendering, smooth zoom, and first-class vector bathymetry/depth styling (e.g. MapTiler Ocean or
+a self-hosted vector basemap). `core` stays renderer-agnostic and the `MapController` contract
+(api.md §6) is unchanged; Leaflet-specific details (DivIcon markers, raster TileLayer stacking)
+become MapLibre equivalents (HTML/symbol markers, style layers). PMTiles (ADR-0004) works with
+either.
+**Dependency criterion (general).** A third-party dependency must not inject political or
+editorial content into the product's default UI. Any library whose defaults include
+branding/attribution must let those be overridden, and the engine sets a **neutral, brandable**
+attribution prefix explicitly rather than inheriting a library's built-in default. (This rule is
+about a dependency's *behaviour in the product*; it is a technical/neutrality criterion, not a
+judgement about a project's authors.)
+**Consequences.** Richer graphics + bathymetry; higher GPU/battery cost than Leaflet (acceptable
+for the value); a raster renderer can still be added later as a sibling without touching `core`.

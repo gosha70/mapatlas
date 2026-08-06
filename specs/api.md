@@ -179,7 +179,7 @@ export interface OfflineRegionStore {
 }
 ```
 
-## 6. Renderer (`@mapatlas/leaflet`)
+## 6. Renderer (`@mapatlas/maplibre`)
 
 ```ts
 export interface MapControllerOptions {

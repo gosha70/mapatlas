@@ -51,7 +51,7 @@ products embed.
 **In:**
 - Framework-agnostic core (data model, track recorder abstraction, event log, storage
   interface, offline-region interface, analyzer interface, GPS sampling + track simplification).
-- A Leaflet renderer with a layered basemap (base + optional overlays) and track/event rendering.
+- A MapLibre GL renderer with a layered basemap (base + optional overlays) and track/event rendering.
 - React bindings (components + hooks) as the primary integration surface.
 - A default IndexedDB storage adapter and a PMTiles offline-region implementation.
 - A generic demo app (a plain "field logger" — no real domain) proving the whole loop.
@@ -74,7 +74,7 @@ products embed.
 - The demo app records a trip and events **fully offline**, persists across reload, and
   exports valid GeoJSON.
 - Swapping in a `MediaAnalyzer` (even a stub) adds photo-analysis with **zero core changes**.
-- The core package has **no** dependency on Leaflet, React, a browser, or any domain — it
+- The core package has **no** dependency on MapLibre, React, a browser, or any domain — it
   is unit-testable in Node with fakes.
 
 ## 7. Constraints & principles

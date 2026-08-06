@@ -46,7 +46,7 @@ interface: `MediaAnalyzer` (AI), `StorageAdapter` (persistence), `TrackRecorder`
 ## Intended stack (see architecture.md for rationale)
 
 - TypeScript (strict), monorepo workspaces.
-- `@mapatlas/core` (framework-agnostic) · `@mapatlas/leaflet` (renderer) ·
+- `@mapatlas/core` (framework-agnostic) · `@mapatlas/maplibre` (renderer) ·
   `@mapatlas/react` (bindings) · `@mapatlas/storage-idb` (default persistence) ·
   `apps/demo` (a generic field-logger demo, no real domain).
 - Offline: PMTiles regions; default IndexedDB storage.

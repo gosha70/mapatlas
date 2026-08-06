@@ -13,8 +13,8 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   _AC:_ a stub `@mapatlas/core` typechecks; `any` in public API is a lint error.
 - **T0.3 Lint + format.** ESLint + formatter; a rule/plugin config. _AC:_ `npm run lint` green.
 - **T0.4 Test runner.** Vitest (or equivalent) wired per package. _AC:_ a sample test runs.
-- **T0.5 Isolation CI scan.** A script that fails if `@mapatlas/core`/`@mapatlas/leaflet`
-  import `react`/DOM (for core also `leaflet`) or any domain token (fish, species, mushroom,
+- **T0.5 Isolation CI scan.** A script that fails if `@mapatlas/core`/`@mapatlas/maplibre`
+  import `react`/DOM (for core also `maplibre-gl`) or any domain token (fish, species, mushroom,
   plant, product, auth, db). _AC:_ scan passes clean and *proven to fail* on a planted violation.
 - **T0.6 SPDX header check.** Fail build if a source file lacks `SPDX-License-Identifier: Apache-2.0`.
 
@@ -43,10 +43,10 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   _AC:_ with a mocked geolocation, emits only accuracy-passing points; `stop()` returns a
   finalized `Track`; Wake Lock acquired on start, released on stop/pause.
 
-## Phase 4 — `@mapatlas/leaflet`
-- **T4.1 MapController + layers.** Mount Leaflet, ordered `TileSource[]`, attribution. _AC:_
+## Phase 4 — `@mapatlas/maplibre`
+- **T4.1 MapController + layers.** Mount a MapLibre GL map, ordered `TileSource[]`, attribution. _AC:_
   base + overlay composite; attribution rendered verbatim.
-- **T4.2 Track & events render.** Live position, growing polyline, event DivIcon markers,
+- **T4.2 Track & events render.** Live position, growing polyline, event markers (HTML/symbol),
   `fitTrack`, `recenter`. _AC:_ renders from fixtures.
 - **T4.3 Interaction + a11y.** `onMapTap`, `onEventClick`; controls keyboard-reachable, visible
   focus, `prefers-reduced-motion` respected. _AC:_ a11y checks pass in the demo shell.

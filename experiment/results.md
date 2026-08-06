@@ -94,3 +94,71 @@ strong Phase 0; carry both to Phase 1.
 
 _Verification method: each build's gates + scan negative-tests were run by the
 reviewer from a clean `npm install`, not taken from the harness's own summary._
+
+---
+
+## Phase 1 — `@mapatlas/core` (T1.1–T1.7)
+
+> **Model: `claude-opus-4-8` (both).** Run mode — pi: `disciplined` (watched), committed within the session; Claude: `dontAsk` + trusted, **paused asking approval to commit** (verified/scored from its staged tree). Both cores verified from a clean `npm install`.
+
+| # | Dimension | pi.dev | Claude Code |
+|---|---|:---:|:---:|
+| 1 | Gates green | ✓ | ✓ |
+| 2 | Task completeness | ✓ | ✓ |
+| 3 | Spec fidelity | ✓ | △ |
+| 4 | Scope discipline | ✓ | ✓ |
+| 5 | Enforcement / test rigor | △ | ✓ |
+| 6 | Conventions | ✓ | ✓ |
+| 7 | Code quality | ✓ | ✓ |
+| 8 | Operability | ✓ | △ |
+| | **Total / 16** | **15** | **14** |
+
+### pi.dev — Phase 1 (commit `55616ea`, verified)
+
+All gates green from a clean install (build/typecheck/lint/test + isolation +
+spdx); 38 core tests; full T1.1–T1.7 (types, sampling, Douglas–Peucker simplify,
+haversine finalizeTrack, EventLog, the five seam interfaces + `noopAnalyzer`,
+GeoJSON round-trip). One ADR (`ADR-0008`, GeoJSON portability). Committed DCO-signed.
+
+- **[3] ✓ Spec fidelity — stricter on the one architectural rule.** core stays
+  **DOM-free**: base `lib: ES2022`, core inherits it, `Blob` typed via Node —
+  truest to "core is unit-testable in Node, imports nothing DOM."
+- **[5] △ Test rigor.** 38 tests present, but no coverage provider configured, so
+  the "**100% unit-tested**" exit criterion can't be *proven* (Claude's can).
+- **[8] ✓ Operability.** Built and committed within its watched session.
+
+### Claude Code — Phase 1 (staged on `2b5dea3`; commit pending user approval)
+
+All gates green from a clean install; **44 core tests, 100% lines / 96% branches**
+(provable exit criterion); full T1.1–T1.7. **Two ADRs**, and it extended
+`specs/api.md` with a "Core utilities" section documenting the new public helpers
+(`sample`/`simplify`/`finalizeTrack`/`EventLog`/`newId`/haversine) — additive,
+signature-preserving. Exemplary contract discipline + measurable coverage.
+
+- **[3] △ Spec fidelity — loosened the core isolation rule.** core tsconfig
+  overrides to **`lib: ["ES2022","DOM"]`** (for `Blob`), documented in `ADR-0008`.
+  Behaviorally DOM-free (scan green), but DOM *types* (`document`, `window`, …)
+  are now in scope in core — a documented tradeoff, but weaker than pi on the
+  project's non-negotiable rule.
+- **[5] ✓ Test rigor.** 100% line coverage measurable and met.
+- **[8] △ Operability.** Correctly paused for git-commit approval per its posture
+  (symmetric to pi's Phase-0 sandbox-gate △ — a safety intervention, not a defect),
+  but not hands-off through commit.
+
+### Phase 1 verdict
+
+**pi.dev 15 / Claude Code 14 — the near-mirror of Phase 0.** Both cores are
+correct, fully gated, and faithful to `api.md`. The two split on a genuine
+engineering tradeoff: **pi kept core strictly DOM-free** (stronger on the one
+architectural rule) but couldn't *prove* full coverage; **Claude proved 100%
+coverage and documented its extended public surface in `api.md`** but opened core
+to DOM types. Each surfaced one safety/permission intervention (pi none this
+phase; Claude the commit approval).
+
+**Cumulative after 2 phases: Claude 29 · pi 29 — dead even.** Phase 0 went to
+Claude (operability + test rigor); Phase 1 went to pi (stricter isolation +
+autonomous commit). They are trading strengths, not one dominating.
+
+_Method: gates + coverage + isolation posture verified by the reviewer from a
+clean `npm install`; Claude's Phase 1 scored from its staged tree (commit pending
+user approval — code is final)._

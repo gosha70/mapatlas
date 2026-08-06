@@ -60,6 +60,9 @@ export type {
 } from "./interfaces.js";
 export { noopAnalyzer } from "./analyzer.js";
 
+// web (foreground) recorder
+export { createWebTrackRecorder } from "./web-recorder.js";
+
 // event log
 export { EventLog } from "./event-log.js";
 

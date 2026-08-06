@@ -7,7 +7,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "vite"
   },
   "dependencies": {
     "@mapatlas/core": "*",
@@ -16,5 +17,8 @@
     "@mapatlas/storage-idb": "*",
     "react": "^18",
     "react-dom": "^18"
+  },
+  "devDependencies": {
+    "vite": "^5"
   }
 }

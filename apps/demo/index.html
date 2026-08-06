@@ -1,0 +1,46 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MAP-ATLAS field logger (demo)</title>
+    <!-- Leaflet CSS is required for correct map rendering. -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+      }
+      .mapatlas-demo {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 1rem;
+      }
+      .mapatlas-persist-note {
+        background: #fff8e1;
+        border: 1px solid #ffe082;
+        padding: 0.5rem 0.75rem;
+        border-radius: 6px;
+      }
+      .mapatlas-controls {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin: 0.75rem 0;
+      }
+      .mapatlas-map {
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

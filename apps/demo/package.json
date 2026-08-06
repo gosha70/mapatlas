@@ -13,6 +13,8 @@
     "@mapatlas/core": "*",
     "@mapatlas/leaflet": "*",
     "@mapatlas/react": "*",
-    "@mapatlas/storage-idb": "*"
+    "@mapatlas/storage-idb": "*",
+    "react": "^18",
+    "react-dom": "^18"
   }
 }

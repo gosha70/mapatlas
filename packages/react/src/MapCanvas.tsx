@@ -23,15 +23,15 @@ import type {
 
 export interface MapCanvasProps {
   sources: TileSource[];
-  track?: Track;
-  events?: MapEvent[];
-  livePoint?: TrackPoint;
-  center?: LatLng;
-  zoom?: number;
-  onMapTap?(at: LatLng): void;
-  onEventClick?(id: Id): void;
-  className?: string;
-  style?: CSSProperties;
+  track?: Track | undefined;
+  events?: MapEvent[] | undefined;
+  livePoint?: TrackPoint | undefined;
+  center?: LatLng | undefined;
+  zoom?: number | undefined;
+  onMapTap?: ((at: LatLng) => void) | undefined;
+  onEventClick?: ((id: Id) => void) | undefined;
+  className?: string | undefined;
+  style?: CSSProperties | undefined;
 }
 
 export function MapCanvas(props: MapCanvasProps): JSX.Element {

@@ -1,0 +1,41 @@
+{
+  "name": "mapatlas",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Domain-agnostic engine for interactive field mapping",
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "typecheck": "tsc --build --force",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "scan:isolation": "node scripts/scan-isolation.mjs",
+    "scan:spdx": "node scripts/scan-spdx.mjs",
+    "verify": "npm run build && npm run typecheck && npm run lint && npm run test && npm run scan:isolation && npm run scan:spdx && npm run format:check"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.4.0",
+    "@types/react": "19.2.18",
+    "eslint": "10.9.1",
+    "eslint-config-prettier": "10.1.8",
+    "globals": "17.11.0",
+    "prettier": "3.9.6",
+    "react": "19.2.8",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.68.0",
+    "vitest": "4.1.11"
+  }
+}

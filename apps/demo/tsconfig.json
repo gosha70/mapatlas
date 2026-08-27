@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/recorder-web"
+    },
+    {
+      "path": "../../packages/storage-idb"
+    },
+    {
+      "path": "../../packages/offline-pmtiles"
+    },
+    {
+      "path": "../../packages/maplibre"
+    },
+    {
+      "path": "../../packages/react"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@mapatlas/demo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Generic field-logger demo \u2014 no real domain",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "@mapatlas/core": "0.0.0",
+    "@mapatlas/maplibre": "0.0.0",
+    "@mapatlas/offline-pmtiles": "0.0.0",
+    "@mapatlas/react": "0.0.0",
+    "@mapatlas/recorder-web": "0.0.0",
+    "@mapatlas/storage-idb": "0.0.0"
+  }
+}

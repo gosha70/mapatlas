@@ -1,0 +1,8 @@
+dist
+node_modules
+coverage
+*.patch
+
+# Prose is hand-authored: line breaks in specs/ and the root docs are deliberate,
+# and reflowing them would bury real spec changes in formatting churn.
+**/*.md

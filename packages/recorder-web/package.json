@@ -1,0 +1,25 @@
+{
+  "name": "@mapatlas/recorder-web",
+  "version": "0.0.0",
+  "description": "Web foreground TrackRecorder: geolocation, Wake Lock, sensor merge",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@mapatlas/core": "0.0.0"
+  }
+}

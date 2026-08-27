@@ -1,0 +1,23 @@
+{
+  "name": "@mapatlas/core",
+  "version": "0.0.0",
+  "description": "Framework-agnostic field-mapping engine: data model, seams, track logic",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {}
+}

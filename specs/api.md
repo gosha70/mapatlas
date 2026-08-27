@@ -351,10 +351,18 @@ export declare function createTrackDraft(from?: Track): TrackDraft;
 /** The shared finalize used by recorders, drafts, and import. */
 export declare function finalizeTrack(t: Pick<Track, "points" | "segments"> & Partial<Track>): Track;
 export declare function computeStats(t: Pick<Track, "points" | "segments" | "channels">): TrackStats;
-/** Simplify one segment's points. `finalizeTrack` calls this once per segment to build
- *  `simplifiedSegments`; it is never called across a segment boundary. Endpoints and the
- *  `channels`/`altitudeM` of every kept point are preserved. */
-export declare function simplify(points: TrackPoint[], toleranceM: number): TrackPoint[];
+/** Ramer–Douglas–Peucker over one continuous run of points.
+ *
+ *  Generic by design: it knows nothing about segments or pauses. `finalizeTrack` maps it
+ *  across `Track.segments` to build `simplifiedSegments`, which is where pause semantics
+ *  belong — keeping the primitive ignorant of them is what stops a caller from simplifying
+ *  a concatenated `points[]` and smoothing through a gap.
+ *
+ *  Endpoints always survive. Kept points are the original objects, so `t`, `altitudeM` and
+ *  `channels` pass through untouched. The input is never mutated. Every dropped point is
+ *  guaranteed to lie within `toleranceM` of the returned polyline. Throws `RangeError` on a
+ *  negative or non-finite tolerance rather than guessing. */
+export declare function simplify(points: readonly TrackPoint[], toleranceM: number): TrackPoint[];
 ```
 
 **Contract:** every mutation is undoable; `toTrack()` produces a `Track` indistinguishable in

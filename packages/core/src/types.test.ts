@@ -113,6 +113,7 @@ describe("public surface", () => {
         "newId",
         "resolveSamplingPolicy",
         "sample",
+        "simplify",
       ].sort(),
     );
   });

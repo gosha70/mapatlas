@@ -26,6 +26,7 @@ export type {
   TrackSummary,
 } from "./track.js";
 export type { MapEvent, MediaAnalysis, MediaRef } from "./event.js";
+export { simplify } from "./simplify.js";
 export type { SampleDecision, SampleReason, SamplingPolicy } from "./sampling.js";
 export {
   DEFAULT_MAX_ACCURACY_M,

@@ -120,7 +120,10 @@ export function createMemoryStorageAdapter(): MemoryStorageAdapter {
         }
       }
       return Promise.resolve(
-        [...tracks.values()].map((track) => summarise(track, counts.get(track.id) ?? 0)),
+        [...tracks.values()]
+          .map((track) => summarise(track, counts.get(track.id) ?? 0))
+          // Chronological, from startedAt — never id order, which is mint order.
+          .sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id)),
       );
     },
 

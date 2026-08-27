@@ -137,9 +137,10 @@ describe("summaries", () => {
     expect(summary?.finish).toEqual({ lat: 59.34, lng: 18.07 });
   });
 
-  it("orders chronologically by startedAt, never by id (ADR-0014)", async () => {
+  it("returns startedAt order, not id order (ADR-0014)", async () => {
     // The trap: an imported 2019 trip is minted today, so it sorts last by id and first by
-    // startedAt. An adapter offering "recent trips" must not conflate the two.
+    // startedAt. The returned order is asserted directly — sorting it here first would
+    // normalise away exactly what is under test.
     const store = createMemoryStorageAdapter();
     const recent = track({ startedAt: T0 });
     const importedOld = track({ startedAt: T0 - 200_000_000_000, origin: "imported" });
@@ -147,13 +148,21 @@ describe("summaries", () => {
     await store.saveTrack(recent);
     await store.saveTrack(importedOld);
 
-    const summaries = await store.listTrackSummaries();
-    const byStart = [...summaries].sort((a, b) => a.startedAt - b.startedAt);
-    const byId = [...summaries].sort((a, b) => a.id.localeCompare(b.id));
+    expect((await store.listTrackSummaries()).map((s) => s.id)).toEqual([
+      importedOld.id,
+      recent.id,
+    ]);
+    expect(importedOld.id > recent.id).toBe(true); // and id order would have been the reverse
+  });
 
-    expect(byStart[0]?.id).toBe(importedOld.id);
-    expect(byId[0]?.id).toBe(recent.id);
-    expect(byStart.map((s) => s.id)).not.toEqual(byId.map((s) => s.id));
+  it("breaks ties by id, so the order is total", async () => {
+    const store = createMemoryStorageAdapter();
+    const shared = T0 + 5000;
+    const tracks = [track({ startedAt: shared }), track({ startedAt: shared })];
+    for (const t of tracks) await store.saveTrack(t);
+
+    const expected = tracks.map((t) => t.id).sort((a, b) => a.localeCompare(b));
+    expect((await store.listTrackSummaries()).map((s) => s.id)).toEqual(expected);
   });
 
   it("returns an empty list for an empty store", async () => {

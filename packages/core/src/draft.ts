@@ -7,7 +7,7 @@ import type { Id } from "./ids.js";
 import { newId } from "./ids.js";
 import type { JSONValue } from "./json.js";
 import type { ChannelDescriptor } from "./channels.js";
-import type { DraftTrackPoint, Track, TrackLap, TrackPoint, TrackSegment } from "./track.js";
+import type { DraftTrackPoint, Track, TrackPoint, TrackSegment } from "./track.js";
 
 /**
  * Manual track authoring: place vertices, time them afterwards, and finalize into a track
@@ -68,11 +68,27 @@ export interface TrackDraft {
  * the *later* segment and is never duplicated — duplicating it would produce overlapping
  * ranges, which the coverage invariant rejects outright.
  */
+/**
+ * What a draft knows about a lap: identity, span, and a label.
+ *
+ * Order, timing and statistics are **not** held here. Anything derived that a draft carries
+ * goes stale the instant an edit lands — a moved vertex changes the track's distance while
+ * a stored lap distance describing the same points does not — and holding a nested `stats`
+ * object also means sharing it with whatever track it came from. `finalizeTrack` derives
+ * all of it, so neither problem can exist.
+ */
+interface DraftLap {
+  id: Id;
+  startIndex: number;
+  endIndex: number;
+  label?: string;
+}
+
 interface DraftState {
   points: DraftTrackPoint[];
   breaks: number[];
   /** Carried from a seeded track and shifted by edits, since laps index the point array. */
-  laps: TrackLap[];
+  laps: DraftLap[];
 }
 
 /**
@@ -117,23 +133,18 @@ function cloneState(state: DraftState): DraftState {
   return {
     points: state.points.map(cloneDraftPoint),
     breaks: [...state.breaks],
-    laps: state.laps.map((lap) => ({
-      ...lap,
-      ...(lap.stats === undefined ? {} : { stats: { ...lap.stats } }),
-    })),
+    laps: state.laps.map((lap) => ({ ...lap })),
   };
 }
 
 /**
- * Shift lap ranges through an insertion or removal, dropping any that no longer describe a
- * span, and renumbering what survives so `index` stays a contiguous 0-based order.
+ * Shift lap ranges through an insertion or removal, dropping any that no longer describes a
+ * span. Ordering is not renumbered here — `finalizeTrack` assigns `index` from position.
  */
-function shiftLaps(laps: TrackLap[], pointCount: number): TrackLap[] {
-  return laps
-    .filter(
-      (lap) => lap.endIndex >= lap.startIndex && lap.startIndex >= 0 && lap.endIndex < pointCount,
-    )
-    .map((lap, index) => ({ ...lap, index }));
+function shiftLaps(laps: DraftLap[], pointCount: number): DraftLap[] {
+  return laps.filter(
+    (lap) => lap.endIndex >= lap.startIndex && lap.startIndex >= 0 && lap.endIndex < pointCount,
+  );
 }
 
 function assertIndex(index: number, length: number, what: string): void {
@@ -196,7 +207,12 @@ export function createTrackDraft(from?: Track): TrackDraft {
     initial.points = from.points.map(cloneDraftPoint);
     // Every segment after the first begins at a break.
     initial.breaks = from.segments.slice(1).map((segment) => segment.startIndex);
-    initial.laps = (from.laps ?? []).map((lap) => ({ ...lap }));
+    initial.laps = (from.laps ?? []).map((lap) => ({
+      id: lap.id,
+      startIndex: lap.startIndex,
+      endIndex: lap.endIndex,
+      ...(lap.label === undefined ? {} : { label: lap.label }),
+    }));
 
     if (from.id !== undefined) seeded.id = from.id;
     if (from.tags !== undefined) seeded.tags = [...from.tags];

@@ -18,9 +18,11 @@ export interface StorageAdapter {
    * The list projection. Must not hydrate point arrays — a consumer showing hundreds of
    * trips pays only for what it displays.
    *
-   * An adapter offering a chronological order must derive it from `startedAt`, never from
-   * id order: ids sort by mint time, and an authored or imported track is minted long after
-   * the trip it describes. (ADR-0014)
+   * **Ordered by `startedAt` ascending, ties broken by id.** Required, not optional: an
+   * unspecified order pushes the sort into every consumer, and the obvious wrong answer —
+   * ordering by id — looks right until an imported trip appears, since ids sort by mint
+   * time and an imported 2019 trip is minted today. Making the order part of the contract
+   * is what lets an adapter be tested for it. (ADR-0014)
    */
   listTrackSummaries(): Promise<TrackSummary[]>;
   /** Also removes that track's events, and any blob referenced only by them. */

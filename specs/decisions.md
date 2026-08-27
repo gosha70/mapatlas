@@ -348,3 +348,31 @@ tighten to 1–3 m, a known-noisy device loosen to 8–10 m, and a pre-smoothed 
 statistic stays deterministic and reproducible for a given policy, which is what makes it safe to
 persist. `finalizeTrack` also takes `simplifyToleranceM` in the same policy object, so every
 derived field a track carries is governed by one explicit argument.
+
+## ADR-0022 — Derived data is computed at the boundary, never carried
+**Context.** Review found the same defect twice in one feature. `TrackDraft` preserved laps from a
+seeded track, and each preserved lap carried its `stats` — so the statistics were shared by
+reference with the source track (mutating a finalized lap's `stats.channels` changed the original)
+and went stale the moment geometry changed (moving one vertex doubled the track's distance while
+the lap covering those same points still reported the old one). A track that reports one distance
+overall and another for a lap spanning the same points is worse than one that reports nothing.
+
+This is the third derived value to cause trouble. `simplifiedSegments` was settled by ADR-0018 —
+a disposable cache, regenerated deterministically, never exported. `TrackStats` was made the
+output of one shared `computeStats` by ADR-0010. Lap statistics were the case nobody generalised
+the rule to.
+
+**Decision.** Anything derivable is derived at the boundary that produces a `Track`, and nothing
+upstream holds it. `finalizeTrack` accepts laps as `LapInput` — id, range, and an optional label —
+and computes `index`, `startedAt`, `endedAt` and `stats` itself, via `computeLapStats`, which
+clips the track's segments to the lap's range so a lap crossing a pause is measured correctly.
+`TrackDraft` therefore stores only what a lap *is*.
+
+The general rule: **a value that can be computed from the geometry is never stored beside it.**
+Aliasing and staleness are both consequences of holding derived state, and removing the state
+removes both at once — no defensive copying to remember, no invalidation to get right.
+
+**Consequences.** Recorders marking laps in T3.2 get correct statistics for free rather than
+having to compute them. Undo becomes simpler, since a snapshot holds no derived values that could
+disagree with the geometry it sits beside. The cost is recomputation on every `finalizeTrack`,
+which is the same pass that already simplifies and computes track statistics.

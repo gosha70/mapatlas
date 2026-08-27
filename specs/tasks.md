@@ -172,8 +172,10 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   is `{ name, run }` where `run` throws an ordinary `Error`, so a consumer maps the cases into
   Vitest, Jest or `node:test` without inheriting ours. Every case takes a fresh adapter from the
   factory. _AC:_ the memory adapter passes every case; a summary case asserts the projection
-  carries no point array and that counts and bbox match the stored track; an ordering case proves
-  chronology comes from `startedAt` and not the id; cascade cases prove a track's events and
+  carries no point array and that counts and bbox match the stored track; an ordering case asserts the
+  **returned order directly** (sorting it first would normalise away the behaviour under test) and
+  is itself proven by running against a deliberately id-ordered adapter; a summary case asserts
+  the full projection including `stats`, using a fixture that has them; cascade cases prove a track's events and
   orphaned blobs go with it while a still-referenced blob survives; copy-semantics cases catch an
   adapter that aliases the caller's object, which passes naive testing and breaks against
   serialising persistence — proven by running the contract against a deliberately aliasing

@@ -479,6 +479,7 @@ export interface StorageAdapter {
   saveTrack(t: Track): Promise<void>;
   getTrack(id: Id): Promise<Track | undefined>;
   /** List projection — must NOT hydrate `points`. */
+  /** Ordered by `startedAt` ascending, ties broken by id. Required, not optional. */
   listTrackSummaries(): Promise<TrackSummary[]>;
   deleteTrack(id: Id): Promise<void>;
 
@@ -497,9 +498,10 @@ export interface StorageAdapter {
 ```
 
 **Contract:** all methods are async and side-effect-local by default; `listTrackSummaries()`
-returns a summary per stored track without loading its points, and an adapter that offers a
-chronological order **must derive it from `startedAt`, never from id order** — ids sort by mint
-time, and an authored or imported track is minted long after the trip it describes; `deleteTrack` also deletes that
+returns a summary per stored track without loading its points, ordered by **`startedAt` ascending
+with ties broken by id** — required rather than optional, because an unspecified order pushes the
+sort into every consumer and the obvious wrong answer (id order) looks right until an imported
+trip appears, ids being mint order; `deleteTrack` also deletes that
 track's events and any blob referenced only by them; `clearAll()` must remove every track, event,
 and blob (consumers rely on this for a clean device wipe).
 
@@ -550,7 +552,11 @@ for (const { name, run } of storageAdapterContract(() => createMyAdapter())) {
 ```
 
 Every case takes a **fresh adapter** from the factory, so cases cannot leak state into one another
-and may run in any order or alone. The cases cover round-tripping, the copy semantics real
+and may run in any order or alone. The factory must return a fresh, **empty backing store** — not
+merely a new adapter object over the same one; a wrapper around shared storage leaks state between
+cases and produces failures that look like contract violations. Equality is compared
+structurally, with object keys unordered and array elements ordered, so an adapter that rebuilds
+an equal object with its keys elsewhere is not failed for it. The cases cover round-tripping, the copy semantics real
 persistence has and a naive in-memory store does not, the summary projection's observable shape,
 chronological ordering from `startedAt` rather than id, cascade deletion including blob orphaning,
 idempotent deletes, and `clearAll`.

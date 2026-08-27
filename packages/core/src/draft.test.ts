@@ -727,8 +727,8 @@ describe("round trip through an existing track", () => {
       meta: { note: "recorded earlier", nested: { deep: true } },
       channels: [{ key: "heartRateBpm", label: "Heart rate", unit: "bpm", aggregate: "avg" }],
       laps: [
-        { id: newId(), index: 0, startIndex: 0, endIndex: 3, startedAt: T0, label: "Lap 1" },
-        { id: newId(), index: 1, startIndex: 4, endIndex: 7, startedAt: T0 + 40_000 },
+        { id: newId(), startIndex: 0, endIndex: 3, label: "Lap 1" },
+        { id: newId(), startIndex: 4, endIndex: 7 },
       ],
     });
   }

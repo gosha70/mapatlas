@@ -59,6 +59,44 @@ describe("the contract itself", () => {
     await expect(roundTrip?.run()).rejects.toBeInstanceOf(Error);
   });
 
+  it("catches an adapter that returns id order instead of chronological order", async () => {
+    // Regression: the case used to sort the adapter's result before asserting, which
+    // normalised away the behaviour under test — this adapter passed.
+    const inner = createMemoryStorageAdapter();
+    const idOrdered: StorageAdapter = {
+      ...inner,
+      listTrackSummaries: async () =>
+        (await inner.listTrackSummaries()).sort((a, b) => a.id.localeCompare(b.id)),
+    };
+
+    const chronological = storageAdapterContract(() => idOrdered).find((c) =>
+      c.name.includes("startedAt order"),
+    );
+
+    await expect(chronological?.run()).rejects.toThrow(/not in startedAt order/);
+  });
+
+  it("accepts an adapter whose objects have keys in a different order", async () => {
+    // Persistence legitimately rebuilds an equal Track with its keys elsewhere. A
+    // JSON.stringify comparison would fail a conforming adapter.
+    const inner = createMemoryStorageAdapter();
+    const reordering: StorageAdapter = {
+      ...inner,
+      getTrack: async (id) => {
+        const track = await inner.getTrack(id);
+        return track === undefined
+          ? undefined
+          : (Object.fromEntries(Object.entries(track).reverse()) as typeof track);
+      },
+    };
+
+    const roundTrip = storageAdapterContract(() => reordering).find((c) =>
+      c.name.includes("returns an equal track"),
+    );
+
+    await expect(roundTrip?.run()).resolves.toBeUndefined();
+  });
+
   it("catches the aliasing divergence that only shows against real persistence", async () => {
     // An adapter that stores the caller's object instead of a copy passes naive testing and
     // breaks the moment it meets a serialising implementation. The contract exists to catch

@@ -2,7 +2,7 @@
 
 import type { ChannelDescriptor, ChannelStats } from "./channels.js";
 import { geodesicDistanceMeters } from "./geo.js";
-import type { Track, TrackPoint, TrackSegment, TrackStats } from "./track.js";
+import type { Track, TrackLap, TrackPoint, TrackSegment, TrackStats } from "./track.js";
 
 /**
  * Knobs for derived statistics. A policy rather than a constant because the right value
@@ -242,6 +242,41 @@ export function computeStats(
     ...(sawAltitude ? { elevationGainM, elevationLossM, minAltitudeM, maxAltitudeM } : {}),
     ...(Object.keys(channels).length > 0 ? { channels } : {}),
   };
+}
+
+/**
+ * Statistics for one lap, computed over that lap's own span.
+ *
+ * A lap may cross a pause, so its segments are the track's segments clipped to the lap's
+ * range; the points are sliced and the ranges rebased, which is what makes `durationMs`
+ * describe the lap rather than the whole track.
+ */
+export function computeLapStats(
+  track: Pick<Track, "points" | "segments" | "channels">,
+  lap: Pick<TrackLap, "startIndex" | "endIndex">,
+  policy?: Partial<StatsPolicy>,
+): TrackStats {
+  const points = track.points.slice(lap.startIndex, lap.endIndex + 1);
+
+  const segments: TrackSegment[] = [];
+  for (const segment of track.segments) {
+    const startIndex = Math.max(segment.startIndex, lap.startIndex);
+    const endIndex = Math.min(segment.endIndex, lap.endIndex);
+    if (endIndex < startIndex) continue;
+
+    const start = track.points[startIndex];
+    segments.push({
+      id: segment.id,
+      startIndex: startIndex - lap.startIndex,
+      endIndex: endIndex - lap.startIndex,
+      startedAt: start?.t ?? segment.startedAt,
+    });
+  }
+
+  return computeStats(
+    { points, segments, ...(track.channels === undefined ? {} : { channels: track.channels }) },
+    policy,
+  );
 }
 
 /** Segment-local view of the points, used by `finalizeTrack` when simplifying. */

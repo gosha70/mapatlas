@@ -2,9 +2,9 @@
 
 import { newId } from "./ids.js";
 import { simplify } from "./simplify.js";
-import { computeStats, resolveStatsPolicy, segmentPoints } from "./stats.js";
+import { computeLapStats, computeStats, resolveStatsPolicy, segmentPoints } from "./stats.js";
 import type { StatsPolicy } from "./stats.js";
-import type { Track } from "./track.js";
+import type { Track, TrackLap } from "./track.js";
 import { assertValidTrackGeometry } from "./validate.js";
 
 export interface FinalizePolicy extends StatsPolicy {
@@ -44,8 +44,16 @@ export function resolveFinalizePolicy(partial?: Partial<FinalizePolicy>): Finali
  * itself knows nothing about them, and running it across the concatenated points would
  * smooth straight through a gap. (ADR-0018)
  */
+/**
+ * What a caller supplies for a lap: identity, range, and an optional label. Everything else
+ * — order, timing, statistics — is derived here, so it can never go stale or be shared with
+ * whatever object it came from.
+ */
+export type LapInput = Pick<TrackLap, "id" | "startIndex" | "endIndex"> & { label?: string };
+
 export function finalizeTrack(
-  track: Pick<Track, "points" | "segments"> & Partial<Track>,
+  track: Pick<Track, "points" | "segments"> &
+    Omit<Partial<Track>, "laps"> & { laps?: readonly LapInput[] },
   policy?: Partial<FinalizePolicy>,
 ): Track {
   assertValidTrackGeometry(track);
@@ -58,11 +66,35 @@ export function finalizeTrack(
 
   const stats = computeStats(track, statsPolicy);
 
+  // Lap statistics are derived here rather than carried, for the same reason
+  // `simplifiedSegments` is: anything held alongside the geometry goes stale the moment the
+  // geometry changes, and a track reporting one distance overall and another for a lap
+  // covering the same points is worse than one that reports nothing.
+  const laps: TrackLap[] | undefined = track.laps?.map((lap, index) => {
+    const first = track.points[lap.startIndex];
+    const last = track.points[lap.endIndex];
+    return {
+      id: lap.id,
+      index,
+      startIndex: lap.startIndex,
+      endIndex: lap.endIndex,
+      startedAt: first?.t ?? 0,
+      ...(last === undefined ? {} : { endedAt: last.t }),
+      ...(lap.label === undefined ? {} : { label: lap.label }),
+      stats: computeLapStats(track, lap, statsPolicy),
+    };
+  });
+
   const firstPoint = track.points[0];
   const lastPoint = track.points[track.points.length - 1];
 
+  // The input laps are deliberately dropped from the spread: what goes into the result is
+  // the derived set built above, never the caller's objects.
+  const { laps: suppliedLaps, ...carried } = track;
+  void suppliedLaps;
+
   const finalized: Track = {
-    ...track,
+    ...carried,
     id: track.id ?? newId(),
     startedAt: track.startedAt ?? firstPoint?.t ?? 0,
     status: "finalized",
@@ -71,6 +103,7 @@ export function finalizeTrack(
     segments: track.segments,
     simplifiedSegments,
     stats,
+    ...(laps === undefined ? {} : { laps }),
   };
 
   // Assigned rather than spread conditionally: `exactOptionalPropertyTypes` means an

@@ -24,6 +24,12 @@ import type { Track } from "../track.js";
  *
  * Every case takes a **fresh adapter** from the factory, so cases cannot leak state into
  * one another and may be run in any order, or alone.
+ *
+ * **The factory must return a fresh, empty backing store — not merely a new adapter object
+ * over the same one.** A new wrapper around shared storage leaks state between cases, and
+ * the failures that produces look like contract violations rather than what they are. An
+ * IndexedDB implementation typically opens a uniquely named store per call and deletes it
+ * afterwards, or calls `clearAll()` before handing the adapter back.
  */
 export interface StorageContractCase {
   name: string;
@@ -33,14 +39,40 @@ export interface StorageContractCase {
 export type StorageAdapterFactory = () => StorageAdapter | Promise<StorageAdapter>;
 
 /** Deliberately plain: an implementer should not need our matchers to read a failure. */
-function assert(condition: boolean, message: string): void {
+/** An assertion signature, so a checked `!== undefined` narrows for everything after it. */
+function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(`StorageAdapter contract: ${message}`);
 }
 
+/**
+ * Structural comparison: object keys are unordered, array elements are not.
+ *
+ * `JSON.stringify` treats property insertion order as significant, but persistence
+ * legitimately reconstructs an equal `Track` with its keys in another order — an adapter
+ * that rebuilds objects field by field would fail a contract it actually satisfies.
+ */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, i) => deepEqual(item, b[i]));
+  }
+
+  const aRecord = a as Record<string, unknown>;
+  const bRecord = b as Record<string, unknown>;
+  const aKeys = Object.keys(aRecord);
+  const bKeys = Object.keys(bRecord);
+  if (aKeys.length !== bKeys.length) return false;
+
+  return aKeys.every((key) => Object.hasOwn(bRecord, key) && deepEqual(aRecord[key], bRecord[key]));
+}
+
 function assertEqual(actual: unknown, expected: unknown, message: string): void {
-  const a = JSON.stringify(actual);
-  const b = JSON.stringify(expected);
-  assert(a === b, `${message}\n  expected: ${b}\n  actual:   ${a}`);
+  if (deepEqual(actual, expected)) return;
+  const detail = `expected: ${JSON.stringify(expected)}, actual: ${JSON.stringify(actual)}`;
+  throw new Error(`StorageAdapter contract: ${message} (${detail})`);
 }
 
 const T0 = 1_700_000_000_000;
@@ -152,35 +184,77 @@ export function storageAdapterContract(
       }),
     },
     {
-      name: "a summary reports counts and bounds matching the stored track",
+      name: "a summary projects counts, bounds, endpoints and statistics from the track",
       run: withAdapter(async (store) => {
-        const track = makeTrack();
+        const track = makeTrack({
+          stats: {
+            distanceM: 1234.5,
+            durationMs: 60_000,
+            movingTimeMs: 60_000,
+            avgSpeedMps: 20.575,
+            maxSpeedMps: 22,
+            elevationGainM: 40,
+            elevationLossM: 12,
+            minAltitudeM: 5,
+            maxAltitudeM: 45,
+            channels: { heartRateBpm: { min: 110, max: 160, avg: 135, sum: 270, count: 2 } },
+          },
+          channels: [{ key: "heartRateBpm", label: "Heart rate", unit: "bpm", aggregate: "avg" }],
+          tags: ["a", "b"],
+          meta: { note: "kept" },
+        });
         await store.saveTrack(track);
         await store.saveEvent(makeEvent({ trackId: track.id }));
 
         const [summary] = await store.listTrackSummaries();
-        assert(summary?.pointCount === 2, `pointCount was ${String(summary?.pointCount)}`);
-        assert(summary?.eventCount === 1, `eventCount was ${String(summary?.eventCount)}`);
-        assertEqual(summary?.bbox, [18.06, 59.33, 18.07, 59.34], "bbox differs");
-        assert(summary?.status === track.status, "status differs");
-        assert(summary?.origin === track.origin, "origin differs");
+        assert(summary !== undefined, "no summary returned");
+        assert(summary.pointCount === 2, `pointCount was ${String(summary.pointCount)}`);
+        assert(summary.eventCount === 1, `eventCount was ${String(summary.eventCount)}`);
+        assertEqual(summary.bbox, [18.06, 59.33, 18.07, 59.34], "bbox differs");
+        assertEqual(summary.start, { lat: 59.33, lng: 18.06 }, "start differs");
+        assertEqual(summary.finish, { lat: 59.34, lng: 18.07 }, "finish differs");
+        assert(summary.status === track.status, "status differs");
+        assert(summary.origin === track.origin, "origin differs");
+        assert(summary.startedAt === track.startedAt, "startedAt differs");
+        assert(summary.endedAt === track.endedAt, "endedAt differs");
+
+        // The T2.1 criterion this case previously did not exercise at all: a projection
+        // that dropped or truncated stats passed, because the fixture had none.
+        assertEqual(summary.stats, track.stats, "stats differ from the stored track");
+        assertEqual(summary.channelKeys, ["heartRateBpm"], "channelKeys differ");
+        assertEqual(summary.tags, track.tags, "tags differ");
+        assertEqual(summary.meta, track.meta, "meta differs");
       }),
     },
     {
-      name: "chronological order comes from startedAt, never from the id",
+      name: "listTrackSummaries returns startedAt order, never id order",
       run: withAdapter(async (store) => {
         // An imported trip is minted today while its startedAt is years old, so it sorts
         // last by id and first by time. Conflating the two is the trap. (ADR-0014)
+        //
+        // The returned order is asserted directly. Sorting it here first would normalise
+        // away the very behaviour under test, and an id-ordered adapter would pass.
         const recent = makeTrack({ startedAt: T0 });
         const importedOld = makeTrack({ startedAt: T0 - 200_000_000_000, origin: "imported" });
         await store.saveTrack(recent);
         await store.saveTrack(importedOld);
 
-        const summaries = await store.listTrackSummaries();
-        const byStart = [...summaries].sort((a, b) => a.startedAt - b.startedAt);
-        assert(
-          byStart[0]?.id === importedOld.id,
-          "the oldest trip did not sort first by startedAt",
+        const order = (await store.listTrackSummaries()).map((summary) => summary.id);
+        assertEqual(order, [importedOld.id, recent.id], "summaries are not in startedAt order");
+      }),
+    },
+    {
+      name: "listTrackSummaries breaks ties by id, so the order is total",
+      run: withAdapter(async (store) => {
+        const shared = T0 + 5000;
+        const tracks = [makeTrack({ startedAt: shared }), makeTrack({ startedAt: shared })];
+        for (const track of tracks) await store.saveTrack(track);
+
+        const expected = tracks.map((track) => track.id).sort((a, b) => a.localeCompare(b));
+        assertEqual(
+          (await store.listTrackSummaries()).map((summary) => summary.id),
+          expected,
+          "ties are not broken by id",
         );
       }),
     },

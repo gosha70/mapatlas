@@ -174,12 +174,67 @@ function assertSegmentsCoverPoints(
   }
 }
 
+/** The part of a lap this module needs: identity and a range. */
+export interface LapRange {
+  id: string;
+  startIndex: number;
+  endIndex: number;
+}
+
+/** A lap range that does not describe a span of the point array. */
+export class TrackLapRangeError extends Error {
+  readonly lapIndex: number;
+  readonly lapId: string;
+
+  constructor(lapIndex: number, lapId: string, detail: string) {
+    super(`laps[${lapIndex}] (${lapId}) is not a valid range: ${detail}`);
+    this.name = "TrackLapRangeError";
+    this.lapIndex = lapIndex;
+    this.lapId = lapId;
+  }
+}
+
+/**
+ * Lap ranges must describe the point array, exactly as segment ranges must.
+ *
+ * Validated here rather than trusted at derivation because array slicing is forgiving in
+ * all the wrong ways: an out-of-bounds range silently yields a short slice, an inverted one
+ * yields nothing, and a fractional index produces a plausible-looking distance over the
+ * wrong points. Each finalizes into a malformed track reporting statistics nobody can trace
+ * back to a fault. (ADR-0020, ADR-0022)
+ *
+ * Laps may overlap and need not cover the points — unlike segments they are a user's
+ * markers over the geometry, not a partition of it — so only the range itself is checked.
+ */
+function assertLapRanges(points: readonly TrackPoint[], laps: readonly LapRange[]): void {
+  for (const [index, lap] of laps.entries()) {
+    const { startIndex, endIndex } = lap;
+
+    if (!Number.isInteger(startIndex) || !Number.isInteger(endIndex)) {
+      throw new TrackLapRangeError(index, lap.id, "indices must be integers");
+    }
+    if (startIndex < 0 || endIndex >= points.length) {
+      throw new TrackLapRangeError(
+        index,
+        lap.id,
+        `[${startIndex}, ${endIndex}] falls outside points[0, ${points.length - 1}]`,
+      );
+    }
+    if (endIndex < startIndex) {
+      throw new TrackLapRangeError(index, lap.id, `[${startIndex}, ${endIndex}] is inverted`);
+    }
+  }
+}
+
 /**
  * Assert every invariant a finalized track must satisfy. Throws on the first violation and
  * never modifies the input.
  */
-export function assertValidTrackGeometry(track: Pick<Track, "points" | "segments">): void {
+export function assertValidTrackGeometry(
+  track: Pick<Track, "points" | "segments"> & { laps?: readonly LapRange[] },
+): void {
   assertSegmentRanges(track.points, track.segments);
   assertSegmentsCoverPoints(track.points, track.segments);
   assertTemporalOrder(track.points, track.segments);
+  if (track.laps !== undefined) assertLapRanges(track.points, track.laps);
 }

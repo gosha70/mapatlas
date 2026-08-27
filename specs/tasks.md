@@ -81,6 +81,14 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   producing bad statistics. _AC:_ a monotonic fixture finalizes; a fixture with one backwards
   point throws and names its index; the error does not fire across a segment boundary, where a
   gap is expected.
+- **T1.4c Lap statistics.** `computeLapStats`, and `finalizeTrack` deriving every lap field
+  from `LapInput` rather than trusting a caller (ADR-0022). _AC:_ a lap inside one segment
+  measures its own span; a lap crossing a pause counts the elapsed time but neither the distance
+  nor the moving time of the gap, and invents no elevation across it; a lap covering everything
+  agrees with the track's own statistics; the `StatsPolicy` reaches every lap through
+  `finalizeTrack`; and an out-of-bounds, negative, inverted or fractional range throws
+  `TrackLapRangeError` **before** anything is derived, while overlapping and non-covering laps are
+  accepted, since laps are markers rather than a partition.
 - **T1.4 Stats + finalize.** `computeStats(track, policy?)` (distance via `geodesicDistanceMeters`,
   elapsed vs moving time, avg/max speed skipping zero-duration pairs, elevation gain/loss via a
   **rolling trend-aware** deadband from `StatsPolicy.elevationHysteresisM` (default 5, `0` = raw),

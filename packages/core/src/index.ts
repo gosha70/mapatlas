@@ -79,10 +79,11 @@ export type { StatsPolicy } from "./stats.js";
 export {
   DEFAULT_ELEVATION_HYSTERESIS_M,
   DEFAULT_STATS_POLICY,
+  computeLapStats,
   computeStats,
   resolveStatsPolicy,
 } from "./stats.js";
-export type { FinalizePolicy } from "./finalize.js";
+export type { FinalizePolicy, LapInput } from "./finalize.js";
 export {
   DEFAULT_FINALIZE_POLICY,
   DEFAULT_SIMPLIFY_TOLERANCE_M,
@@ -91,6 +92,7 @@ export {
 } from "./finalize.js";
 export {
   TrackCoverageError,
+  TrackLapRangeError,
   TrackSegmentRangeError,
   TrackTemporalOrderError,
   assertValidTrackGeometry,

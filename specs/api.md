@@ -398,12 +398,34 @@ export class TrackSegmentRangeError extends Error {
 }
 /** Assert every invariant a finalized track must satisfy. Throws on the first violation,
  *  never modifies the input. Ranges are checked before timestamps. */
-export declare function assertValidTrackGeometry(t: Pick<Track, "points" | "segments">): void;
+export declare function assertValidTrackGeometry(
+  t: Pick<Track, "points" | "segments"> & { laps?: readonly LapInput[] },
+): void;
+
+/** What a caller supplies for a lap. `index`, `startedAt`, `endedAt` and `stats` are
+ *  **derived** by `finalizeTrack` — a value computable from the geometry is never stored
+ *  beside it, because it would go stale on the next edit and be shared by reference with
+ *  wherever it came from. (ADR-0022) */
+export type LapInput = Pick<TrackLap, "id" | "startIndex" | "endIndex"> & { label?: string };
+
+/** A lap range that does not describe a span of the point array. */
+export class TrackLapRangeError extends Error {
+  readonly lapIndex: number; readonly lapId: string;
+}
+
+/** Statistics over one lap's own span, with the track's segments clipped to that range so a
+ *  lap crossing a pause is measured correctly. */
+export declare function computeLapStats(
+  t: Pick<Track, "points" | "segments" | "channels">,
+  lap: Pick<TrackLap, "startIndex" | "endIndex">,
+  policy?: Partial<StatsPolicy>,
+): TrackStats;
 
 /** Validates first (ADR-0020), then derives. Either returns a wholly valid finalized track
  *  or throws having computed nothing — no partial stats, no partial simplification. */
 export declare function finalizeTrack(
-  t: Pick<Track, "points" | "segments"> & Partial<Track>,
+  t: Pick<Track, "points" | "segments"> &
+    Omit<Partial<Track>, "laps"> & { laps?: readonly LapInput[] },
   policy?: Partial<FinalizePolicy>,
 ): Track;
 /** Knobs for derived statistics. A policy rather than a constant because the right value
@@ -873,5 +895,11 @@ geometry is a rendering projection and is recomputed on import, not carried. Eac
 per-coordinate timestamps in `properties.coordTimes` and per-coordinate telemetry in
 `properties.channels` (`Record<string, (number | null)[]>`, aligned to the coordinates) plus
 `properties.channelDescriptors`, `properties.laps`, `properties.stats`, and `properties.origin`.
+
+**Lap ranges are validated, not trusted.** `0 <= startIndex <= endIndex < points.length`, both
+integers, checked before anything is derived — array slicing is forgiving in all the wrong ways,
+so an out-of-bounds range would yield a short slice, an inverted one nothing, and a fractional
+index a plausible-looking distance over the wrong points. Laps *may* overlap and need not cover
+the points: unlike segments they are markers over the geometry, not a partition of it.
 Export/import round-trips without losing geometry, segmentation, timestamps, altitude, channels,
 laps, stats, comments, tags, `fields`, or `analysis`.

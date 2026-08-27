@@ -90,7 +90,18 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   a flat-but-noisy altitude fixture reports ~0 gain, not accumulated noise; **deleting
   `simplifiedSegments` and re-running `finalizeTrack` reproduces it exactly** — it is a cache,
   not state, and dropping it must not change the track.
-- **T1.5 EventLog logic.** Create/update/delete against a `StorageAdapter`. _AC:_ tested with fake.
+- **T1.5 EventLog logic.** `createEventLog(store)` — create/update/delete/list against a
+  `StorageAdapter`, plus the shipped in-memory adapter it is tested with.
+  _AC:_ `add` assigns an id; `update` throws `EventNotFoundError` rather than inserting; `list`
+  is ordered by `occurredAt` with an id tiebreak so it is total and stable; `remove` is
+  idempotent; the log holds no state of its own, proven against a second adapter that records
+  the calls.
+  _AC — the shipped adapter (`@mapatlas/core/testing`):_ exported from a **separate entry point**,
+  never the main barrel; copies values in and out so a caller cannot mutate the store through a
+  returned object; cascade-deletes a track's events and the blobs only they referenced, while
+  keeping a blob another event still holds; `clearAll()` leaves a `MapAssetStore` untouched and
+  vice versa; obeys `core`'s purity boundary. Whether the conformance *suite* becomes public —
+  and in what form — is deliberately left to T2.1.
 - **T1.6 Interfaces.** `StorageAdapter`, `MapAssetStore`, `MediaAnalyzer`, `TileSource`,
   `OfflineRegionStore`, `TrackRecorder`, `SensorSource` per `api.md`; ship `noopAnalyzer`.
   _AC:_ typecheck; `noopAnalyzer` returns `[]`; every seam Phase 2 and Phase 6 implement is

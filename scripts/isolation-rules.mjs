@@ -70,7 +70,18 @@ export function splitIdentifierWords(source) {
 }
 
 /** Runtime DOM globals `core` must not reach for. Type-only DOM references are fine. */
-export const DOM_GLOBALS = ["window", "document", "navigator", "localStorage", "indexedDB"];
+export const DOM_GLOBALS = [
+  "window",
+  "document",
+  "navigator",
+  "localStorage",
+  "sessionStorage",
+  "indexedDB",
+  "fetch",
+  "XMLHttpRequest",
+  "WebSocket",
+  "EventSource",
+];
 
 /**
  * Every import specifier in a source file — including the forms a naive

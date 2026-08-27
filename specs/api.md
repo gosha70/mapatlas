@@ -445,6 +445,46 @@ time, and an authored or imported track is minted long after the trip it describ
 track's events and any blob referenced only by them; `clearAll()` must remove every track, event,
 and blob (consumers rely on this for a clean device wipe).
 
+## 5b. Event log (`@mapatlas/core`)
+
+```ts
+export interface EventLog {
+  add(input: Omit<MapEvent, "id">): Promise<MapEvent>;
+  update(event: MapEvent): Promise<void>;   // throws EventNotFoundError if absent
+  get(id: Id): Promise<MapEvent | undefined>;
+  list(trackId?: Id): Promise<MapEvent[]>;  // by occurredAt, ties broken by id
+  remove(id: Id): Promise<void>;
+}
+export class EventNotFoundError extends Error { readonly eventId: Id; }
+export declare function createEventLog(store: StorageAdapter): EventLog;
+```
+
+**Contract:** `add` assigns the id. `update` reads before writing and throws rather than
+inserting — a save-through-update turns "I edited the wrong id" into a duplicate. `list` imposes
+a total order (`occurredAt`, then id) because adapters are not required to return one and an
+unstable order flickers between renders. `remove` is idempotent.
+
+## 5c. First-party test utilities (`@mapatlas/core/testing`)
+
+```ts
+export declare function createMemoryStorageAdapter(): MemoryStorageAdapter;
+export declare function createMemoryMapAssetStore(): MapAssetStore;
+```
+
+A **separate entry point**, deliberately not re-exported from the main barrel: useful enough to
+ship, but not part of the production-facing API and with no business in a consumer's bundle.
+
+`StorageAdapter` is a seam, so shipping the same reference implementation the engine validates
+itself against means a consumer can unit-test without IndexedDB, an adapter author gets a
+canonical executable example, and nobody invents a subtly different storage mock.
+
+**Contract:** it models the *interface's semantics*, not IndexedDB's architecture — summaries are
+derived in memory, and the projection's observable shape (no point array) is what matters here,
+while `@mapatlas/storage-idb` is where avoiding the point-blob read is proven. It copies values in
+and out, so mutating a returned track does not reach into the store: without that, code passes
+against memory and fails against real persistence, which serialises. It obeys the same purity
+boundary as the rest of `core` — no React, no MapLibre, no IndexedDB, no DOM runtime.
+
 ## 6. AI analyzer seam (`@mapatlas/core`)
 
 ```ts

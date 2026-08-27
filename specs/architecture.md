@@ -38,7 +38,7 @@ testable, and it is CI-enforceable with an import scan (see §8).
 
 | Package | Depends on | Responsibility |
 |---|---|---|
-| `@mapatlas/core` | nothing (pure TS) | Types, `EventLog`, GPS sampling + `simplify`, segments/laps, `computeStats`/`finalizeTrack`, `TrackDraft` (manual authoring), `createPollingSensorSource`, GeoJSON export/import, and the interfaces: `TrackRecorder` · `SensorSource` · `StorageAdapter` · `MediaAnalyzer` · `TileSource` · `OfflineRegionStore` |
+| `@mapatlas/core` | nothing (pure TS) | Types, `EventLog`, `@mapatlas/core/testing` (a shipped in-memory `StorageAdapter`/`MapAssetStore`, on a separate entry point so test utilities stay out of production bundles), GPS sampling + `simplify`, segments/laps, `computeStats`/`finalizeTrack`, `TrackDraft` (manual authoring), `createPollingSensorSource`, GeoJSON export/import, and the interfaces: `TrackRecorder` · `SensorSource` · `StorageAdapter` · `MediaAnalyzer` · `TileSource` · `OfflineRegionStore` |
 | `@mapatlas/recorder-web` | `core` | `createWebTrackRecorder`: `watchPosition` + Screen Wake Lock + sampling + sensor merge + autosave. **Separate from `core` because it touches the DOM** (ADR-0013) |
 | `@mapatlas/maplibre` | `core`, `maplibre-gl` | `MapController`: mount a MapLibre GL map, composite the ordered `TileSource` stack (raster · vector · `raster-dem`), 3D terrain + hillshade, render live position + per-segment track lines + start/finish/lap/event marks via `EventPresentation`, and the draw/edit interaction mode |
 | `@mapatlas/react` | `core`, `maplibre`, `react` | `<MapCanvas>`, `<EventComposer>`, `<TripReview>`, `useTrackRecorder`, `useTrackList`, `useTrackDraft`, `useEventLog`, `useOfflineRegions` |

@@ -26,6 +26,31 @@ export type {
   TrackSummary,
 } from "./track.js";
 export type { MapEvent, MediaAnalysis, MediaRef } from "./event.js";
+export type { MapAssetStore, StorageAdapter } from "./storage.js";
+export type { EventLog } from "./event-log.js";
+export { EventNotFoundError, createEventLog } from "./event-log.js";
+export type { AnalyzeInput, MediaAnalyzer } from "./analyzer.js";
+export { noopAnalyzer } from "./analyzer.js";
+export type {
+  OfflineRegion,
+  OfflineRegionStore,
+  TerrainOptions,
+  TileSource,
+  TileSourceKind,
+  TileSourceRole,
+} from "./tiles.js";
+export type {
+  SensorMergePolicy,
+  SensorSample,
+  SensorSource,
+  SensorSourceError,
+} from "./sensors.js";
+export type {
+  TrackRecorder,
+  TrackRecorderError,
+  TrackRecorderErrorKind,
+  TrackRecorderOptions,
+} from "./recorder.js";
 export { simplify } from "./simplify.js";
 export type { StatsPolicy } from "./stats.js";
 export {

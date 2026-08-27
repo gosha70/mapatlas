@@ -126,6 +126,9 @@ describe("public surface", () => {
         "finalizeTrack",
         "resolveFinalizePolicy",
         "resolveStatsPolicy",
+        "EventNotFoundError",
+        "createEventLog",
+        "noopAnalyzer",
       ].sort(),
     );
   });

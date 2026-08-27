@@ -6,7 +6,20 @@ import prettier from "eslint-config-prettier";
 
 /** Runtime DOM globals `@mapatlas/core` must never reach for. Type-only DOM
  *  references (e.g. `Blob` in a signature) are allowed; these are the values. */
-const DOM_GLOBALS = ["window", "document", "navigator", "localStorage", "indexedDB"];
+const DOM_GLOBALS = [
+  "window",
+  "document",
+  "navigator",
+  "localStorage",
+  "sessionStorage",
+  "indexedDB",
+  // Network egress: SECURITY.md forbids the engine phoning anywhere the consumer did not
+  // configure, and `core` in particular has no business opening a connection at all.
+  "fetch",
+  "XMLHttpRequest",
+  "WebSocket",
+  "EventSource",
+];
 
 export default tseslint.config(
   { ignores: ["**/dist/**", "**/node_modules/**", "**/*.d.ts"] },

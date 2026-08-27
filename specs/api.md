@@ -358,10 +358,15 @@ export declare function computeStats(t: Pick<Track, "points" | "segments" | "cha
  *  belong — keeping the primitive ignorant of them is what stops a caller from simplifying
  *  a concatenated `points[]` and smoothing through a gap.
  *
- *  Endpoints always survive. Kept points are the original objects, so `t`, `altitudeM` and
- *  `channels` pass through untouched. The input is never mutated. Every dropped point is
- *  guaranteed to lie within `toleranceM` of the returned polyline. Throws `RangeError` on a
- *  negative or non-finite tolerance rather than guessing. */
+ *  Endpoints always survive, and every dropped point is guaranteed to lie within
+ *  `toleranceM` of the returned polyline — that bound, not any reduction ratio, is the
+ *  correctness contract. Retained points are unchanged in value, `t`/`altitudeM`/`channels`
+ *  included; reference identity is an implementation detail, not a promise. The input is
+ *  never mutated.
+ *
+ *  A tolerance of `0` means zero-error geometry, not "keep everything": a point with any
+ *  deviation survives, an exactly collinear one may be dropped. Throws `RangeError` on a
+ *  negative or non-finite tolerance rather than giving it accidental semantics. */
 export declare function simplify(points: readonly TrackPoint[], toleranceM: number): TrackPoint[];
 ```
 

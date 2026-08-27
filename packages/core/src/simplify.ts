@@ -12,8 +12,10 @@ import type { TrackPoint } from "./track.js";
  * caller from simplifying a concatenated `points[]` and smoothing straight through a gap.
  * (ADR-0010, ADR-0018)
  *
- * Points are kept by reference, not rebuilt, so `t`, `altitudeM` and `channels` survive
- * untouched — a decimated line must never silently drop telemetry.
+ * Retained points come through unchanged in value — `t`, `altitudeM` and `channels`
+ * included — because a decimated line must never silently drop telemetry. The current
+ * implementation returns the original objects rather than copies, but that is an
+ * optimisation and not a promise: nothing should depend on reference identity.
  */
 
 /** Metres per degree of latitude, near enough for a local tangent-plane projection. */
@@ -61,12 +63,13 @@ function perpendicularDistanceM(point: LatLng, start: LatLng, end: LatLng): numb
 /**
  * Reduce a run of points to those that carry its shape, within `toleranceM`.
  *
- * The first and last points always survive. The input array is never mutated, and the
- * returned array holds the original point objects.
+ * The first and last points always survive, and every point that is dropped is guaranteed
+ * to lie within `toleranceM` of the returned polyline. The input array is never mutated.
  *
- * A tolerance of `0` keeps every point that lies off the line between its neighbours —
- * which is nearly all of them for real GPS data. It is the identity for practical purposes,
- * not a way to discard anything.
+ * At a tolerance of `0` the guarantee becomes zero-error geometry: every point with any
+ * deviation from the line between its neighbours survives, while an exactly collinear point
+ * may be dropped — its deviation is precisely zero, so removing it changes nothing. Zero is
+ * therefore not a promise to preserve every point.
  */
 export function simplify(points: readonly TrackPoint[], toleranceM: number): TrackPoint[] {
   if (!Number.isFinite(toleranceM) || toleranceM < 0) {

@@ -53,11 +53,22 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   _AC:_ exported, typechecked, no runtime dep.
 - **T1.2 Sampling.** `SamplingPolicy` + a pure `sample(prev, candidate, policy)` decision fn.
   _AC:_ unit tests for distance/interval/accuracy branches.
-- **T1.3 Simplify.** Douglas–Peucker `simplify(points, toleranceM)`, applied **per segment**.
-  _AC:_ reduces a noisy fixture 60–80% without visibly changing shape; endpoints preserved; kept
-  points retain their `channels` and `altitudeM`; a two-segment fixture yields
-  `simplifiedSegments.length === segments.length` and **no** simplified member spans the pause —
-  the first member ends at segment 1's last point and the second begins at segment 2's first.
+- **T1.3 Simplify.** Douglas–Peucker `simplify(points, toleranceM)` over one continuous run;
+  `finalizeTrack` (T1.4) is what maps it **per segment**.
+  _AC — correctness:_ every original point lies within `toleranceM` of the resulting polyline,
+  measured as the minimum distance to *any* segment of it and verified by a test-only reference
+  implementation, not by the code under test. Endpoints preserved; retained points unchanged in
+  value including `t`/`altitudeM`/`channels` (value equality, not object identity — the API does
+  not promise references); input never mutated; empty/1-point/2-point/all-coincident/closed-loop
+  inputs behave predictably; tolerance `0` yields zero-error geometry rather than preserving every
+  point, since an exactly collinear point may legitimately be dropped; a negative or non-finite
+  tolerance throws rather than acquiring accidental semantics; a high-latitude fixture confirms the
+  local projection does not distort where a degree of longitude is a few hundred metres.
+  _AC — fixture signal:_ a representative noisy route reduces 60–80%. Deliberately loose and
+  labelled as such: the ratio is knife-edge against the tolerance, so it is a regression signal
+  about that fixture rather than a property of the algorithm.
+  _AC — at the track layer (T1.4):_ a two-segment fixture yields
+  `simplifiedSegments.length === segments.length` and **no** simplified member spans the pause.
 - **T1.4a Geodesic distance.** `geodesicDistanceMeters` — Vincenty's inverse on WGS84, falling
   back to `haversineDistanceMeters` when it fails to converge (ADR-0019). _AC:_ agrees with
   published Vincenty values to <1 mm on a set of reference pairs including a near-equatorial leg,

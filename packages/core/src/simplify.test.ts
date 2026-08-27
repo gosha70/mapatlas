@@ -92,16 +92,16 @@ describe("endpoints", () => {
   it("always keeps the first and last point", () => {
     const points = straightLine(50);
     const result = simplify(points, 5);
-    expect(result[0]).toBe(points[0]);
-    expect(result.at(-1)).toBe(points.at(-1));
+    expect(result[0]).toEqual(points[0]);
+    expect(result.at(-1)).toEqual(points.at(-1));
   });
 
   it("keeps them even at an enormous tolerance", () => {
     const points = straightLine(500);
     const result = simplify(points, 100_000);
     expect(result).toHaveLength(2);
-    expect(result[0]).toBe(points[0]);
-    expect(result[1]).toBe(points.at(-1));
+    expect(result[0]).toEqual(points[0]);
+    expect(result[1]).toEqual(points.at(-1));
   });
 });
 
@@ -138,8 +138,8 @@ describe("degenerate inputs", () => {
     ];
     const result = simplify(points, 1);
     expect(result).toHaveLength(5);
-    expect(result[0]).toBe(points[0]);
-    expect(result.at(-1)).toBe(points.at(-1));
+    expect(result[0]).toEqual(points[0]);
+    expect(result.at(-1)).toEqual(points.at(-1));
   });
 });
 
@@ -159,7 +159,7 @@ describe("shape preservation", () => {
     const result = simplify(points, 5);
     // Both collinear runs collapse; the corner at (0,100) must survive.
     expect(result).toHaveLength(3);
-    expect(result[1]).toBe(points[2]);
+    expect(result[1]).toEqual(points[2]);
   });
 
   it("keeps a deviation above the tolerance and drops one below it", () => {
@@ -172,32 +172,38 @@ describe("shape preservation", () => {
     expect(simplify(withBump(2), 10)).toHaveLength(2);
   });
 
-  it("reduces a noisy fixture by 60-80% and keeps every point within tolerance of the result", () => {
-    // The T1.3 acceptance criterion, with the stronger half stated explicitly. A 2 km
-    // winding path sampled every 5 m, with ±5 m of deterministic GPS jitter on each fix.
+  it("reduces a representative noisy route by 60-80% [fixture-level signal]", () => {
+    // The T1.3 acceptance criterion, and deliberately loose. This is a regression signal
+    // about *this fixture*, not a Douglas-Peucker invariant: the ratio is knife-edge
+    // against the tolerance — at ±3 m jitter, 4 m gives 61% and 5 m gives 90% — so it says
+    // more about where the fixture sits relative to a threshold than about correctness.
+    // The correctness proof is the deviation bound below.
     const points = noisyWindingPath();
-
-    const TOLERANCE_M = 7;
-    const result = simplify(points, TOLERANCE_M);
-
-    const reduction = 1 - result.length / points.length;
+    const reduction = 1 - simplify(points, 7).length / points.length;
     expect(reduction).toBeGreaterThan(0.6);
     expect(reduction).toBeLessThan(0.8);
-
-    // "Without visibly changing shape", made falsifiable: every original point — including
-    // every one that was dropped — lies within the tolerance of the simplified polyline.
-    // This is the guarantee Douglas-Peucker actually makes, and unlike a percentage it
-    // does not depend on where the fixture happens to sit relative to a threshold.
-    expect(maxDeviationM(points, result)).toBeLessThanOrEqual(TOLERANCE_M);
-
-    expect(result[0]).toBe(points[0]);
-    expect(result.at(-1)).toBe(points.at(-1));
   });
 
-  it("holds the within-tolerance guarantee across a range of tolerances", () => {
+  it("keeps every original point within toleranceM of the simplified polyline [the invariant]", () => {
+    // What "without visibly changing shape" means, made falsifiable:
+    //
+    //   max over original points( distance to nearest segment of simplified polyline ) <= tolerance
+    //
+    // Measured against the whole retained polyline, not just neighbouring vertices, and by
+    // an independent implementation — see maxDeviationM.
     const points = noisyWindingPath();
     for (const tolerance of [0.5, 1, 3, 7, 15, 40]) {
       expect(maxDeviationM(points, simplify(points, tolerance))).toBeLessThanOrEqual(tolerance);
+    }
+  });
+
+  it("holds the deviation bound on a hairpin, where cutting the corner would be tempting", () => {
+    const hairpin: TrackPoint[] = [];
+    for (let i = 0; i < 60; i += 1) hairpin.push(at(i * 5, 0, i * 1000));
+    for (let i = 0; i < 60; i += 1) hairpin.push(at(300 - i * 5, 8, (60 + i) * 1000));
+
+    for (const tolerance of [1, 5, 20]) {
+      expect(maxDeviationM(hairpin, simplify(hairpin, tolerance))).toBeLessThanOrEqual(tolerance);
     }
   });
 
@@ -214,16 +220,27 @@ describe("shape preservation", () => {
 });
 
 describe("tolerance 0", () => {
-  it("is the identity for a path where every point lies off the line", () => {
+  // The contract at zero tolerance is *not* "preserve every point". It is: endpoints
+  // survive, any point with nonzero geometric deviation survives, and exactly redundant
+  // collinear points may legitimately disappear — their deviation is exactly zero, so
+  // dropping them still yields zero-error geometry.
+
+  it("keeps every point that deviates from the line between its neighbours", () => {
     const points: TrackPoint[] = [];
     for (let i = 0; i < 50; i += 1) points.push(at(Math.sin(i) * 5, i * 10, i * 1000));
     expect(simplify(points, 0)).toHaveLength(points.length);
   });
 
-  it("still drops exactly-collinear points, which carry no shape", () => {
-    // Not a surprise discard: a point precisely on the line between its neighbours is
-    // redundant by definition, and real GPS data essentially never produces one.
-    expect(simplify(straightLine(20), 0)).toHaveLength(2);
+  it("produces zero-error geometry, which is the actual guarantee", () => {
+    const points: TrackPoint[] = [];
+    for (let i = 0; i < 50; i += 1) points.push(at(Math.sin(i) * 5, i * 10, i * 1000));
+    expect(maxDeviationM(points, simplify(points, 0))).toBeCloseTo(0, 6);
+  });
+
+  it("may drop an exactly collinear point, and that is not a defect", () => {
+    const result = simplify(straightLine(20), 0);
+    expect(result.length).toBeLessThanOrEqual(20);
+    expect(maxDeviationM(straightLine(20), result)).toBeCloseTo(0, 6);
   });
 
   it("rejects a negative or non-finite tolerance rather than guessing", () => {
@@ -234,14 +251,19 @@ describe("tolerance 0", () => {
 });
 
 describe("payload preservation", () => {
-  it("returns the original point objects, not copies", () => {
+  it("returns points unchanged in value, each matching one of the originals", () => {
+    // Value equality, deliberately not object identity. The implementation does return the
+    // original objects, but promising that would stop a future version from cloning
+    // immutable values, and no consumer has reason to depend on it.
     const points = straightLine(30);
     for (const kept of simplify(points, 5)) {
-      expect(points).toContain(kept);
+      expect(points.some((original) => JSON.stringify(original) === JSON.stringify(kept))).toBe(
+        true,
+      );
     }
   });
 
-  it("carries timestamps, altitude and channels through untouched", () => {
+  it("carries timestamps, altitude and channels through with their exact values", () => {
     const points: TrackPoint[] = [
       at(0, 0, 0, { altitudeM: 12, channels: { heartRateBpm: 120 }, accuracyM: 4 }),
       at(60, 50, 1000, { altitudeM: 31, channels: { heartRateBpm: 148 }, accuracyM: 6 }),
@@ -282,8 +304,8 @@ describe("scale", () => {
     const result = simplify(points, 5);
     expect(result.length).toBeGreaterThan(2);
     expect(result.length).toBeLessThan(points.length);
-    expect(result[0]).toBe(points[0]);
-    expect(result.at(-1)).toBe(points.at(-1));
+    expect(result[0]).toEqual(points[0]);
+    expect(result.at(-1)).toEqual(points.at(-1));
   });
 });
 

@@ -32,6 +32,20 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   standing guarantees; (c) is a one-time demonstration, since a repository cannot keep a broken
   commit around to re-prove it.
 
+  **T0.7(c) evidence.** A bare side-effect `import "react"` in `@mapatlas/core` — the form T0.5
+  names specifically, because a `from`-only regex misses it — was planted on the throwaway branch
+  `test/ci-isolation-negative-proof` (commit `8a0d627`) and opened as PR #1 against `main` at
+  `a5db199`. Run [33092051527](https://github.com/gosha70/mapatlas/actions/runs/33092051527)
+  failed at **`Scan — import isolation`** with Install, Build, Typecheck, Lint, Format check and
+  Test all green before it — so the red is attributable to the scanner, not to a broken build.
+  Branch deleted, never merged.
+
+  That run also exposed a defect in this workflow: the DCO job checked `HEAD`, which on a
+  `pull_request` event is the synthetic merge commit GitHub generates without a sign-off, so it
+  would have failed every PR regardless of the author. Fixed by checking out
+  `github.event.pull_request.head.sha` and skipping merge commits. The negative test earned its
+  keep twice.
+
 ## Phase 1 — `@mapatlas/core`
 - **T1.1 Types.** All of `api.md §1` + ids/util — incl. `altitudeM`, `channels`,
   `ChannelDescriptor`, `TrackSegment`, `TrackLap`, `TrackStats`, `TrackSummary`, `origin`,

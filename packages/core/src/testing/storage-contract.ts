@@ -298,6 +298,73 @@ export function storageAdapterContract(
       }),
     },
     {
+      name: "an event moved between tracks is counted by exactly one of them",
+      run: withAdapter(async (store) => {
+        // An adapter deriving `eventCount` on write must repair the *previous* owner too,
+        // or a moved event is counted twice. One deriving it on read gets this free — the
+        // contract does not care which, only that the answer is right.
+        const a = makeTrack({ startedAt: T0 });
+        const b = makeTrack({ startedAt: T0 + 1000 });
+        await store.saveTrack(a);
+        await store.saveTrack(b);
+
+        const event = makeEvent({ trackId: a.id });
+        await store.saveEvent(event);
+        await store.saveEvent({ ...event, trackId: b.id });
+
+        const summaries = await store.listTrackSummaries();
+        const counts = Object.fromEntries(summaries.map((s) => [s.id, s.eventCount]));
+        assert(counts[a.id] === 0, `the old track still counts ${String(counts[a.id])} events`);
+        assert(counts[b.id] === 1, `the new track counts ${String(counts[b.id])} events`);
+
+        assert((await store.listEvents(a.id)).length === 0, "the event is still listed under a");
+        assert((await store.listEvents(b.id)).length === 1, "the event is not listed under b");
+      }),
+    },
+    {
+      name: "removing an event's trackId detaches it from that track",
+      run: withAdapter(async (store) => {
+        const track = makeTrack();
+        await store.saveTrack(track);
+
+        const event = makeEvent({ trackId: track.id });
+        await store.saveEvent(event);
+
+        const detached = { ...event };
+        delete detached.trackId;
+        await store.saveEvent(detached);
+
+        const [summary] = await store.listTrackSummaries();
+        assert(summary?.eventCount === 0, `the track still counts ${String(summary?.eventCount)}`);
+        assert((await store.listEvents()).length === 1, "the event itself was lost");
+        assert((await store.listEvents(track.id)).length === 0, "still listed under the track");
+      }),
+    },
+    {
+      name: "eventCount agrees with listEvents after adds and removals",
+      run: withAdapter(async (store) => {
+        const track = makeTrack();
+        await store.saveTrack(track);
+
+        const events = [
+          makeEvent({ trackId: track.id }),
+          makeEvent({ trackId: track.id }),
+          makeEvent({ trackId: track.id }),
+        ];
+        for (const event of events) await store.saveEvent(event);
+
+        const first = events[0];
+        if (first !== undefined) await store.deleteEvent(first.id);
+
+        const [summary] = await store.listTrackSummaries();
+        const actual = (await store.listEvents(track.id)).length;
+        assert(
+          summary?.eventCount === actual,
+          `eventCount ${String(summary?.eventCount)} but ${actual} events are attached`,
+        );
+      }),
+    },
+    {
       name: "deleteEvent removes only its target",
       run: withAdapter(async (store) => {
         const doomed = makeEvent();

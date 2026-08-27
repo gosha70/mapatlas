@@ -668,7 +668,8 @@ export interface OfflineRegionStore {
 
 /** Persistence for downloaded **map assets** — deliberately NOT the trip `StorageAdapter`.
  *  Map bytes are large, replaceable, and evictable; tracks and photos are irreplaceable.
- *  They must not compete for the same quota or be destroyed by the same wipe (ADR-0016). */
+ *  Neither may be destroyed by the other's wipe. This is lifecycle isolation and a bounded
+ *  blast radius, **not** quota isolation — browsers evict per origin (ADR-0016). */
 export interface MapAssetStore {
   put(key: string, data: Blob): Promise<void>;
   get(key: string): Promise<Blob | undefined>;

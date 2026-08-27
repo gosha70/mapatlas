@@ -42,7 +42,7 @@ testable, and it is CI-enforceable with an import scan (see §8).
 | `@mapatlas/recorder-web` | `core` | `createWebTrackRecorder`: `watchPosition` + Screen Wake Lock + sampling + sensor merge + autosave. **Separate from `core` because it touches the DOM** (ADR-0013) |
 | `@mapatlas/maplibre` | `core`, `maplibre-gl` | `MapController`: mount a MapLibre GL map, composite the ordered `TileSource` stack (raster · vector · `raster-dem`), 3D terrain + hillshade, render live position + per-segment track lines + start/finish/lap/event marks via `EventPresentation`, and the draw/edit interaction mode |
 | `@mapatlas/react` | `core`, `maplibre`, `react` | `<MapCanvas>`, `<EventComposer>`, `<TripReview>`, `useTrackRecorder`, `useTrackList`, `useTrackDraft`, `useEventLog`, `useOfflineRegions` |
-| `@mapatlas/storage-idb` | `core`, `idb` | Default `StorageAdapter` over IndexedDB — tracks, events, media blobs, and a **separate summaries store** with a `startedAt` index, because IndexedDB has no projection and listing from the tracks store would read every point of every trip. Also `createIdbMapAssetStore`, the default `MapAssetStore`, under a **separately named store** so the two can never wipe or starve each other (ADR-0016) |
+| `@mapatlas/storage-idb` | `core`, `idb` | Default `StorageAdapter` over IndexedDB — tracks, events, media blobs, and a **separate summaries store** with a `startedAt` index, because IndexedDB has no projection and listing from the tracks store would read every point of every trip. Also `createIdbMapAssetStore`, the default `MapAssetStore`, under a **separately named store** so neither can wipe the other — lifecycle isolation, not quota isolation, since eviction remains per-origin (ADR-0016) |
 | `@mapatlas/offline-pmtiles` | `core`, `pmtiles` | `createPMTilesRegionStore`: download/list/delete a bbox×zoom region per source; renderer-neutral |
 | `apps/demo` | all above | A generic field-logger (no real domain) proving the loop; also the manual test bed |
 
@@ -107,7 +107,8 @@ and never learns what they measure.
 - **`MapAssetStore`** — persistence for downloaded **map bytes**, deliberately not the
   `StorageAdapter`. Map assets are large, replaceable, and the right thing to evict first; tracks
   and photos are irreplaceable. Keeping them in one store meant a sign-out wipe destroyed
-  hundreds of megabytes of basemap and that the two competed for the same quota. Default:
+  hundreds of megabytes of basemap. Separation buys lifecycle isolation and a bounded blast
+  radius — **not** quota isolation, since browsers evict per origin. Default:
   `createIdbMapAssetStore` in `@mapatlas/storage-idb`, backed by its own IndexedDB database
   (ADR-0016).
 - **`StorageAdapter`** — persistence for tracks, events, and media blobs. Default:

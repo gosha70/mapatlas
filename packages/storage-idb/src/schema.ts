@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { MapEvent, Track, TrackSummary } from "@mapatlas/core";
-import type { DBSchema, IDBPDatabase } from "idb";
+import type { DBSchema, IDBPDatabase, IDBPObjectStore, IDBPTransaction } from "idb";
 import { openDB } from "idb";
 
 /**
  * The engine's own data. Map assets live in a **separate** store with its own name, so
- * clearing one cannot touch the other and the two never compete for the same quota under
- * eviction. (ADR-0016)
+ * clearing or deleting one cannot touch the other.
+ *
+ * What that buys is lifecycle isolation and a bounded blast radius, **not** quota
+ * isolation: browsers evict per origin, so a device under storage pressure can still take
+ * both. Separating them is what lets a consumer evict the replaceable half deliberately,
+ * and what stops a sign-out wipe costing a re-download. (ADR-0016)
  */
 export const DEFAULT_DATABASE_NAME = "mapatlas";
 export const SCHEMA_VERSION = 1;
@@ -54,6 +58,18 @@ export interface MapAtlasSchema extends DBSchema {
 }
 
 export type MapAtlasDatabase = IDBPDatabase<MapAtlasSchema>;
+
+export type StoreName = (typeof STORE)[keyof typeof STORE];
+
+/** A read-write transaction spanning any of the stores. */
+export type MapAtlasTransaction = IDBPTransaction<MapAtlasSchema, StoreName[], "readwrite">;
+
+export type MapAtlasEventStore = IDBPObjectStore<
+  MapAtlasSchema,
+  StoreName[],
+  typeof STORE.events,
+  "readwrite"
+>;
 
 export function openMapAtlasDatabase(name = DEFAULT_DATABASE_NAME): Promise<MapAtlasDatabase> {
   return openDB<MapAtlasSchema>(name, SCHEMA_VERSION, {

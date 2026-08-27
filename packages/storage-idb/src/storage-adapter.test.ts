@@ -154,6 +154,160 @@ describe("atomicity of the track and its summary", () => {
   });
 });
 
+describe("reads that inform a write happen inside its transaction", () => {
+  /**
+   * The invariants these guard, whatever order two concurrent operations land in:
+   *
+   *   - every summary's `eventCount` equals the events actually attached to that track
+   *   - a summary exists exactly when its track does
+   *
+   * Asserting a *specific* outcome would be wrong: with delete-then-save, an event
+   * referencing a track that no longer exists is a legitimate serialization, and the
+   * contract permits an event whose `trackId` names nothing. What must never happen is an
+   * outcome matching neither ordering.
+   */
+  async function assertConsistent(store: IdbStorageAdapter): Promise<void> {
+    const summaries = await store.listTrackSummaries();
+    const events = await store.listEvents();
+
+    for (const summary of summaries) {
+      const actual = events.filter((event) => event.trackId === summary.id).length;
+      expect(summary.eventCount).toBe(actual);
+      expect(await store.getTrack(summary.id)).toBeDefined();
+    }
+  }
+
+  it("keeps eventCount correct when saveTrack and saveEvent overlap", async () => {
+    // Regression: saveTrack counted events in a transaction of its own, so a saveEvent
+    // committing in between left the summary reporting a number already stale when
+    // written. Reproduced 20/20 before the fix.
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const store = freshAdapter();
+      const track = makeTrack();
+      await store.saveTrack(track);
+
+      await Promise.all([
+        store.saveTrack(track),
+        store.saveEvent(makeEvent({ trackId: track.id })),
+      ]);
+
+      await assertConsistent(store);
+    }
+  });
+
+  it("stays consistent when deleteTrack and saveEvent overlap, either way round", async () => {
+    // Regression: the cascade snapshot was taken before the transaction, so an event could
+    // commit after the snapshot but before the delete — an outcome matching neither
+    // ordering of the two operations. Reproduced 20/20 with deleteTrack going first.
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const store = freshAdapter();
+      const track = makeTrack();
+      await store.saveTrack(track);
+
+      const operations = [
+        store.deleteTrack(track.id),
+        store.saveEvent(makeEvent({ trackId: track.id })),
+      ];
+      await Promise.all(attempt % 2 === 0 ? operations : operations.reverse());
+
+      await assertConsistent(store);
+      expect(await store.getTrack(track.id)).toBeUndefined();
+    }
+  });
+
+  it("stays consistent under a burst of interleaved writes", async () => {
+    const store = freshAdapter();
+    const tracks = Array.from({ length: 4 }, (_, i) => makeTrack({ startedAt: T0 + i * 1000 }));
+    for (const track of tracks) await store.saveTrack(track);
+
+    await Promise.all(
+      tracks.flatMap((track) => [
+        store.saveEvent(makeEvent({ trackId: track.id })),
+        store.saveEvent(makeEvent({ trackId: track.id })),
+        store.saveTrack({ ...track, tags: ["rewritten"] }),
+      ]),
+    );
+
+    await assertConsistent(store);
+    for (const summary of await store.listTrackSummaries()) {
+      expect(summary.eventCount).toBe(2);
+    }
+  });
+});
+
+describe("an event that changes owner repairs both summaries", () => {
+  it("moves the count from the old track to the new one", async () => {
+    // Regression: only the new owner was recomputed, so moving one event from A to B left
+    // both reporting 1.
+    const store = freshAdapter();
+    const a = makeTrack({ startedAt: T0 });
+    const b = makeTrack({ startedAt: T0 + 1000 });
+    await store.saveTrack(a);
+    await store.saveTrack(b);
+
+    const event = makeEvent({ trackId: a.id });
+    await store.saveEvent(event);
+    await store.saveEvent({ ...event, trackId: b.id });
+
+    const summaries = await store.listTrackSummaries();
+    expect(summaries.find((s) => s.id === a.id)?.eventCount).toBe(0);
+    expect(summaries.find((s) => s.id === b.id)?.eventCount).toBe(1);
+  });
+
+  it("decrements the old track when trackId is removed entirely", async () => {
+    const store = freshAdapter();
+    const track = makeTrack();
+    await store.saveTrack(track);
+
+    const event = makeEvent({ trackId: track.id });
+    await store.saveEvent(event);
+    expect((await store.listTrackSummaries())[0]?.eventCount).toBe(1);
+
+    const detached = { ...event };
+    delete detached.trackId;
+    await store.saveEvent(detached);
+
+    expect((await store.listTrackSummaries())[0]?.eventCount).toBe(0);
+    expect(await store.listEvents()).toHaveLength(1);
+  });
+
+  it("increments the new track when a trackId is added to a detached event", async () => {
+    const store = freshAdapter();
+    const track = makeTrack();
+    await store.saveTrack(track);
+
+    const event = makeEvent();
+    await store.saveEvent(event);
+    expect((await store.listTrackSummaries())[0]?.eventCount).toBe(0);
+
+    await store.saveEvent({ ...event, trackId: track.id });
+    expect((await store.listTrackSummaries())[0]?.eventCount).toBe(1);
+  });
+
+  it("tolerates an event naming a track that was never stored", async () => {
+    const store = freshAdapter();
+    await expect(store.saveEvent(makeEvent({ trackId: newId() }))).resolves.toBeUndefined();
+    expect(await store.listEvents()).toHaveLength(1);
+  });
+
+  it("moves the count back again", async () => {
+    const store = freshAdapter();
+    const a = makeTrack({ startedAt: T0 });
+    const b = makeTrack({ startedAt: T0 + 1000 });
+    await store.saveTrack(a);
+    await store.saveTrack(b);
+
+    const event = makeEvent({ trackId: a.id });
+    for (const owner of [a.id, b.id, a.id, b.id, a.id]) {
+      await store.saveEvent({ ...event, trackId: owner });
+    }
+
+    const summaries = await store.listTrackSummaries();
+    expect(summaries.find((s) => s.id === a.id)?.eventCount).toBe(1);
+    expect(summaries.find((s) => s.id === b.id)?.eventCount).toBe(0);
+  });
+});
+
 describe("listing does not read the point payload", () => {
   /**
    * Instrumentation rather than inference.

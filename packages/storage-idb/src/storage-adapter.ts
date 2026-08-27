@@ -3,7 +3,7 @@
 import type { Id, MapEvent, StorageAdapter, Track, TrackSummary } from "@mapatlas/core";
 import { newId, summariseTrack } from "@mapatlas/core";
 
-import type { MapAtlasDatabase } from "./schema.js";
+import type { MapAtlasDatabase, MapAtlasEventStore, MapAtlasTransaction } from "./schema.js";
 import { INDEX, STORE, openMapAtlasDatabase } from "./schema.js";
 
 export interface IdbStorageAdapterOptions {
@@ -16,6 +16,33 @@ export interface IdbStorageAdapterOptions {
 export interface IdbStorageAdapter extends StorageAdapter {
   /** Close the underlying connection. */
   close(): Promise<void>;
+}
+
+/**
+ * Bring every affected summary's `eventCount` back in step, inside the caller's transaction.
+ *
+ * Takes a list of possibly-undefined track ids because the interesting cases are exactly
+ * the ones with two: an event moved from A to B, or one whose `trackId` was removed
+ * altogether. Recomputing only the new owner is what leaves A still counting an event it
+ * no longer holds.
+ */
+async function recountOwners(
+  tx: MapAtlasTransaction,
+  events: MapAtlasEventStore,
+  trackIds: readonly (Id | undefined)[],
+): Promise<void> {
+  const affected = new Set(trackIds.filter((id): id is Id => id !== undefined));
+  if (affected.size === 0) return;
+
+  const summaries = tx.objectStore(STORE.summaries);
+  for (const trackId of affected) {
+    const summary = await summaries.get(trackId);
+    // A track that does not exist has no summary to correct — an event may legitimately
+    // reference one that was never stored, or was deleted.
+    if (summary === undefined) continue;
+    const count = (await events.index(INDEX.eventsByTrackId).getAll(trackId)).length;
+    await summaries.put({ ...summary, eventCount: count });
+  }
 }
 
 function blobKeysOf(event: MapEvent): string[] {
@@ -43,13 +70,21 @@ export function createIdbStorageAdapter(options: IdbStorageAdapterOptions = {}):
   return {
     saveTrack: async (track) => {
       const database = await db();
-      const eventCount = (await eventsOfTrack(database, track.id)).length;
 
-      // One transaction over both stores. A track and its summary must never be observable
-      // in disagreement, and a summary written separately could be lost to a crash between
-      // the two writes — leaving a trip that exists but does not appear in any list, or a
-      // list entry pointing at nothing.
-      const tx = database.transaction([STORE.tracks, STORE.summaries], "readwrite");
+      // One transaction over all three stores. A track and its summary must never be
+      // observable in disagreement, and a summary written separately could be lost to a
+      // crash between the two writes — leaving a trip that exists but appears in no list,
+      // or a list entry pointing at nothing.
+      //
+      // `events` is in scope because `eventCount` is read from it. Counting beforehand, in
+      // a transaction of its own, is not the same thing: a concurrent `saveEvent` can
+      // commit between the count and the write, and the summary then reports a number that
+      // was already wrong when it was written.
+      const tx = database.transaction([STORE.tracks, STORE.summaries, STORE.events], "readwrite");
+      const eventCount = (
+        await tx.objectStore(STORE.events).index(INDEX.eventsByTrackId).getAll(track.id)
+      ).length;
+
       await Promise.all([
         tx.objectStore(STORE.tracks).put(track),
         // `put` replaces the whole record, so an overwrite that changes `startedAt`
@@ -70,14 +105,19 @@ export function createIdbStorageAdapter(options: IdbStorageAdapterOptions = {}):
 
     deleteTrack: async (id) => {
       const database = await db();
-      const doomed = await eventsOfTrack(database, id);
-      const candidates = new Set(doomed.flatMap(blobKeysOf));
 
       const tx = database.transaction(
         [STORE.tracks, STORE.summaries, STORE.events, STORE.blobs],
         "readwrite",
       );
       const events = tx.objectStore(STORE.events);
+
+      // Selected inside the transaction. A snapshot taken beforehand can miss an event that
+      // commits between the read and the delete, leaving it attached to a track that no
+      // longer exists — which is not what either ordering of the two operations would have
+      // produced, so it is not a race a caller could have reasoned about.
+      const doomed = await events.index(INDEX.eventsByTrackId).getAll(id);
+      const candidates = new Set(doomed.flatMap(blobKeysOf));
 
       await Promise.all([
         tx.objectStore(STORE.tracks).delete(id),
@@ -103,19 +143,13 @@ export function createIdbStorageAdapter(options: IdbStorageAdapterOptions = {}):
       const tx = database.transaction([STORE.events, STORE.summaries], "readwrite");
       const events = tx.objectStore(STORE.events);
 
+      // `put` may be replacing an event that belonged to a different track, or to none.
+      // Reading the previous owner first is what makes a *move* work: recomputing only the
+      // new track leaves the old one still counting an event it no longer holds.
+      const previous = await events.get(event.id);
       await events.put(event);
 
-      // `eventCount` lives in the summary, so adding an event to a track changes it. Same
-      // transaction, same reason as saveTrack.
-      if (event.trackId !== undefined) {
-        const summaries = tx.objectStore(STORE.summaries);
-        const summary = await summaries.get(event.trackId);
-        if (summary !== undefined) {
-          const count = (await events.index(INDEX.eventsByTrackId).getAll(event.trackId)).length;
-          await summaries.put({ ...summary, eventCount: count });
-        }
-      }
-
+      await recountOwners(tx, events, [previous?.trackId, event.trackId]);
       await tx.done;
     },
 
@@ -136,15 +170,7 @@ export function createIdbStorageAdapter(options: IdbStorageAdapterOptions = {}):
       const event = await events.get(id);
       await events.delete(id);
 
-      if (event?.trackId !== undefined) {
-        const summaries = tx.objectStore(STORE.summaries);
-        const summary = await summaries.get(event.trackId);
-        if (summary !== undefined) {
-          const count = (await events.index(INDEX.eventsByTrackId).getAll(event.trackId)).length;
-          await summaries.put({ ...summary, eventCount: count });
-        }
-      }
-
+      await recountOwners(tx, events, [event?.trackId]);
       await tx.done;
     },
 

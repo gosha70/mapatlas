@@ -46,7 +46,8 @@ export interface StorageAdapter {
  *
  * Map bytes are large, replaceable, and the right thing to evict first; tracks and photos
  * are irreplaceable. Sharing one store meant a sign-out wipe destroyed hundreds of megabytes
- * of basemap, and that the two competed for the same quota. (ADR-0016)
+ * of basemap. Separation buys lifecycle isolation and a bounded blast radius — **not** quota
+ * isolation, since browsers evict per origin. (ADR-0016)
  */
 export interface MapAssetStore {
   put(key: string, data: Blob): Promise<void>;

@@ -97,9 +97,12 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   in-memory fake; the summary case asserts a returned `TrackSummary` carries no point array and
   that its `stats`/`bbox`/`pointCount` match the stored track.
 - **T2.2 IndexedDB adapter.** Implement `StorageAdapter` over `idb`, with a summary index so
-  `listTrackSummaries()` does not read point blobs. _AC:_ passes T2.1 suite (use a
-  fake-indexeddb in tests); `deleteTrack` cascades to its events and orphaned blobs;
-  `clearAll()` removes tracks+events+blobs.
+  `listTrackSummaries()` does not read point blobs, keyed for chronological listing **on
+  `startedAt`, not on the id**. _AC:_ passes T2.1 suite (use a fake-indexeddb in tests);
+  `deleteTrack` cascades to its events and orphaned blobs; `clearAll()` removes
+  tracks+events+blobs; storing an authored track whose `startedAt` predates every recorded
+  track places it **first** in a chronological listing despite having the newest id — id order
+  is insertion order, and the two must not be conflated.
 - **T2.3 Map asset store.** `createIdbMapAssetStore()` implementing `MapAssetStore` in a
   **separate IndexedDB database** from the trip store. _AC:_ `StorageAdapter.clearAll()` leaves
   downloaded map assets intact; `MapAssetStore.clear()` leaves tracks and events intact.

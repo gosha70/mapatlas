@@ -24,5 +24,6 @@
     {
       "path": "../../packages/react"
     }
-  ]
+  ],
+  "exclude": ["src/**/*.test.ts"]
 }

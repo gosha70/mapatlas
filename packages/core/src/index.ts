@@ -3,11 +3,28 @@
 /**
  * `@mapatlas/core` — the framework-agnostic engine.
  *
- * This package depends on nothing: no renderer, no React, no DOM, no consumer
- * domain. Everything variable is an interface here and implemented elsewhere.
- * See specs/architecture.md §1 for the rule and scripts/scan-isolation.mjs for
- * its enforcement.
+ * This package depends on nothing: no renderer, no React, no DOM, no consumer domain.
+ * Everything variable is an interface here and implemented elsewhere. See
+ * specs/architecture.md §1 for the rule and scripts/scan-isolation.mjs for its enforcement.
  */
 
-/** Package identity, used by consumers to report which engine build they embed. */
+export type { JSONValue } from "./json.js";
+export type { BBox, LatLng } from "./geo.js";
+export type { ChannelAggregate, ChannelDescriptor, ChannelStats } from "./channels.js";
+export type { Id, IdFactoryOptions } from "./ids.js";
+export { ID_LENGTH, createIdFactory, newId } from "./ids.js";
+export type {
+  DraftTrackPoint,
+  Track,
+  TrackLap,
+  TrackOrigin,
+  TrackPoint,
+  TrackSegment,
+  TrackStats,
+  TrackStatus,
+  TrackSummary,
+} from "./track.js";
+export type { MapEvent, MediaAnalysis, MediaRef } from "./event.js";
+
+/** Package identity, so a consumer can report which engine build it embeds. */
 export const PACKAGE_NAME = "@mapatlas/core";

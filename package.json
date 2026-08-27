@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsc --build",
     "clean": "tsc --build --clean",
-    "typecheck": "tsc --build --force",
+    "typecheck": "tsc --build --force && tsc -p tsconfig.tests.json",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

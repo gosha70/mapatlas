@@ -343,7 +343,9 @@ export interface StorageAdapter {
 ```
 
 **Contract:** all methods are async and side-effect-local by default; `listTrackSummaries()`
-returns a summary per stored track without loading its points; `deleteTrack` also deletes that
+returns a summary per stored track without loading its points, and an adapter that offers a
+chronological order **must derive it from `startedAt`, never from id order** — ids sort by mint
+time, and an authored or imported track is minted long after the trip it describes; `deleteTrack` also deletes that
 track's events and any blob referenced only by them; `clearAll()` must remove every track, event,
 and blob (consumers rely on this for a clean device wipe).
 

@@ -5,5 +5,13 @@
     "outDir": "dist"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../core" }, { "path": "../maplibre" }]
+  "references": [
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../maplibre"
+    }
+  ],
+  "exclude": ["src/**/*.test.ts"]
 }

@@ -137,14 +137,27 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   samples newer than the point belong to the next one.
 - **T1.9 Manual authoring.** `createTrackDraft` per `api.md §4` over `DraftTrackPoint[]` —
   append/insert/move/remove, `breakAt`, `setTimeAt`, `interpolateTimes`, undo/redo, `toTrack`.
+  History is **bounded full-state snapshots**, not a command log: correctness matters more than
+  memory where the mutations are hardest, and an authored route is tens to hundreds of vertices.
+  The limit stays private — implementation policy, replaceable by structural sharing later.
   _AC:_ a draft accepts a point with no `t` and reports it via `untimedIndices`; `toTrack()`
   throws `TrackDraftIncompleteError` naming those indices rather than inventing a timestamp;
   after `interpolateTimes` it succeeds; undo/redo restores exact prior state across every
-  mutation; `interpolateTimes` preserves anchored timestamps and produces a monotonically
-  increasing series; `breakAt` yields two segments; `toTrack()` output round-trips through
-  `createTrackDraft(track)` unchanged; editing a track never mutates the input.
-- **T1.10 Crash recovery.** `recoverInterruptedTrack(store)`. _AC:_ a store holding a track left
-  in `recording` returns it; a store with only finalized tracks returns `undefined`.
+  mutation, with `interpolateTimes` counting as **one** step; snapshots are deep, so nested
+  `channels` in history survive later edits; the oldest states are evicted past the limit and a
+  further undo is a no-op; a **rejected** mutation changes nothing — no state, no undo entry, no
+  cleared redo, no `onChange`; one `onChange` per successful edit/undo/redo and none for an
+  unavailable one; `interpolateTimes` preserves anchored timestamps, distributes by **distance**
+  not index, and produces a non-decreasing series; `breakAt(i)` makes `i` begin a segment without
+  duplicating it, and insert/remove shift boundaries predictably; `toTrack()` touches no history
+  and fires no listener; output round-trips through `createTrackDraft(track)` unchanged; editing a
+  track never mutates the input.
+- **T1.10 Crash recovery.** `recoverInterruptedTrack(store)` and `listInterruptedTracks(store)`.
+  _AC:_ a store holding a track left in `recording` or `paused` returns it; a store with only
+  finalized tracks returns `undefined`; the most recently started wins when a device crashed more
+  than once; it reads **summaries** and hydrates only the one candidate — proven by counting
+  `getTrack` calls against a store holding twenty finalized tracks — and calls nothing at all when
+  there is nothing to recover; the store is not modified.
 
 ## Phase 2 — `@mapatlas/storage-idb`
 - **T2.1 Conformance suite.** A reusable `StorageAdapter` test suite (in `core` test utils)

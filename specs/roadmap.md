@@ -21,7 +21,11 @@ The heart, with no browser or renderer.
   interface definitions (`StorageAdapter`, `MapAssetStore`, `MediaAnalyzer`, `TileSource`,
   `OfflineRegionStore`, `TrackRecorder`, `SensorSource`); `noopAnalyzer`;
   `recoverInterruptedTrack`; GeoJSON export/import (raw geometry) with the media manifest.
-- **Exit:** `@mapatlas/core` is 100% unit-tested in Node with fakes; no DOM/maplibre/react import.
+- **Exit:** `@mapatlas/core` is unit-tested in Node with fakes behind an enforced coverage floor
+  (92% statements / 82% branches / 90% functions / 92% lines, checked in CI); no DOM/maplibre/react
+  import. The residual gap is defensive `undefined` guards that strict indexing requires and no
+  input can reach — pursuing literal 100% would mean writing tests against TypeScript rather than
+  against the engine.
 
 ## Phase 2 — Persistence
 - `@mapatlas/storage-idb`: IndexedDB `StorageAdapter` (tracks, events, blobs) + a summary index

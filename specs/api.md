@@ -247,9 +247,12 @@ export interface TrackRecorderOptions {
  *  as `@mapatlas/recorder-web` — it touches the DOM, so it is not part of `core`. */
 export declare function createWebTrackRecorder(o?: TrackRecorderOptions): TrackRecorder;
 
-/** Returns a track left in `recording`/`paused` state by a previous session, if any,
- *  so the consumer can offer "resume" or "discard". Lives in `@mapatlas/core`. */
+/** A track left in `recording`/`paused` state by a previous session, so the consumer can
+ *  offer resume-or-discard. Reads **summaries**, hydrating only the one candidate, and
+ *  returns the most recently started when a device crashed more than once. */
 export declare function recoverInterruptedTrack(store: StorageAdapter): Promise<Track | undefined>;
+/** All of them, newest first, for a consumer that wants to present a choice. */
+export declare function listInterruptedTracks(store: StorageAdapter): Promise<Track[]>;
 
 /** Native background recorders (Capacitor/Cordova) are out-of-tree adapters
  *  that also implement TrackRecorder and are injected by the consumer. */
@@ -354,8 +357,12 @@ export interface TrackDraft {
    *  and the gaps between them are filled proportionally to distance; with no interior
    *  anchors, `speedMps` (or `startedAt`→`endedAt`) drives a constant-rate fill. */
   interpolateTimes(o: { startedAt: number; endedAt?: number; speedMps?: number }): void;
-  /** Split the draft at a vertex so the authored track carries the same pause semantics
-   *  as a recorded one. */
+  /** Split the draft so `index` **begins** a new segment — the authored equivalent of a
+   *  pause. The break vertex belongs to the later segment and is never duplicated:
+   *  points 0..5 broken at 3 give segments 0..2 and 3..5, since overlapping ranges would
+   *  fail the coverage invariant. Inserting a vertex at a boundary places it in the
+   *  *earlier* segment; removing one shifts later boundaries down, and a boundary left at
+   *  either end of the shortened array separates nothing and is dropped. */
   breakAt(index: number): void;
   undo(): void;
   redo(): void;
@@ -434,10 +441,23 @@ export declare function computeStats(
 export declare function simplify(points: readonly TrackPoint[], toleranceM: number): TrackPoint[];
 ```
 
-**Contract:** every mutation is undoable; `toTrack()` produces a `Track` indistinguishable in
-shape from a recorded one except for `origin`, and it round-trips through `createTrackDraft(track)`
-without loss. Editing an existing track never mutates the input. A draft may hold untimed points
-for as long as it likes; a `Track` may never — `toTrack()` is where that stops being allowed.
+**Contract — transactional.** Every public edit is **one** undo step, `interpolateTimes` included
+even though it rewrites many timestamps. A rejected mutation throws having changed nothing: no
+state change, no undo entry, no cleared redo, no `onChange`. Validation happens before the
+snapshot, so the draft is never left half-edited. History is bounded internally; the limit is
+deliberately not configurable, since it is implementation policy and the snapshots can become
+structural sharing later without any public change.
+
+**Contract — events.** One `onChange` per successful mutation, undo, or redo; none for an
+unavailable undo or redo. Listeners and `points` receive defensive copies, nested `channels`
+included.
+
+**Contract — `toTrack()`.** A projection, not an edit: it adds no undo entry, clears no redo,
+fires no listener, and leaves the draft untouched — calling it twice yields equivalent tracks
+(freshly minted ids aside). It produces a `Track` indistinguishable in shape from a recorded one
+except for `origin`, and round-trips through `createTrackDraft(track)` without loss. Editing an
+existing track never mutates the input. A draft may hold untimed points for as long as it likes;
+a `Track` may never — this is where that stops being allowed.
 
 ## 5. Persistence seam (`@mapatlas/core`; default impl in `@mapatlas/storage-idb`)
 

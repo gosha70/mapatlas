@@ -37,7 +37,7 @@ jobs:
         run: npm run format:check
 
       - name: Test
-        run: npm run test
+        run: npm run test:coverage
 
       - name: Scan — import isolation
         run: npm run scan:isolation

@@ -23,12 +23,14 @@
     "test:watch": "vitest",
     "scan:isolation": "node scripts/scan-isolation.mjs",
     "scan:spdx": "node scripts/scan-spdx.mjs",
-    "verify": "npm run build && npm run typecheck && npm run lint && npm run test && npm run scan:isolation && npm run scan:spdx && npm run format:check"
+    "verify": "npm run build && npm run typecheck && npm run lint && npm run test:coverage && npm run scan:isolation && npm run scan:spdx && npm run format:check",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "26.4.0",
     "@types/react": "19.2.18",
+    "@vitest/coverage-v8": "4.1.11",
     "eslint": "10.9.1",
     "eslint-config-prettier": "10.1.8",
     "globals": "17.11.0",

@@ -27,6 +27,17 @@ export type {
 } from "./track.js";
 export type { MapEvent, MediaAnalysis, MediaRef } from "./event.js";
 export type { MapAssetStore, StorageAdapter } from "./storage.js";
+export type {
+  EventFeature,
+  EventFeatureProperties,
+  MediaManifestEntry,
+  SegmentProperties,
+  TrackExport,
+  TrackFeature,
+  TrackFeatureProperties,
+} from "./portability.js";
+export { TrackImportError, geoJSONToTrack, trackToGeoJSON } from "./portability.js";
+export type { FeatureCollection, MultiLineString, Point, Position } from "./geojson.js";
 export type { EventLog } from "./event-log.js";
 export { EventNotFoundError, createEventLog } from "./event-log.js";
 export type { AnalyzeInput, MediaAnalyzer } from "./analyzer.js";
@@ -67,6 +78,7 @@ export {
   resolveFinalizePolicy,
 } from "./finalize.js";
 export {
+  TrackCoverageError,
   TrackSegmentRangeError,
   TrackTemporalOrderError,
   assertValidTrackGeometry,

@@ -107,6 +107,16 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   _AC:_ typecheck; `noopAnalyzer` returns `[]`; every seam Phase 2 and Phase 6 implement is
   declared here — a Phase 1 that omits `MapAssetStore` leaves T2.3 with nothing to implement.
 - **T1.7 GeoJSON.** `trackToGeoJSON`/`geoJSONToTrack` returning/accepting `TrackExport`.
+  _AC — the governing property:_ export → import → export is **byte-identical**, and the imported
+  track equals the original over its **canonical state** (`points + segments + laps + channels +
+  stats + origin + tags + meta` + events) — not over every property, since `simplifiedSegments` is
+  omitted by design and regenerated. That regeneration is asserted separately.
+  _AC — determinism:_ output does not depend on input ordering. Channel keys sorted, manifest
+  sorted by id, events ordered by `occurredAt` then id; segments, laps, coordinates, tags and an
+  event's media keep the order they were given, because there the order is data.
+  _AC — fails closed:_ a misaligned parallel array, a missing timestamp, segment properties that
+  disagree with the geometry, two track features, a wrong geometry type, or a track violating the
+  temporal or coverage invariants must all raise rather than truncate or repair.
   _AC:_ round-trip preserves geometry **as a `MultiLineString` per segment at raw fidelity**
   (exporting `simplifiedSegments` fails the losslessness requirement below), timestamps
   (`coordTimes`), `altitudeM`, per-coordinate `channels` + descriptors, laps, stats, origin,

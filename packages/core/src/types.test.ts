@@ -128,6 +128,10 @@ describe("public surface", () => {
         "resolveStatsPolicy",
         "EventNotFoundError",
         "createEventLog",
+        "TrackCoverageError",
+        "TrackImportError",
+        "geoJSONToTrack",
+        "trackToGeoJSON",
         "noopAnalyzer",
       ].sort(),
     );

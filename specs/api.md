@@ -749,12 +749,35 @@ export interface TrackExport {
   media: MediaManifestEntry[];          // media travels by reference, never inlined
 }
 
-export function trackToGeoJSON(track: Track, events: MapEvent[]): TrackExport;
+export class TrackImportError extends Error {}
+
+export function trackToGeoJSON(track: Track, events: readonly MapEvent[]): TrackExport;
 export function geoJSONToTrack(e: TrackExport): { track: Track; events: MapEvent[] };
 ```
 
+The track feature's per-point data travels as arrays **parallel to the coordinates, one per
+segment**: `coordTimes`, and optionally `accuracyM`, `altitudeAccuracyM`, `speedMps`, `headingDeg`
+and `channels` (a record of key to parallel array). A point missing a value contributes `null`, so
+index *i* always names the same point — compaction would make the arrays unreadable without the
+very data they encode. Altitude rides in the coordinate itself as `[lng, lat, altitude]`. A
+property is omitted entirely when no point carries the field.
+
+**Determinism.** The same track and events produce byte-identical output regardless of the order
+they were handed over: channel keys are emitted sorted, the manifest is sorted by id, and events
+are ordered by `occurredAt` then id — the total order `EventLog.list` imposes. Order that *is*
+data — segments, laps, coordinates, tags, and an event's own media array — is preserved as given.
+
+**Import fails closed.** A parallel array whose shape disagrees with the geometry, a missing
+timestamp, segment properties that do not match the members, more than one track feature, or a
+track violating the temporal or coverage invariants all raise rather than being truncated or
+repaired. Both directions copy defensively, so neither a document nor a track can reach into the
+other.
+
 **Contract:** the track feature is a `MultiLineString` whose members are `track.segments`
-**at raw fidelity — never `simplifiedSegments`**. Export is a portability format, and T1.7
+**at raw fidelity — never `simplifiedSegments`**. Equality after a round trip is defined over the
+**canonical state** — `points + segments + laps + channels + stats + origin + tags + meta` and the
+events — not over every property, precisely because the derived cache is omitted by design and
+regenerated on the far side. Export is a portability format, and T1.7
 requires a lossless round-trip; shipping decimated geometry would quietly fail that. Simplified
 geometry is a rendering projection and is recomputed on import, not carried. Each member carries
 per-coordinate timestamps in `properties.coordTimes` and per-coordinate telemetry in

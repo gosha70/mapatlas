@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { newId } from "./ids.js";
 import type { TrackPoint, TrackSegment } from "./track.js";
 import {
+  TrackCoverageError,
   TrackSegmentRangeError,
   TrackTemporalOrderError,
   assertValidTrackGeometry,
@@ -72,10 +73,15 @@ describe("temporal order", () => {
     expect(() => assertValidTrackGeometry({ points, segments })).toThrow(TrackTemporalOrderError);
   });
 
-  it("ignores points outside any segment, which no segment claims", () => {
+  it("rejects a point no segment claims, rather than quietly ignoring it", () => {
+    // Previously this passed: the temporal check simply skipped unclaimed points. But a
+    // point outside every segment has no meaning — a pause keeps nothing — and it would
+    // vanish on export, since interchange is segmented geometry. Failing closed makes
+    // losslessness a property of the model instead of a problem for T1.7 to work around.
     const points = pointsAt(0, 1000, 500, 2000);
-    // Only points 2..3 are claimed, and those are in order.
-    expect(() => assertValidTrackGeometry({ points, segments: [segment(2, 3)] })).not.toThrow();
+    expect(() => assertValidTrackGeometry({ points, segments: [segment(2, 3)] })).toThrow(
+      TrackCoverageError,
+    );
   });
 });
 
@@ -91,12 +97,38 @@ describe("segment ranges", () => {
     expect(() => assertValidTrackGeometry({ points, segments })).not.toThrow();
   });
 
+  it("accepts a single-point segment as part of a covering set", () => {
+    // One fix, then a pause, then the rest — a recording that started and immediately
+    // stopped for a moment.
+    const segments = [segment(0, 0), segment(1, 4)];
+    expect(() => assertValidTrackGeometry({ points, segments })).not.toThrow();
+  });
+
   it("accepts an empty track with no segments", () => {
     expect(() => assertValidTrackGeometry({ points: [], segments: [] })).not.toThrow();
   });
 
-  it("accepts a single-point segment", () => {
-    expect(() => assertValidTrackGeometry({ points, segments: [segment(2, 2)] })).not.toThrow();
+  it("rejects segments over a track with no points", () => {
+    // Caught by the range check rather than the coverage check, because ranges are
+    // validated first: [0, 0] cannot index an empty array at all.
+    expect(() => assertValidTrackGeometry({ points: [], segments: [segment(0, 0)] })).toThrow(
+      TrackSegmentRangeError,
+    );
+  });
+
+  it("rejects points with no segments at all", () => {
+    expect(() => assertValidTrackGeometry({ points, segments: [] })).toThrow(TrackCoverageError);
+  });
+
+  it("rejects a gap between two segments", () => {
+    const segments = [segment(0, 1), segment(3, 4)];
+    expect(() => assertValidTrackGeometry({ points, segments })).toThrow(/leaving a gap/);
+  });
+
+  it("rejects trailing points after the last segment", () => {
+    expect(() => assertValidTrackGeometry({ points, segments: [segment(0, 2)] })).toThrow(
+      /after the last segment/,
+    );
   });
 
   it("rejects a range running past the end of the points", () => {

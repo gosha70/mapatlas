@@ -124,11 +124,62 @@ function assertSegmentRanges(
   }
 }
 
+/** A point belongs to no segment, so nothing describes when it was recorded. */
+export class TrackCoverageError extends Error {
+  readonly unclaimedIndex: number;
+
+  constructor(unclaimedIndex: number, detail: string) {
+    super(`points[${unclaimedIndex}] belongs to no segment: ${detail}`);
+    this.name = "TrackCoverageError";
+    this.unclaimedIndex = unclaimedIndex;
+  }
+}
+
+/**
+ * Segments must cover every point, contiguously, from the first to the last.
+ *
+ * A point outside every segment has no meaning: a segment is a span of *active* recording
+ * and the gap between two is a pause, during which nothing is kept. An unclaimed point is
+ * therefore either a construction bug or data that no statistic will count and no renderer
+ * will draw — and it would vanish silently on export, since interchange is segmented
+ * geometry. Failing closed here makes losslessness a property of the model rather than
+ * something export has to work around.
+ */
+function assertSegmentsCoverPoints(
+  points: readonly TrackPoint[],
+  segments: readonly TrackSegment[],
+): void {
+  if (points.length === 0) {
+    if (segments.length > 0) throw new TrackCoverageError(0, "the track has no points at all");
+    return;
+  }
+
+  if (segments.length === 0) {
+    throw new TrackCoverageError(0, "the track has points but no segments");
+  }
+
+  let expected = 0;
+  for (const segment of segments) {
+    if (segment.startIndex !== expected) {
+      throw new TrackCoverageError(
+        expected,
+        `the next segment starts at ${segment.startIndex}, leaving a gap`,
+      );
+    }
+    expected = segment.endIndex + 1;
+  }
+
+  if (expected !== points.length) {
+    throw new TrackCoverageError(expected, "it falls after the last segment ends");
+  }
+}
+
 /**
  * Assert every invariant a finalized track must satisfy. Throws on the first violation and
  * never modifies the input.
  */
 export function assertValidTrackGeometry(track: Pick<Track, "points" | "segments">): void {
   assertSegmentRanges(track.points, track.segments);
+  assertSegmentsCoverPoints(track.points, track.segments);
   assertTemporalOrder(track.points, track.segments);
 }

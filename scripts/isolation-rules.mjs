@@ -91,10 +91,12 @@ export const DOM_GLOBALS = [
  * @param {string} source
  * @returns {string[]}
  */
+export function stripComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
 export function extractImports(source) {
-  const withoutComments = source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const withoutComments = stripComments(source);
 
   const patterns = [
     /\bimport\s+[\s\S]*?\bfrom\s*["']([^"']+)["']/g, // import x from "..."
@@ -148,10 +150,14 @@ export function checkFile(packageKey, filePath, source) {
   }
 
   if (rule.forbidDomGlobals) {
+    // Prose gets stripped first: a comment cannot execute, and "bytes never enter the
+    // document." should not read as a DOM access. The pattern also requires a property
+    // name, an index or a call after the global, so `document.` in text stays inert while
+    // `document.getElementById` does not.
+    const code = stripComments(source);
     for (const global of DOM_GLOBALS) {
-      // A property access or a call is a runtime use; a bare type reference is not.
-      const used = new RegExp(`(^|[^\\w.$"'\`])${global}\\s*[.[(]`, "m");
-      if (used.test(source)) {
+      const used = new RegExp(`(^|[^\\w.$"'\`])${global}\\s*(\\.\\s*\\w|\\[|\\()`, "m");
+      if (used.test(code)) {
         violations.push({
           file: filePath,
           message: `uses the DOM global "${global}" — ${packageKey} must not (${rule.note})`,

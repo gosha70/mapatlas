@@ -55,6 +55,19 @@ describe("checkFile — core", () => {
     expect(messages("packages/core", `import { x } from "@mapatlas/maplibre";`)).toHaveLength(1);
   });
 
+  it("does not mistake prose for a DOM access", () => {
+    // Regression: "bytes never enter the document." in a doc comment tripped the scan.
+    expect(
+      messages("packages/core", `/** Bytes never enter the document. */\nexport const A = 1;`),
+    ).toEqual([]);
+    expect(messages("packages/core", `// consult the window.\nexport const B = 2;`)).toEqual([]);
+    expect(messages("packages/core", `export const C = "see the document.";`)).toEqual([]);
+  });
+
+  it("still rejects a real access that looks like prose", () => {
+    expect(messages("packages/core", `export const D = document.title;`)).toHaveLength(1);
+  });
+
   it("rejects a runtime DOM global", () => {
     expect(messages("packages/core", `const w = window.innerWidth;`)).toHaveLength(1);
     expect(messages("packages/core", `navigator.geolocation.watchPosition();`)).toHaveLength(1);

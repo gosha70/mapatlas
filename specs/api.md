@@ -297,11 +297,36 @@ export declare function createPollingSensorSource(opts: {
   read(): Promise<Record<string, number> | undefined>;
 }): SensorSource;
 
-/** Test double, shipped like `noopAnalyzer`, so the channel path is testable without hardware. */
-export declare function createFakeSensorSource(opts: {
-  id: string; channels: ChannelDescriptor[]; samples: SensorSample[];
-}): SensorSource;
+/** Reduce the samples gathered since the previous kept point into this point's channels. */
+export declare function mergeSensorSamples(
+  samples: readonly SensorSample[],
+  pointT: number,
+  policy: SensorMergePolicy,
+): Record<string, number>;
+export declare const DEFAULT_SENSOR_MERGE_POLICY: Readonly<SensorMergePolicy>;  // last, 10s
+export declare function resolveSensorMergePolicy(p?: Partial<SensorMergePolicy>): SensorMergePolicy;
 ```
+
+**Polling contract.** `intervalMs` must be positive and finite, and duplicate descriptor keys
+fail construction. **At most one `read()` is ever in flight**: a tick arriving while one is still
+running is *skipped, never queued* — the interval is a desired cadence, not a promise that every
+invocation runs, and a backlog would accumulate stale telemetry whose timestamps no longer
+resemble when it was observed. A sample is stamped **when the read resolves**, the closest moment
+to the observation the engine knows; a device with authoritative sample times should implement
+`SensorSource` directly instead. Values must be finite and their keys **declared** — an undeclared
+key raises `read-failed` rather than being stored, because silently accepting `hearRate` for
+`heartRate` produces telemetry nothing can chart. Supplying only some declared channels is fine.
+A rejected read raises `read-failed` and polling continues on the next eligible tick. `start()`
+and `stop()` are both idempotent; `stop()` clears future ticks at once and **disowns a read still
+in flight**, so `read A starts → stop() → start() → read A resolves` cannot inject A's sample into
+the new session.
+
+**Merge contract.** Reduction is **per channel, over the samples that carry that key** — a channel
+absent from a sample is absent, not zero. Samples older than `maxAgeMs` before the point are
+dropped as stale, and samples *newer* than the point belong to the next one.
+
+`createFakeSensorSource` lives on the testing entry point (§5c) beside the memory adapter: a
+first-party fake for a seam is worth shipping, but it is not production API.
 
 **Contract:** the recorder merges the reduced sample values into `TrackPoint.channels` of each
 **kept** point and unions the sources' `channels` into `Track.channels`; a sensor failure raises
@@ -469,6 +494,9 @@ unstable order flickers between renders. `remove` is idempotent.
 ```ts
 export declare function createMemoryStorageAdapter(): MemoryStorageAdapter;
 export declare function createMemoryMapAssetStore(): MapAssetStore;
+export declare function createFakeSensorSource(opts: {
+  id: string; channels: ChannelDescriptor[]; samples?: SensorSample[];
+}): FakeSensorSource;   // adds emit() and fail(), so a test can drive timing and failure
 ```
 
 A **separate entry point**, deliberately not re-exported from the main barrel: useful enough to

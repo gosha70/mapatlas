@@ -121,11 +121,20 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   (exporting `simplifiedSegments` fails the losslessness requirement below), timestamps
   (`coordTimes`), `altitudeM`, per-coordinate `channels` + descriptors, laps, stats, origin,
   comment, tags, `fields`, `analysis` (media by reference in the manifest, never inlined).
-- **T1.8 Sensor channels.** `createPollingSensorSource`, `createFakeSensorSource`, and the
-  merge helper (`SensorMergePolicy`: `maxAgeMs` + `reduce`). _AC:_ with a fake source, values
-  land in `TrackPoint.channels`; a sample older than `maxAgeMs` is not merged; `reduce: "avg"`
-  averages the samples that arrived since the previous kept point; a throwing `read()` raises
-  `onError` and does not stop sampling.
+- **T1.8 Sensor channels.** `createPollingSensorSource`, `mergeSensorSamples`, and
+  `createFakeSensorSource` on the **testing** entry point. The scheduler is injected internally
+  for determinism and deliberately kept **off** the public contract — it is implementation
+  machinery, and putting it in `api.md` means owning its shape forever.
+  _AC — polling:_ at most one `read()` in flight, with later ticks **skipped rather than queued**;
+  samples stamped at read completion from the injected clock; `intervalMs` positive and finite;
+  duplicate descriptor keys fail construction; undeclared keys and non-finite values raise
+  `read-failed` while a partial set of declared channels is accepted; a rejected read raises and
+  polling continues; `start`/`stop` idempotent; a read in flight across `stop()`→`start()` cannot
+  emit into the new session.
+  _AC — merge:_ reduction is per channel over the samples carrying that key, so a staggered
+  fixture (`t=100 {a:10}`, `t=110 {b:20}`, `t=120 {a:14,b:24}`) averages `a` over 10,14 and `b`
+  over 20,24 rather than treating absence as zero; samples older than `maxAgeMs` are dropped, and
+  samples newer than the point belong to the next one.
 - **T1.9 Manual authoring.** `createTrackDraft` per `api.md §4` over `DraftTrackPoint[]` —
   append/insert/move/remove, `breakAt`, `setTimeAt`, `interpolateTimes`, undo/redo, `toTrack`.
   _AC:_ a draft accepts a point with no `t` and reports it via `untimedIndices`; `toTrack()`

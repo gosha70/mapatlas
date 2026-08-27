@@ -11,5 +11,7 @@
  * make by accident here.
  */
 
+export type { FakeSensorSource, FakeSensorSourceOptions } from "./fake-sensor.js";
+export { createFakeSensorSource } from "./fake-sensor.js";
 export type { MemoryStorageAdapter } from "./memory-storage.js";
 export { createMemoryMapAssetStore, createMemoryStorageAdapter } from "./memory-storage.js";

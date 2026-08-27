@@ -132,6 +132,12 @@ describe("public surface", () => {
         "TrackImportError",
         "geoJSONToTrack",
         "trackToGeoJSON",
+        "DEFAULT_SENSOR_MAX_AGE_MS",
+        "DEFAULT_SENSOR_MERGE_POLICY",
+        "DEFAULT_SENSOR_REDUCE",
+        "createPollingSensorSource",
+        "mergeSensorSamples",
+        "resolveSensorMergePolicy",
         "noopAnalyzer",
       ].sort(),
     );

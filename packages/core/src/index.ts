@@ -56,6 +56,15 @@ export type {
   SensorSource,
   SensorSourceError,
 } from "./sensors.js";
+export type { PollingSensorSourceOptions } from "./sensors-polling.js";
+export { createPollingSensorSource } from "./sensors-polling.js";
+export {
+  DEFAULT_SENSOR_MAX_AGE_MS,
+  DEFAULT_SENSOR_MERGE_POLICY,
+  DEFAULT_SENSOR_REDUCE,
+  mergeSensorSamples,
+  resolveSensorMergePolicy,
+} from "./sensors-merge.js";
 export type {
   TrackRecorder,
   TrackRecorderError,

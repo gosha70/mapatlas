@@ -81,8 +81,10 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   producing bad statistics. _AC:_ a monotonic fixture finalizes; a fixture with one backwards
   point throws and names its index; the error does not fire across a segment boundary, where a
   gap is expected.
-- **T1.4 Stats + finalize.** `computeStats` (distance via `geodesicDistanceMeters`, elapsed vs moving time, avg/max
-  speed, elevation gain/loss with hysteresis, per-channel roll-up honoring `aggregate`) and
+- **T1.4 Stats + finalize.** `computeStats(track, policy?)` (distance via `geodesicDistanceMeters`,
+  elapsed vs moving time, avg/max speed skipping zero-duration pairs, elevation gain/loss via a
+  **rolling trend-aware** deadband from `StatsPolicy.elevationHysteresisM` (default 5, `0` = raw),
+  per-channel roll-up honoring `aggregate`) and
   `finalizeTrack` (segments + `simplifiedSegments` + `stats`). _AC:_ distance and elevation gain within
   tolerance of a known fixture; a fixture with a pause reports `movingTimeMs < durationMs`;
   a flat-but-noisy altitude fixture reports ~0 gain, not accumulated noise; **deleting

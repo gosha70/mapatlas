@@ -318,3 +318,33 @@ The layers divide explicitly:
 can decide to repair, discard, or show the offending indices to a user. No layer silently rewrites
 a recorded observation. The cost is that a recorder which admits a stale fix produces a track that
 cannot be finalized — which is the correct pressure, applied to the layer that can actually fix it.
+
+## ADR-0021 — Elevation hysteresis is a policy, not a constant
+**Context.** Summing every positive altitude delta manufactures climb from noise: consumer GPS
+altitude oscillates by several metres while stationary, so a flat route can accumulate hundreds
+of metres of invented ascent. A deadband is required. The question was what value to bake in.
+
+Any single constant would contradict "seams over features". Phone GPS, a barometric altimeter, an
+imported FIT or GPX file, and DEM-derived elevation have very different noise characteristics — a
+3 m deadband is reasonable for good barometric data and still manufactures climb from ordinary
+phone oscillation. The engine cannot know which it is holding, and `altitudeAccuracyM` is not the
+answer either: it is unevenly reported across devices, and deriving the threshold from it would
+make a durable statistic depend on absent metadata and stop being reproducible.
+
+**Decision.** A `StatsPolicy` with `elevationHysteresisM`, defaulting to a conservative **5 m**,
+accepted by both `computeStats` and `finalizeTrack` so recorded, authored and imported tracks can
+all be finalized under one explicit policy. `0` disables filtering and accumulates raw movement.
+
+The filter is **rolling and trend-aware, not pairwise**. Pairwise thresholding — count a step only
+if it exceeds the deadband — reports zero for a 100 m climb taken in 1 m steps, because no single
+step clears the bar. Instead the algorithm tracks the extreme reached since the last confirmed
+turning point and commits a leg only when altitude reverses by more than the deadband. So
+`100, 101, 102, 103, 104, 105, 106` yields 6 m of gain, while `100, 103, 98, 102, 99, 101, 97, 100`
+yields nothing. Gain and loss are computed **per segment**, never across a pause, exactly as
+distance is: a boat that drifts between two casts did not climb the difference.
+
+**Consequences.** A field-journal consumer gets sensible behaviour untouched; a barometric one can
+tighten to 1–3 m, a known-noisy device loosen to 8–10 m, and a pre-smoothed DEM import set 0. The
+statistic stays deterministic and reproducible for a given policy, which is what makes it safe to
+persist. `finalizeTrack` also takes `simplifyToleranceM` in the same policy object, so every
+derived field a track carries is governed by one explicit argument.

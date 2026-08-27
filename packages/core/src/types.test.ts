@@ -118,6 +118,14 @@ describe("public surface", () => {
         "TrackTemporalOrderError",
         "assertValidTrackGeometry",
         "geodesicDistanceMeters",
+        "DEFAULT_ELEVATION_HYSTERESIS_M",
+        "DEFAULT_FINALIZE_POLICY",
+        "DEFAULT_SIMPLIFY_TOLERANCE_M",
+        "DEFAULT_STATS_POLICY",
+        "computeStats",
+        "finalizeTrack",
+        "resolveFinalizePolicy",
+        "resolveStatsPolicy",
       ].sort(),
     );
   });

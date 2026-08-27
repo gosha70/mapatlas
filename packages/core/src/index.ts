@@ -27,6 +27,20 @@ export type {
 } from "./track.js";
 export type { MapEvent, MediaAnalysis, MediaRef } from "./event.js";
 export { simplify } from "./simplify.js";
+export type { StatsPolicy } from "./stats.js";
+export {
+  DEFAULT_ELEVATION_HYSTERESIS_M,
+  DEFAULT_STATS_POLICY,
+  computeStats,
+  resolveStatsPolicy,
+} from "./stats.js";
+export type { FinalizePolicy } from "./finalize.js";
+export {
+  DEFAULT_FINALIZE_POLICY,
+  DEFAULT_SIMPLIFY_TOLERANCE_M,
+  finalizeTrack,
+  resolveFinalizePolicy,
+} from "./finalize.js";
 export {
   TrackSegmentRangeError,
   TrackTemporalOrderError,

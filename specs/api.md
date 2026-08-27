@@ -364,8 +364,32 @@ export declare function assertValidTrackGeometry(t: Pick<Track, "points" | "segm
 
 /** Validates first (ADR-0020), then derives. Either returns a wholly valid finalized track
  *  or throws having computed nothing — no partial stats, no partial simplification. */
-export declare function finalizeTrack(t: Pick<Track, "points" | "segments"> & Partial<Track>): Track;
-export declare function computeStats(t: Pick<Track, "points" | "segments" | "channels">): TrackStats;
+export declare function finalizeTrack(
+  t: Pick<Track, "points" | "segments"> & Partial<Track>,
+  policy?: Partial<FinalizePolicy>,
+): Track;
+/** Knobs for derived statistics. A policy rather than a constant because the right value
+ *  depends on where the altitude came from, and the engine cannot know. (ADR-0021) */
+export interface StatsPolicy {
+  /** Vertical deadband for elevation gain/loss, metres. Default 5. `0` accumulates raw movement. */
+  elevationHysteresisM: number;
+}
+export interface FinalizePolicy extends StatsPolicy {
+  /** Douglas–Peucker tolerance for `simplifiedSegments`, metres. Default 5. Rendering only. */
+  simplifyToleranceM: number;
+}
+export declare const DEFAULT_STATS_POLICY: Readonly<StatsPolicy>;
+export declare const DEFAULT_FINALIZE_POLICY: Readonly<FinalizePolicy>;
+export declare function resolveStatsPolicy(p?: Partial<StatsPolicy>): StatsPolicy;
+export declare function resolveFinalizePolicy(p?: Partial<FinalizePolicy>): FinalizePolicy;
+
+/** Every quantity is computed per segment and summed, never across a pause. Elevation uses a
+ *  rolling, trend-aware deadband — not pairwise thresholding, which reports zero for a long
+ *  climb taken in small steps. A pair sharing a millisecond yields no instantaneous speed. */
+export declare function computeStats(
+  t: Pick<Track, "points" | "segments" | "channels">,
+  policy?: Partial<StatsPolicy>,
+): TrackStats;
 /** Ramer–Douglas–Peucker over one continuous run of points.
  *
  *  Generic by design: it knows nothing about segments or pauses. `finalizeTrack` maps it

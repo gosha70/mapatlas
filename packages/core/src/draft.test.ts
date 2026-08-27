@@ -19,6 +19,15 @@ const at = (north: number, t?: number): DraftTrackPoint => ({
   ...(t === undefined ? {} : { t }),
 });
 
+/**
+ * Anchor both sides of a pause, which interpolation now requires: only the author knows
+ * how long the recording was stopped.
+ */
+function anchorPause(draft: TrackDraft, boundary: number, before: number, after: number): void {
+  draft.setTimeAt(boundary - 1, before);
+  draft.setTimeAt(boundary, after);
+}
+
 /** A draft of `count` vertices 100 m apart, untimed. */
 function drawn(count: number): TrackDraft {
   const draft = createTrackDraft();
@@ -227,16 +236,34 @@ describe("a rejected mutation is a non-event", () => {
 
   it.each(rejections)("%s throws without touching state, history or listeners", (_name, act) => {
     const draft = drawn(4);
-    draft.undo(); // leave something on the redo stack
-    const before = draft.points;
+    draft.undo(); // 3 points, and something on the redo stack
+    const priorState = draft.points; // what one undo should reach
+    draft.append(at(400)); // 4 points again, redo cleared
+    const currentState = draft.points;
+
     const changes: number[] = [];
     draft.onChange((points) => changes.push(points.length));
 
     expect(() => act(draft)).toThrow(RangeError);
 
-    expect(draft.points).toEqual(before);
-    expect(draft.canRedo).toBe(true); // redo survived
+    expect(draft.points).toEqual(currentState);
     expect(changes).toEqual([]); // no listener fired
+
+    // The assertion the earlier version was missing: a path that pushed an undo snapshot
+    // without clearing redo would have passed everything above. One undo must land on the
+    // state that preceded the current one — not on the current one duplicated.
+    draft.undo();
+    expect(draft.points).toEqual(priorState);
+  });
+
+  it("preserves a live redo entry through a rejection", () => {
+    const draft = drawn(4);
+    draft.undo();
+    expect(draft.canRedo).toBe(true);
+
+    expect(() => draft.removeAt(-1)).toThrow(RangeError);
+
+    expect(draft.canRedo).toBe(true);
   });
 
   it("rejects a duplicate break", () => {
@@ -300,6 +327,7 @@ describe("breakAt and boundary shifting", () => {
   it("gives the break vertex to the later segment, never duplicating it", () => {
     const draft = drawn(6);
     draft.breakAt(3);
+    anchorPause(draft, 3, T0 + 20_000, T0 + 300_000);
     draft.interpolateTimes({ startedAt: T0, endedAt: T0 + 500_000 });
 
     const track = draft.toTrack();
@@ -312,6 +340,7 @@ describe("breakAt and boundary shifting", () => {
     const draft = drawn(6);
     draft.breakAt(3);
     draft.insertAt(1, at(50));
+    anchorPause(draft, 4, T0 + 20_000, T0 + 300_000);
     draft.interpolateTimes({ startedAt: T0, endedAt: T0 + 500_000 });
 
     const track = draft.toTrack();
@@ -323,6 +352,7 @@ describe("breakAt and boundary shifting", () => {
     const draft = drawn(6);
     draft.breakAt(3);
     draft.insertAt(3, at(250));
+    anchorPause(draft, 4, T0 + 20_000, T0 + 300_000);
     draft.interpolateTimes({ startedAt: T0, endedAt: T0 + 500_000 });
 
     const track = draft.toTrack();
@@ -333,6 +363,7 @@ describe("breakAt and boundary shifting", () => {
     const draft = drawn(6);
     draft.breakAt(3);
     draft.removeAt(0);
+    anchorPause(draft, 2, T0 + 20_000, T0 + 300_000);
     draft.interpolateTimes({ startedAt: T0, endedAt: T0 + 500_000 });
 
     const track = draft.toTrack();
@@ -354,6 +385,8 @@ describe("breakAt and boundary shifting", () => {
     const draft = drawn(9);
     draft.breakAt(3);
     draft.breakAt(6);
+    anchorPause(draft, 3, T0 + 20_000, T0 + 300_000);
+    anchorPause(draft, 6, T0 + 320_000, T0 + 600_000);
     draft.interpolateTimes({ startedAt: T0, endedAt: T0 + 800_000 });
 
     const track = draft.toTrack();
@@ -549,6 +582,7 @@ describe("toTrack", () => {
   it("produces equivalent tracks when called twice, ids aside", () => {
     const draft = drawn(6);
     draft.breakAt(3);
+    anchorPause(draft, 3, T0 + 10_000, T0 + 30_000);
     draft.interpolateTimes({ startedAt: T0, endedAt: T0 + 50_000 });
 
     const a = draft.toTrack();
@@ -563,11 +597,125 @@ describe("toTrack", () => {
   });
 });
 
+describe("the finalized track does not share state with the draft", () => {
+  it("does not let a mutation of the track reach into the draft", () => {
+    // Regression: toTrack spread the point, so the finalized track kept the draft's own
+    // nested channels object. Mutating the track edited the draft with no undo entry and
+    // no listener event — a change nobody asked for and nobody could observe.
+    const draft = createTrackDraft();
+    draft.append({ ...ORIGIN, t: T0, channels: { heartRateBpm: 100 } });
+    draft.append({ ...at(100), t: T0 + 1000, channels: { heartRateBpm: 110 } });
+
+    const track = draft.toTrack();
+    track.points[0]!.channels!["heartRateBpm"] = 999;
+    track.points[1]!.lat = 0;
+
+    expect(draft.points[0]?.channels).toEqual({ heartRateBpm: 100 });
+    expect(draft.points[1]?.lat).toBeCloseTo(ORIGIN.lat + 100 * DEG_PER_M, 8);
+  });
+
+  it("gives each toTrack call its own points", () => {
+    const draft = createTrackDraft();
+    draft.append({ ...ORIGIN, t: T0, channels: { heartRateBpm: 100 } });
+    draft.append({ ...at(100), t: T0 + 1000, channels: { heartRateBpm: 110 } });
+
+    const first = draft.toTrack();
+    first.points[0]!.channels!["heartRateBpm"] = 999;
+
+    expect(draft.toTrack().points[0]?.channels).toEqual({ heartRateBpm: 100 });
+  });
+});
+
+describe("timestamps supplied with a point are validated", () => {
+  const bad = [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY];
+
+  it.each(bad)("append rejects t=%s", (t) => {
+    // Regression: only setTimeAt validated. A point carrying NaN counted as timed, escaped
+    // untimedIndices, and finalized into a track whose durationMs was NaN.
+    expect(() => createTrackDraft().append({ ...ORIGIN, t })).toThrow(RangeError);
+  });
+
+  it.each(bad)("insertAt rejects t=%s", (t) => {
+    const draft = drawn(2);
+    expect(() => draft.insertAt(1, { ...ORIGIN, t })).toThrow(RangeError);
+  });
+
+  it("rejects a non-finite channel value", () => {
+    expect(() =>
+      createTrackDraft().append({ ...ORIGIN, channels: { heartRateBpm: Number.NaN } }),
+    ).toThrow(/not a finite number/);
+  });
+
+  it("leaves the draft untouched when it rejects", () => {
+    const draft = drawn(2);
+    const before = draft.points;
+    expect(() => draft.append({ ...ORIGIN, t: Number.NaN })).toThrow();
+    expect(draft.points).toEqual(before);
+    expect(draft.untimedIndices).toEqual([0, 1]);
+  });
+});
+
+describe("a pause has a duration only the author knows", () => {
+  it("refuses to interpolate across an unanchored break", () => {
+    // Regression: the cumulative distance included the leg across the break, so a large
+    // relocation during a pause absorbed most of the elapsed time.
+    const draft = drawn(6);
+    draft.breakAt(3);
+    expect(() => draft.interpolateTimes({ startedAt: T0, endedAt: T0 + 500_000 })).toThrow(
+      /pause at points\[3\] has no duration to infer/,
+    );
+  });
+
+  it("names both points that need a time", () => {
+    const draft = drawn(6);
+    draft.breakAt(3);
+    expect(() => draft.interpolateTimes({ startedAt: T0, endedAt: T0 + 1000 })).toThrow(
+      /points\[2\] and points\[3\]/,
+    );
+  });
+
+  it("spends no elapsed time on the leg that was never travelled", () => {
+    // Two short segments 10 m long, separated by a 50 km relocation during a two-hour
+    // pause. Time inside each segment must come from that segment's own geometry, not be
+    // dominated by the distance nobody walked.
+    const draft = createTrackDraft();
+    draft.append(at(0));
+    draft.append(at(5));
+    draft.append(at(10));
+    draft.append(at(50_000));
+    draft.append(at(50_005));
+    draft.append(at(50_010));
+    draft.breakAt(3);
+
+    draft.setTimeAt(0, T0);
+    draft.setTimeAt(2, T0 + 10_000);
+    draft.setTimeAt(3, T0 + 7_210_000); // two hours later, elsewhere
+    draft.setTimeAt(5, T0 + 7_220_000);
+    draft.interpolateTimes({ startedAt: T0, endedAt: T0 + 7_220_000 });
+
+    const times = draft.points.map((p) => (p.t ?? 0) - T0);
+    // Midpoint of a 10 m segment lands halfway through that segment's 10 s, not somewhere
+    // dictated by the 50 km gap.
+    expect(times[1]).toBeCloseTo(5000, -2);
+    expect(times[4]).toBeCloseTo(7_215_000, -2);
+  });
+
+  it("still interpolates normally with no breaks at all", () => {
+    const draft = drawn(5);
+    expect(() => draft.interpolateTimes({ startedAt: T0, endedAt: T0 + 40_000 })).not.toThrow();
+  });
+});
+
 describe("round trip through an existing track", () => {
   function recorded(): Track {
     const points: TrackPoint[] = [];
     for (let i = 0; i < 8; i += 1) {
-      points.push({ ...at(i * 100), t: T0 + i * 10_000 } as TrackPoint);
+      points.push({
+        ...at(i * 100),
+        t: T0 + i * 10_000,
+        altitudeM: 100 + i,
+        channels: { heartRateBpm: 120 + i },
+      } as TrackPoint);
     }
     return finalizeTrack({
       points,
@@ -575,19 +723,85 @@ describe("round trip through an existing track", () => {
         { id: newId(), startIndex: 0, endIndex: 3, startedAt: T0 },
         { id: newId(), startIndex: 4, endIndex: 7, startedAt: T0 + 40_000 },
       ],
+      tags: ["seeded", "trip"],
+      meta: { note: "recorded earlier", nested: { deep: true } },
+      channels: [{ key: "heartRateBpm", label: "Heart rate", unit: "bpm", aggregate: "avg" }],
+      laps: [
+        { id: newId(), index: 0, startIndex: 0, endIndex: 3, startedAt: T0, label: "Lap 1" },
+        { id: newId(), index: 1, startIndex: 4, endIndex: 7, startedAt: T0 + 40_000 },
+      ],
     });
   }
 
-  it("seeds a draft from a track and reproduces it unchanged", () => {
+  it("reproduces an unedited track without losing its canonical metadata", () => {
+    // Regression: only points and break indices survived seeding, so an unedited round
+    // trip silently minted a new id and dropped tags, meta, laps and — worst — the channel
+    // descriptors, which took every channel statistic with them while leaving orphaned
+    // values on the points.
     const track = recorded();
-    const draft = createTrackDraft(track);
-    const rebuilt = draft.toTrack({ id: track.id });
+    const rebuilt = createTrackDraft(track).toTrack();
 
+    expect(rebuilt.id).toBe(track.id);
+    expect(rebuilt.tags).toEqual(track.tags);
+    expect(rebuilt.meta).toEqual(track.meta);
+    expect(rebuilt.channels).toEqual(track.channels);
     expect(rebuilt.points).toEqual(track.points);
     expect(rebuilt.segments.map((s) => [s.startIndex, s.endIndex])).toEqual(
       track.segments.map((s) => [s.startIndex, s.endIndex]),
     );
+    expect(rebuilt.laps?.map((l) => [l.startIndex, l.endIndex])).toEqual(
+      track.laps?.map((l) => [l.startIndex, l.endIndex]),
+    );
     expect(rebuilt.stats).toEqual(track.stats);
+  });
+
+  it("keeps the channel statistics that the descriptors make possible", () => {
+    const rebuilt = createTrackDraft(recorded()).toTrack();
+    expect(rebuilt.stats?.channels?.["heartRateBpm"]).toMatchObject({
+      count: 8,
+      min: 120,
+      max: 127,
+    });
+  });
+
+  it("lets an explicit argument override what was seeded", () => {
+    const track = recorded();
+    const id = newId();
+    const rebuilt = createTrackDraft(track).toTrack({ id, tags: ["replaced"] });
+
+    expect(rebuilt.id).toBe(id);
+    expect(rebuilt.tags).toEqual(["replaced"]);
+    expect(rebuilt.meta).toEqual(track.meta); // untouched by the override
+  });
+
+  it("shifts laps through edits and drops one that no longer describes a span", () => {
+    const track = recorded();
+    const draft = createTrackDraft(track);
+
+    draft.insertAt(0, at(-100, T0 - 10_000));
+    const afterInsert = draft.toTrack();
+    expect(afterInsert.laps?.map((l) => [l.startIndex, l.endIndex])).toEqual([
+      [1, 4],
+      [5, 8],
+    ]);
+
+    draft.removeAt(0);
+    const afterRemove = draft.toTrack();
+    expect(afterRemove.laps?.map((l) => [l.startIndex, l.endIndex])).toEqual([
+      [0, 3],
+      [4, 7],
+    ]);
+  });
+
+  it("renumbers surviving laps so index stays contiguous", () => {
+    const rebuilt = createTrackDraft(recorded()).toTrack();
+    expect(rebuilt.laps?.map((l) => l.index)).toEqual([0, 1]);
+  });
+
+  it("mints fresh segment ids, which are internal and can be merged or split by an edit", () => {
+    const track = recorded();
+    const rebuilt = createTrackDraft(track).toTrack();
+    expect(rebuilt.segments[0]?.id).not.toBe(track.segments[0]?.id);
   });
 
   it("marks the rebuilt track authored, since it passed through a draft", () => {

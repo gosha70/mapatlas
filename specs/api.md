@@ -348,14 +348,20 @@ export interface TrackDraft {
   readonly points: DraftTrackPoint[];
   readonly canUndo: boolean;
   readonly canRedo: boolean;
+  /** A timestamp supplied with the point is validated exactly as `setTimeAt` validates one. */
   append(p: DraftTrackPoint): void;
   insertAt(index: number, p: DraftTrackPoint): void;
   moveAt(index: number, to: LatLng): void;
   removeAt(index: number): void;
   setTimeAt(index: number, t: number): void;
   /** Fill timestamps left unset. Anchored points (those with an explicit `t`) are preserved
-   *  and the gaps between them are filled proportionally to distance; with no interior
-   *  anchors, `speedMps` (or `startedAt`→`endedAt`) drives a constant-rate fill. */
+   *  and the gaps between them are filled proportionally to distance travelled; with no
+   *  interior anchors, `speedMps` (or `startedAt`→`endedAt`) drives a constant-rate fill.
+   *
+   *  **Requires both points either side of every break to be anchored.** A pause has a
+   *  duration only the author knows, and the leg across it was never travelled — leaving it
+   *  in the distance would let a large relocation during a lunch break absorb the whole
+   *  afternoon. Rather than invent a number, this refuses and names the two points. */
   interpolateTimes(o: { startedAt: number; endedAt?: number; speedMps?: number }): void;
   /** Split the draft so `index` **begins** a new segment — the authored equivalent of a
    *  pause. The break vertex belongs to the later segment and is never duplicated:
@@ -453,11 +459,18 @@ unavailable undo or redo. Listeners and `points` receive defensive copies, neste
 included.
 
 **Contract — `toTrack()`.** A projection, not an edit: it adds no undo entry, clears no redo,
-fires no listener, and leaves the draft untouched — calling it twice yields equivalent tracks
-(freshly minted ids aside). It produces a `Track` indistinguishable in shape from a recorded one
-except for `origin`, and round-trips through `createTrackDraft(track)` without loss. Editing an
-existing track never mutates the input. A draft may hold untimed points for as long as it likes;
-a `Track` may never — this is where that stops being allowed.
+fires no listener, and leaves the draft untouched — calling it twice yields equivalent tracks. It
+produces a `Track` indistinguishable in shape from a recorded one except for `origin`, and the
+returned points are **deep copies**: mutating the finalized track cannot reach back into the draft.
+
+A draft seeded from a track carries that track's `id`, `tags`, `meta`, `channels` descriptors and
+`laps`, so an unedited round trip through `createTrackDraft(track).toTrack()` preserves them; an
+argument to `toTrack()` overrides what was seeded. Laps are shifted by insertions and removals and
+dropped once they no longer describe a span. **Segment ids are minted fresh** — a draft's segments
+are defined by its breaks, and an edit can merge or split them, so carrying the old ids would
+attach stale identity to spans that no longer correspond to anything. Editing a seeded draft never
+mutates the source track. A draft may hold untimed points for as long as it likes; a `Track` may
+never — this is where that stops being allowed.
 
 ## 5. Persistence seam (`@mapatlas/core`; default impl in `@mapatlas/storage-idb`)
 
@@ -517,7 +530,30 @@ export declare function createMemoryMapAssetStore(): MapAssetStore;
 export declare function createFakeSensorSource(opts: {
   id: string; channels: ChannelDescriptor[]; samples?: SensorSample[];
 }): FakeSensorSource;   // adds emit() and fail(), so a test can drive timing and failure
+
+/** The executable StorageAdapter contract — framework-neutral by construction. */
+export interface StorageContractCase { name: string; run(): Promise<void>; }
+export declare function storageAdapterContract(
+  createAdapter: () => StorageAdapter | Promise<StorageAdapter>,
+): readonly StorageContractCase[];
 ```
+
+**The conformance contract.** `StorageAdapter` is deliberately third-party implementable, so the
+engine publishes the cases it holds its own adapters to. Each case is a name and an async function
+that throws an ordinary `Error` on failure — nothing here imports a test runner, and adopting the
+contract does not drag a project onto ours:
+
+```ts
+for (const { name, run } of storageAdapterContract(() => createMyAdapter())) {
+  it(name, run);   // or test(), or node:test, or a for-loop
+}
+```
+
+Every case takes a **fresh adapter** from the factory, so cases cannot leak state into one another
+and may run in any order or alone. The cases cover round-tripping, the copy semantics real
+persistence has and a naive in-memory store does not, the summary projection's observable shape,
+chronological ordering from `startedAt` rather than id, cascade deletion including blob orphaning,
+idempotent deletes, and `clearAll`.
 
 A **separate entry point**, deliberately not re-exported from the main barrel: useful enough to
 ship, but not part of the production-facing API and with no business in a consumer's bundle.

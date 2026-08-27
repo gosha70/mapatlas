@@ -151,7 +151,13 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   not index, and produces a non-decreasing series; `breakAt(i)` makes `i` begin a segment without
   duplicating it, and insert/remove shift boundaries predictably; `toTrack()` touches no history
   and fires no listener; output round-trips through `createTrackDraft(track)` unchanged; editing a
-  track never mutates the input.
+  track never mutates the input; timestamps supplied via `append`/`insertAt` are validated exactly
+  as `setTimeAt` validates them, so `{ t: NaN }` cannot masquerade as timed and finalize into
+  `NaN` statistics; `toTrack()` returns deep copies, so mutating the finalized track cannot reach
+  back into the draft; a seeded draft preserves the source track's `id`, `tags`, `meta`, channel
+  descriptors and laps, with laps shifted by edits and dropped when they no longer span anything;
+  `interpolateTimes` **refuses to cross an unanchored break**, since a pause has a duration only
+  the author knows and the leg across it was never travelled.
 - **T1.10 Crash recovery.** `recoverInterruptedTrack(store)` and `listInterruptedTracks(store)`.
   _AC:_ a store holding a track left in `recording` or `paused` returns it; a store with only
   finalized tracks returns `undefined`; the most recently started wins when a device crashed more
@@ -160,10 +166,18 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   there is nothing to recover; the store is not modified.
 
 ## Phase 2 — `@mapatlas/storage-idb`
-- **T2.1 Conformance suite.** A reusable `StorageAdapter` test suite (in `core` test utils)
-  runnable against any adapter, covering summaries and cascade delete. _AC:_ passes against an
-  in-memory fake; the summary case asserts a returned `TrackSummary` carries no point array and
-  that its `stats`/`bbox`/`pointCount` match the stored track.
+- **T2.1 Conformance suite.** `storageAdapterContract(createAdapter)` exported from
+  **`@mapatlas/core/testing`**, beside the memory adapter. Public because `StorageAdapter` is
+  meant to be implemented by third parties, and **framework-neutral by construction**: each case
+  is `{ name, run }` where `run` throws an ordinary `Error`, so a consumer maps the cases into
+  Vitest, Jest or `node:test` without inheriting ours. Every case takes a fresh adapter from the
+  factory. _AC:_ the memory adapter passes every case; a summary case asserts the projection
+  carries no point array and that counts and bbox match the stored track; an ordering case proves
+  chronology comes from `startedAt` and not the id; cascade cases prove a track's events and
+  orphaned blobs go with it while a still-referenced blob survives; copy-semantics cases catch an
+  adapter that aliases the caller's object, which passes naive testing and breaks against
+  serialising persistence — proven by running the contract against a deliberately aliasing
+  adapter and asserting it fails.
 - **T2.2 IndexedDB adapter.** Implement `StorageAdapter` over `idb`, with a summary index so
   `listTrackSummaries()` does not read point blobs, keyed for chronological listing **on
   `startedAt`, not on the id**. _AC:_ passes T2.1 suite (use a fake-indexeddb in tests);

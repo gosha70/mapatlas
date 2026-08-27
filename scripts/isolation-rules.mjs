@@ -7,7 +7,14 @@
  * nothing consumer-specific. Each package below declares what it may NOT import.
  */
 
-/** @typedef {{ forbidden: string[], forbidDomGlobals?: boolean, note: string }} PackageRule */
+/**
+ * @typedef {{
+ *   forbidden: string[],
+ *   forbidDomGlobals?: boolean,
+ *   allowDomainTokens?: string[],
+ *   note: string,
+ * }} PackageRule
+ */
 
 /** @type {Record<string, PackageRule>} */
 export const PACKAGE_RULES = {
@@ -22,10 +29,17 @@ export const PACKAGE_RULES = {
   },
   "packages/storage-idb": {
     forbidden: ["react", "react-dom", "maplibre-gl"],
+    // "database" is domain vocabulary in the engine and plain vocabulary here: this package
+    // *is* a database adapter, and `databaseName` and `deleteDatabase` are its own API and
+    // the Web platform's. The exemption is deliberately per-package and per-token, so `core`
+    // still cannot say it.
+    allowDomainTokens: ["database"],
     note: "browser implementation: DOM is allowed, React and the renderer are not",
   },
   "packages/offline-pmtiles": {
     forbidden: ["react", "react-dom", "maplibre-gl"],
+    // Same reasoning as storage-idb: this package persists map archives locally.
+    allowDomainTokens: ["database"],
     note: "browser implementation: DOM is allowed, React and the renderer are not",
   },
   "packages/maplibre": {
@@ -167,7 +181,9 @@ export function checkFile(packageKey, filePath, source) {
   }
 
   const words = splitIdentifierWords(source);
+  const allowed = new Set(rule.allowDomainTokens ?? []);
   for (const token of DOMAIN_TOKENS) {
+    if (allowed.has(token)) continue;
     const used = new RegExp(`\\b${token}\\b`, "i");
     if (used.test(words)) {
       violations.push({

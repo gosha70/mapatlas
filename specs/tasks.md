@@ -188,16 +188,25 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   adapter that aliases the caller's object, which passes naive testing and breaks against
   serialising persistence — proven by running the contract against a deliberately aliasing
   adapter and asserting it fails.
-- **T2.2 IndexedDB adapter.** Implement `StorageAdapter` over `idb`, with a summary index so
-  `listTrackSummaries()` does not read point blobs, keyed for chronological listing **on
-  `startedAt`, not on the id**. _AC:_ passes T2.1 suite (use a fake-indexeddb in tests);
-  `deleteTrack` cascades to its events and orphaned blobs; `clearAll()` removes
-  tracks+events+blobs; storing an authored track whose `startedAt` predates every recorded
-  track places it **first** in a chronological listing despite having the newest id — id order
-  is insertion order, and the two must not be conflated.
+- **T2.2 IndexedDB adapter.** Implement `StorageAdapter` over `idb`. A **separate summaries
+  store** carrying its own `startedAt` index — IndexedDB has no projection, so listing from the
+  tracks store would deserialize every point of every trip to draw a list that shows none of
+  them. _AC:_ passes every case of the T2.1 contract (fake-indexeddb in tests, a uniquely named
+  store per case, deleted afterwards); a track and its summary are written in **one transaction**,
+  so neither is observable without the other; an overwrite that changes `startedAt` **reindexes**,
+  leaving no stale entry and no duplicate; listing is a single ordered index traversal, proven by
+  **instrumenting `IDBObjectStore` and `IDBIndex` reads** and asserting the tracks store is never
+  opened — with a control case proving the instrumentation records anything at all, and a
+  mutation check confirming a scan-and-sort implementation fails it; `eventCount` stays current as
+  events are added and removed; `deleteTrack` cascades to its events and orphaned blobs while
+  keeping a still-referenced one; `clearAll()` empties user data and leaves map assets untouched.
 - **T2.3 Map asset store.** `createIdbMapAssetStore()` implementing `MapAssetStore` in a
-  **separate IndexedDB database** from the trip store. _AC:_ `StorageAdapter.clearAll()` leaves
-  downloaded map assets intact; `MapAssetStore.clear()` leaves tracks and events intact.
+  **separately named store**, not merely a separate object store: one name would put both behind
+  a single lifecycle, one `deleteDatabase` or accidental `clear()` from taking the user's trips
+  with the basemap. _AC:_ `StorageAdapter.clearAll()` leaves downloaded assets intact and
+  `MapAssetStore.clear()` leaves tracks, events and blobs intact, each verified independently;
+  `deleteTrack` does not reach into assets; the two keyspaces do not collide; and the asset store
+  survives the user-data store being deleted outright.
 
 ## Phase 3 — `@mapatlas/recorder-web`
 - **T3.1 `createWebTrackRecorder`.** `watchPosition` + sampling (T1.2) + Wake Lock + error map.

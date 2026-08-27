@@ -22,5 +22,8 @@
   "dependencies": {
     "@mapatlas/core": "0.0.0",
     "idb": "8.0.3"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "6.2.5"
   }
 }

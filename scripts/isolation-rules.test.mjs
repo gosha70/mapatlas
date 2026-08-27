@@ -96,6 +96,24 @@ describe("checkFile — core", () => {
   });
 });
 
+describe("domain-token exemptions are per package and per token", () => {
+  it("lets a persistence package say 'database', because it is one", () => {
+    expect(messages("packages/storage-idb", `const databaseName = "mapatlas";`)).toEqual([]);
+    expect(messages("packages/offline-pmtiles", `indexedDB.deleteDatabase(name);`)).toEqual([]);
+  });
+
+  it("does not extend that exemption to core or the renderer", () => {
+    expect(messages("packages/core", `const databaseName = "mapatlas";`)).toHaveLength(1);
+    expect(messages("packages/maplibre", `const databaseName = "x";`)).toHaveLength(1);
+  });
+
+  it("exempts only the named token, not the whole list", () => {
+    // storage-idb may talk about databases; it still may not talk about species.
+    expect(messages("packages/storage-idb", `const speciesId = 1;`)).toHaveLength(1);
+    expect(messages("packages/storage-idb", `// tuned for fish`)).toHaveLength(1);
+  });
+});
+
 describe("checkFile — per-package rules differ", () => {
   it("lets recorder-web use the DOM but not React", () => {
     expect(messages("packages/recorder-web", `navigator.geolocation.watchPosition();`)).toEqual([]);

@@ -119,6 +119,8 @@ describe("public surface", () => {
         "assertValidTrackGeometry",
         "TrackLapRangeError",
         "computeLapStats",
+        "compareTrackSummaries",
+        "summariseTrack",
         "geodesicDistanceMeters",
         "DEFAULT_ELEVATION_HYSTERESIS_M",
         "DEFAULT_FINALIZE_POLICY",

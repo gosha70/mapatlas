@@ -4,8 +4,8 @@ import type { MapEvent } from "../event.js";
 import type { Id } from "../ids.js";
 import { newId } from "../ids.js";
 import type { MapAssetStore, StorageAdapter } from "../storage.js";
-import type { BBox, LatLng } from "../geo.js";
-import type { Track, TrackSummary } from "../track.js";
+import { compareTrackSummaries, summariseTrack } from "../summary.js";
+import type { Track } from "../track.js";
 
 /**
  * A complete, in-memory {@link StorageAdapter} — shipped, not test-only.
@@ -35,57 +35,6 @@ import type { Track, TrackSummary } from "../track.js";
  */
 function copy<T>(value: T): T {
   return structuredClone(value);
-}
-
-function boundsOf(track: Track): { bbox?: BBox; start?: LatLng; finish?: LatLng } {
-  const first = track.points[0];
-  const last = track.points[track.points.length - 1];
-  if (first === undefined || last === undefined) return {};
-
-  let west = first.lng;
-  let east = first.lng;
-  let south = first.lat;
-  let north = first.lat;
-
-  for (const point of track.points) {
-    west = Math.min(west, point.lng);
-    east = Math.max(east, point.lng);
-    south = Math.min(south, point.lat);
-    north = Math.max(north, point.lat);
-  }
-
-  return {
-    bbox: [west, south, east, north],
-    start: { lat: first.lat, lng: first.lng },
-    finish: { lat: last.lat, lng: last.lng },
-  };
-}
-
-/**
- * Derive the list projection from a stored track.
- *
- * Computed on demand here, which is semantically correct and enough for an in-memory store.
- * The point of the projection is the externally observable shape — a summary with no point
- * array — not the storage-layer optimisation; `@mapatlas/storage-idb` is where avoiding a
- * read of the point blob actually matters, and where that is proven.
- */
-function summarise(track: Track, eventCount: number): TrackSummary {
-  const channelKeys = track.channels?.map((c) => c.key);
-
-  return {
-    id: track.id,
-    startedAt: track.startedAt,
-    ...(track.endedAt === undefined ? {} : { endedAt: track.endedAt }),
-    status: track.status,
-    origin: track.origin,
-    ...(track.stats === undefined ? {} : { stats: copy(track.stats) }),
-    pointCount: track.points.length,
-    eventCount,
-    ...boundsOf(track),
-    ...(channelKeys === undefined || channelKeys.length === 0 ? {} : { channelKeys }),
-    ...(track.tags === undefined ? {} : { tags: [...track.tags] }),
-    ...(track.meta === undefined ? {} : { meta: copy(track.meta) }),
-  };
 }
 
 export interface MemoryStorageAdapter extends StorageAdapter {
@@ -121,9 +70,9 @@ export function createMemoryStorageAdapter(): MemoryStorageAdapter {
       }
       return Promise.resolve(
         [...tracks.values()]
-          .map((track) => summarise(track, counts.get(track.id) ?? 0))
+          .map((track) => summariseTrack(track, counts.get(track.id) ?? 0))
           // Chronological, from startedAt — never id order, which is mint order.
-          .sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id)),
+          .sort(compareTrackSummaries),
       );
     },
 

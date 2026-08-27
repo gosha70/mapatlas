@@ -38,6 +38,7 @@ export type {
 } from "./portability.js";
 export { TrackImportError, geoJSONToTrack, trackToGeoJSON } from "./portability.js";
 export type { FeatureCollection, MultiLineString, Point, Position } from "./geojson.js";
+export { compareTrackSummaries, summariseTrack } from "./summary.js";
 export { listInterruptedTracks, recoverInterruptedTrack } from "./recovery.js";
 export type { InterpolateTimesOptions, TrackDraft } from "./draft.js";
 export { TrackDraftIncompleteError, createTrackDraft } from "./draft.js";

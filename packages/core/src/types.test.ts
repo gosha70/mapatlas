@@ -98,8 +98,22 @@ describe("domain neutrality (ADR-0001)", () => {
 
 describe("public surface", () => {
   it("exports exactly the runtime values Phase 1 has so far", () => {
+    // Deliberately exact: an accidental export is a public API change, and api.md has to
+    // be updated in the same commit as one (CLAUDE.md). Failing here is the reminder.
     expect(Object.keys(core).sort()).toEqual(
-      ["ID_LENGTH", "PACKAGE_NAME", "createIdFactory", "newId"].sort(),
+      [
+        "DEFAULT_MAX_ACCURACY_M",
+        "DEFAULT_MAX_INTERVAL_MS",
+        "DEFAULT_MIN_DISTANCE_M",
+        "DEFAULT_SAMPLING_POLICY",
+        "ID_LENGTH",
+        "PACKAGE_NAME",
+        "createIdFactory",
+        "haversineDistanceMeters",
+        "newId",
+        "resolveSamplingPolicy",
+        "sample",
+      ].sort(),
     );
   });
 

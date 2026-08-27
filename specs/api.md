@@ -168,11 +168,55 @@ export interface MapEvent {
 
 ```ts
 export interface SamplingPolicy {
-  minDistanceM: number;   // keep a fix only after moving this far (default ~10)
-  maxIntervalMs: number;  // ...or after this long (default ~15000)
-  maxAccuracyM: number;   // drop fixes worse than this (default ~50)
+  minDistanceM: number;   // keep a fix only after moving this far (default 10)
+  maxIntervalMs: number;  // ...or after this long (default 15000)
+  maxAccuracyM: number;   // drop fixes worse than this (default 50)
 }
 
+export declare const DEFAULT_SAMPLING_POLICY: Readonly<SamplingPolicy>;
+export declare function resolveSamplingPolicy(partial?: Partial<SamplingPolicy>): SamplingPolicy;
+
+export type SampleReason =
+  | "inaccurate"        // rejected: worse than maxAccuracyM
+  | "first-point"       // kept: nothing to compare against
+  | "moved"             // kept: travelled further than minDistanceM
+  | "interval-elapsed"  // kept: maxIntervalMs has elapsed
+  | "too-close";        // rejected: too near the last kept point, and too soon
+
+export interface SampleDecision {
+  keep: boolean;
+  reason: SampleReason;
+  distanceM?: number;   // from the previous kept point; absent for the first
+  elapsedMs?: number;   // since the previous kept point; absent for the first
+}
+
+/** Pure: no clock, no state, no I/O. The caller owns which point was last kept. */
+export declare function sample(
+  previous: TrackPoint | undefined,
+  candidate: TrackPoint,
+  policy?: SamplingPolicy,
+): SampleDecision;
+
+/** Spherical, closed-form. For cheap geometric decisions like sampling — never for
+ *  recorded distance, whose 0.3% bias would compound into a user-visible error (ADR-0019). */
+export declare function haversineDistanceMeters(a: LatLng, b: LatLng): number;
+
+/** Vincenty's inverse on WGS84, falling back to haversine if it fails to converge.
+ *  The only source of `stats.distanceM` and `TrackSegment.distanceM`. (ADR-0019) */
+export declare function geodesicDistanceMeters(a: LatLng, b: LatLng): number;
+```
+
+**Sampling contract.** Accuracy is checked **first and is absolute** — a fix worse than
+`maxAccuracyM` is dropped even when the interval has elapsed, because recording a known-bad
+position is worse than recording nothing. The boundary comparisons are asymmetric, and
+deliberately so: a fix is dropped when `accuracyM > maxAccuracyM` (so exactly at the limit is
+kept), admitted when it moved `> minDistanceM` (so exactly the minimum is not far enough), and
+admitted once `maxIntervalMs` has *elapsed* (so exactly on the interval counts). A fix that
+reports no `accuracyM` is not "worse than the limit" and passes — some devices never report it.
+Changing any of these means changing `architecture.md §6` first; the implementation follows those
+words and the tests pin them.
+
+```ts
 export interface TrackRecorder {
   readonly status: TrackStatus;
   start(opts?: Partial<SamplingPolicy>): Promise<void>;

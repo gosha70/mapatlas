@@ -10,6 +10,7 @@
 
 export type { JSONValue } from "./json.js";
 export type { BBox, LatLng } from "./geo.js";
+export { haversineDistanceMeters } from "./geo.js";
 export type { ChannelAggregate, ChannelDescriptor, ChannelStats } from "./channels.js";
 export type { Id, IdFactoryOptions } from "./ids.js";
 export { ID_LENGTH, createIdFactory, newId } from "./ids.js";
@@ -25,6 +26,15 @@ export type {
   TrackSummary,
 } from "./track.js";
 export type { MapEvent, MediaAnalysis, MediaRef } from "./event.js";
+export type { SampleDecision, SampleReason, SamplingPolicy } from "./sampling.js";
+export {
+  DEFAULT_MAX_ACCURACY_M,
+  DEFAULT_MAX_INTERVAL_MS,
+  DEFAULT_MIN_DISTANCE_M,
+  DEFAULT_SAMPLING_POLICY,
+  resolveSamplingPolicy,
+  sample,
+} from "./sampling.js";
 
 /** Package identity, so a consumer can report which engine build it embeds. */
 export const PACKAGE_NAME = "@mapatlas/core";

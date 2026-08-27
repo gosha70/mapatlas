@@ -248,3 +248,34 @@ editing-state uncertainty into every consumer that ever reads a finalized track.
 now stateable in one line: `points + segments` is canonical and exportable; `simplifiedSegments`
 is derived and disposable. Settled before T1.3 and T1.4, so the ambiguity never reaches storage,
 the renderer, or import/export.
+
+## ADR-0019 — Two distance functions: sampling is spherical, recorded distance is geodesic
+**Context.** T1.2 introduced a haversine helper for the sampling decision and it was about to
+become, by default, the engine's definition of distance — `computeStats` was going to import the
+same function. Measured against Vincenty's inverse on WGS84, haversine on a sphere runs ~0.26%
+short over long distances and up to ~0.56% on a meridian near the equator.
+
+Those two uses have completely different tolerances. Sampling asks "did this fix move roughly ten
+metres?", where GPS error dwarfs the ellipsoid difference and the answer flips a boolean that is
+immediately discarded. `stats.distanceM` is a durable, user-visible number that compounds: a
+systematic 0.3% bias is ~30 m over 10 km, ~126 m over a marathon, and more over an all-day trip.
+MAP-ATLAS explicitly targets workout-class consumers (PRD §4), so baking that bias into the
+canonical statistic would be a defect visible to every one of their users.
+
+**Decision.** Two functions with names that state their precision, so neither can silently become
+the other:
+
+- `haversineDistanceMeters(a, b)` — spherical, closed-form, no iteration. Used by `sample()` and
+  any other cheap geometric decision.
+- `geodesicDistanceMeters(a, b)` — Vincenty's inverse on WGS84, falling back to haversine if it
+  fails to converge. The **only** source of `stats.distanceM` and `TrackSegment.distanceM`.
+
+Vincenty rather than Karney: Karney is more robust mathematically, but implementing it correctly
+is far more machinery than this needs. Vincenty's weakness is the near-antipodal case, which
+cannot arise between adjacent points of a GPS track, and the haversine fallback closes the
+total-function contract regardless.
+
+**Consequences.** One extra function and an iteration per leg, against a distance total a
+consumer can defend. The generic name `distanceMeters` is deliberately not used by either, so a
+future reader cannot pick "the distance function" by accident. If a consumer ever needs a
+different geodesic model, it replaces one function rather than auditing every call site.

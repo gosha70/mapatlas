@@ -58,7 +58,19 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   points retain their `channels` and `altitudeM`; a two-segment fixture yields
   `simplifiedSegments.length === segments.length` and **no** simplified member spans the pause —
   the first member ends at segment 1's last point and the second begins at segment 2's first.
-- **T1.4 Stats + finalize.** `computeStats` (distance haversine, elapsed vs moving time, avg/max
+- **T1.4a Geodesic distance.** `geodesicDistanceMeters` — Vincenty's inverse on WGS84, falling
+  back to `haversineDistanceMeters` when it fails to converge (ADR-0019). _AC:_ agrees with
+  published Vincenty values to <1 mm on a set of reference pairs including a near-equatorial leg,
+  a high-latitude leg, and an antimeridian crossing; the fallback is exercised by a
+  forced-non-convergence case and returns a finite number; identical points return exactly 0.
+- **T1.4b Temporal invariants.** `finalizeTrack` validates that `t` is non-decreasing within each
+  segment and throws `TrackTemporalOrderError` naming the offending indices. Sampling deliberately
+  does not invent sequencing policy (T1.2), so finalization is where a track with decreasing
+  timestamps — and therefore nonsensical duration and speed — is rejected rather than silently
+  producing bad statistics. _AC:_ a monotonic fixture finalizes; a fixture with one backwards
+  point throws and names its index; the error does not fire across a segment boundary, where a
+  gap is expected.
+- **T1.4 Stats + finalize.** `computeStats` (distance via `geodesicDistanceMeters`, elapsed vs moving time, avg/max
   speed, elevation gain/loss with hysteresis, per-channel roll-up honoring `aggregate`) and
   `finalizeTrack` (segments + `simplifiedSegments` + `stats`). _AC:_ distance and elevation gain within
   tolerance of a known fixture; a fixture with a pause reports `movingTimeMs < durationMs`;

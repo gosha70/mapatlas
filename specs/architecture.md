@@ -165,6 +165,12 @@ The engine is usable end-to-end with zero network after a region is downloaded.
 - **Segments & laps**: `pause()` closes a segment and `resume()` opens the next, so a paused
   span is a gap in the geometry; `markLap()` records a split. Both are index ranges into
   `points` — one geometry, two views over it.
+- **Distance has two implementations on purpose** (ADR-0019). `haversineDistanceMeters` is
+  spherical and answers cheap geometric questions — "did this fix move ten metres?" — where GPS
+  error dwarfs the ~0.3% ellipsoid difference. `geodesicDistanceMeters` (Vincenty on WGS84, with a
+  haversine fallback) is the **only** source of `stats.distanceM`, because that number is durable,
+  user-visible, and compounds: 0.3% is ~126 m over a marathon. The names carry the precision so
+  neither can quietly become the other.
 - **Stats**: `computeStats` is the single implementation of distance, elapsed vs moving time,
   speed, elevation gain/loss (hysteresis-filtered so GPS altitude noise does not inflate it),
   and per-channel roll-ups. Recorders, drafts, and import all call it, so a hand-drawn trip and

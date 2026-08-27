@@ -17,23 +17,96 @@ export type JSONValue =
 
 export interface LatLng { lat: number; lng: number; }
 
+/** A named numeric telemetry stream carried per track point. Keys are consumer-defined
+ *  ("heartRateBpm", "cadenceRpm", "depthM", "waterTempC"); the engine never interprets them. */
+export interface ChannelDescriptor {
+  key: string;                 // matches a key in TrackPoint.channels
+  label: string;               // rendered verbatim; the consumer owns the wording
+  unit: string;                // rendered verbatim ("bpm", "rpm", "m", "°C")
+  min?: number; max?: number;  // display bounds only — never used to reject samples
+  aggregate?: "avg" | "sum" | "min" | "max" | "last";   // roll-up used by computeStats (default "avg")
+  precision?: number;          // decimal places for display
+}
+
 export interface TrackPoint extends LatLng {
   t: number;              // epoch ms
   accuracyM?: number;
+  altitudeM?: number;             // WGS84 ellipsoidal metres, when the fix provides it
+  altitudeAccuracyM?: number;
   speedMps?: number;
   headingDeg?: number;
+  channels?: Record<string, number>;   // sensor values merged at this point (see §3)
 }
 
 export type TrackStatus = "recording" | "paused" | "finalized";
+
+/** A contiguous span of *active* recording. The gap between consecutive segments is a
+ *  pause: renderers draw one polyline per segment and never bridge the gap. */
+export interface TrackSegment {
+  id: Id;
+  startIndex: number;     // inclusive index into Track.points
+  endIndex: number;       // inclusive
+  startedAt: number;
+  endedAt?: number;
+  distanceM?: number;
+}
+
+/** A user- or consumer-marked split ("Lap 3", "Drift 2"). Laps subdivide active recording
+ *  and may span segments. `label` is consumer text; the engine never generates domain names. */
+export interface TrackLap {
+  id: Id;
+  index: number;          // 0-based order
+  startIndex: number; endIndex: number;   // inclusive indices into Track.points
+  startedAt: number; endedAt?: number;
+  label?: string;
+  stats?: TrackStats;
+}
+
+export interface ChannelStats { min: number; max: number; avg: number; sum: number; last?: number; count: number; }
+
+export interface TrackStats {
+  distanceM: number;
+  durationMs: number;         // endedAt - startedAt (elapsed, including pauses)
+  movingTimeMs: number;       // sum of segment durations (excludes pauses)
+  avgSpeedMps?: number;       // distanceM / movingTimeMs
+  maxSpeedMps?: number;
+  elevationGainM?: number;    // sum of positive altitude deltas, hysteresis-filtered
+  elevationLossM?: number;
+  minAltitudeM?: number; maxAltitudeM?: number;
+  channels?: Record<string, ChannelStats>;   // one entry per ChannelDescriptor with data
+}
+
+export type TrackOrigin = "recorded" | "authored" | "imported";
 
 export interface Track {
   id: Id;
   startedAt: number;
   endedAt?: number;
   status: TrackStatus;
-  points: TrackPoint[];        // raw kept points
+  origin: TrackOrigin;         // "authored" ⇒ drawn by hand (§4), not recorded from GPS
+  points: TrackPoint[];        // raw kept points — the single source of truth
   simplified?: TrackPoint[];   // Douglas–Peucker output for render/export
-  distanceM?: number;          // derived on finalize
+  segments: TrackSegment[];    // active spans; a recording with no pause has exactly one
+  laps?: TrackLap[];
+  channels?: ChannelDescriptor[];   // descriptors for the keys present in points[].channels
+  stats?: TrackStats;               // derived on finalize
+  tags?: string[];
+  meta?: Record<string, JSONValue>;
+}
+
+/** The list projection. `listTrackSummaries()` must not hydrate point arrays — a consumer
+ *  showing a trip list of hundreds of tracks pays only for what it displays. */
+export interface TrackSummary {
+  id: Id;
+  startedAt: number; endedAt?: number;
+  status: TrackStatus;
+  origin: TrackOrigin;
+  stats?: TrackStats;
+  pointCount: number;
+  eventCount?: number;
+  bbox?: [west: number, south: number, east: number, north: number];
+  start?: LatLng; finish?: LatLng;
+  channelKeys?: string[];
   tags?: string[];
   meta?: Record<string, JSONValue>;
 }
@@ -63,12 +136,12 @@ export interface MapEvent {
   comment?: string;
   media: MediaRef[];
   tags: string[];
-  category?: string;
+  category?: string;                    // the presentation seam (§8) keys off this
   fields?: Record<string, JSONValue>;   // consumer-defined domain data
 }
 ```
 
-## 2. Track recording (`@mapatlas/core`)
+## 2. Track recording (`@mapatlas/core` interface · `@mapatlas/recorder-web` implementation)
 
 ```ts
 export interface SamplingPolicy {
@@ -80,35 +153,146 @@ export interface SamplingPolicy {
 export interface TrackRecorder {
   readonly status: TrackStatus;
   start(opts?: Partial<SamplingPolicy>): Promise<void>;
-  pause(): void;
-  resume(): void;
-  stop(): Promise<Track>;                 // finalizes: simplify + distance
-  /** Subscribe to kept points (post-sampling). Returns an unsubscribe fn. */
+  pause(): void;                          // closes the current segment
+  resume(): void;                         // opens a new segment
+  markLap(label?: string): void;          // splits the current lap at the latest point
+  stop(): Promise<Track>;                 // finalizes: segments + simplify + stats
+  /** Subscribe to kept points (post-sampling, with merged sensor channels). */
   onPoint(cb: (p: TrackPoint) => void): () => void;
   onError(cb: (e: TrackRecorderError) => void): () => void;
 }
 
 export type TrackRecorderErrorKind =
-  | "permission-denied" | "position-unavailable" | "timeout" | "unsupported";
-export interface TrackRecorderError { kind: TrackRecorderErrorKind; message: string; }
+  | "permission-denied" | "position-unavailable" | "timeout" | "unsupported" | "sensor";
+export interface TrackRecorderError { kind: TrackRecorderErrorKind; message: string; sourceId?: string; }
 
-/** Web (foreground) recorder: watchPosition + Screen Wake Lock. Ships in v1. */
-export declare function createWebTrackRecorder(store?: StorageAdapter): TrackRecorder;
+export interface TrackRecorderOptions {
+  store?: StorageAdapter;
+  sampling?: Partial<SamplingPolicy>;
+  sensors?: SensorSource[];                 // §3 — merged into each kept point
+  sensorMerge?: Partial<SensorMergePolicy>;
+  /** Persist the in-progress track this often so a crash/tab-kill loses at most one interval.
+   *  Requires `store`. Default ~10000; 0 disables. */
+  autosaveMs?: number;
+}
+
+/** Web (foreground) recorder: watchPosition + Screen Wake Lock. Ships in v1
+ *  as `@mapatlas/recorder-web` — it touches the DOM, so it is not part of `core`. */
+export declare function createWebTrackRecorder(o?: TrackRecorderOptions): TrackRecorder;
+
+/** Returns a track left in `recording`/`paused` state by a previous session, if any,
+ *  so the consumer can offer "resume" or "discard". Lives in `@mapatlas/core`. */
+export declare function recoverInterruptedTrack(store: StorageAdapter): Promise<Track | undefined>;
+
 /** Native background recorders (Capacitor/Cordova) are out-of-tree adapters
  *  that also implement TrackRecorder and are injected by the consumer. */
 ```
 
-**Contract:** a recorder never emits a point that fails the accuracy filter; `stop()`
-returns a finalized `Track` with `simplified` and `distanceM` populated; the web recorder
-requests a Wake Lock on `start` and releases it on `stop`/`pause`.
+**Contract:** a recorder never emits a point that fails the accuracy filter; `pause()`/`resume()`
+open and close `segments` so a paused span is a real gap, never a straight line; `stop()` returns a
+finalized `Track` with `segments`, `simplified`, and `stats` populated; the web recorder requests a
+Wake Lock on `start` and releases it on `stop`/`pause`. With `autosaveMs` and a `store`, an
+interrupted recording is recoverable via `recoverInterruptedTrack`.
 
-## 3. Persistence seam (`@mapatlas/core`; default impl in `@mapatlas/storage-idb`)
+## 3. Sensor channels (`@mapatlas/core`)
+
+The seam for non-GPS telemetry — heart rate, cadence, power, temperature, water depth. The
+engine ships no device driver; it ships the interface, a polling adapter, and the merge.
+
+```ts
+export interface SensorSample { t: number; values: Record<string, number>; }
+
+export interface SensorSourceError { kind: "unsupported" | "permission-denied" | "disconnected" | "read-failed"; message: string; }
+
+export interface SensorSource {
+  readonly id: string;                     // e.g. "ble-hr", "depth-sounder"
+  readonly channels: ChannelDescriptor[];  // what this source produces
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  onSample(cb: (s: SensorSample) => void): () => void;
+  onError(cb: (e: SensorSourceError) => void): () => void;
+}
+
+export interface SensorMergePolicy {
+  /** A sample older than this is not merged into a point (default ~10000). */
+  maxAgeMs: number;
+  /** How to combine multiple samples that arrived since the previous kept point. */
+  reduce: "last" | "avg" | "max" | "min";
+}
+
+/** Sample a consumer-supplied read function on a fixed interval — the neutral primitive for
+ *  "take the heart rate every N seconds". The consumer's `read` owns the device (Web
+ *  Bluetooth, a native bridge, HealthKit); the engine owns only the cadence and the merge. */
+export declare function createPollingSensorSource(opts: {
+  id: string;
+  channels: ChannelDescriptor[];
+  intervalMs: number;
+  read(): Promise<Record<string, number> | undefined>;
+}): SensorSource;
+
+/** Test double, shipped like `noopAnalyzer`, so the channel path is testable without hardware. */
+export declare function createFakeSensorSource(opts: {
+  id: string; channels: ChannelDescriptor[]; samples: SensorSample[];
+}): SensorSource;
+```
+
+**Contract:** the recorder merges the reduced sample values into `TrackPoint.channels` of each
+**kept** point and unions the sources' `channels` into `Track.channels`; a sensor failure raises
+`onError` and never aborts the recording; `simplify()` preserves the channel values of the points
+it keeps, and `computeStats` rolls each channel up per its `aggregate`. The engine assigns no
+meaning to a channel key — a consumer that stores `heartRateBpm` and one that stores `depthM` use
+the same code path.
+
+## 4. Manual track authoring (`@mapatlas/core`)
+
+A `Track` may be **drawn** rather than recorded — for reconstructing a trip after the fact.
+Pure, framework-free, undoable; the renderer's draw mode (§8) is the interaction on top.
+
+```ts
+export interface TrackDraft {
+  readonly points: TrackPoint[];
+  readonly canUndo: boolean;
+  readonly canRedo: boolean;
+  append(p: LatLng & Partial<TrackPoint>): void;
+  insertAt(index: number, p: LatLng & Partial<TrackPoint>): void;
+  moveAt(index: number, to: LatLng): void;
+  removeAt(index: number): void;
+  setTimeAt(index: number, t: number): void;
+  /** Fill timestamps left unset. Anchored points (those with an explicit `t`) are preserved
+   *  and the gaps between them are filled proportionally to distance; with no interior
+   *  anchors, `speedMps` (or `startedAt`→`endedAt`) drives a constant-rate fill. */
+  interpolateTimes(o: { startedAt: number; endedAt?: number; speedMps?: number }): void;
+  /** Split the draft at a vertex so the authored track carries the same pause semantics
+   *  as a recorded one. */
+  breakAt(index: number): void;
+  undo(): void;
+  redo(): void;
+  onChange(cb: (points: TrackPoint[]) => void): () => void;
+  /** Finalizes exactly like `stop()`: segments + simplify + stats, `origin: "authored"`. */
+  toTrack(meta?: { id?: Id; tags?: string[]; meta?: Record<string, JSONValue> }): Track;
+}
+
+/** New draft, or an editable draft seeded from an existing track (recorded or authored). */
+export declare function createTrackDraft(from?: Track): TrackDraft;
+
+/** The shared finalize used by recorders, drafts, and import. */
+export declare function finalizeTrack(t: Pick<Track, "points" | "segments"> & Partial<Track>): Track;
+export declare function computeStats(t: Pick<Track, "points" | "segments" | "channels">): TrackStats;
+export declare function simplify(points: TrackPoint[], toleranceM: number): TrackPoint[];
+```
+
+**Contract:** every mutation is undoable; `toTrack()` produces a `Track` indistinguishable in
+shape from a recorded one except for `origin`, and it round-trips through `createTrackDraft(track)`
+without loss. Editing an existing track never mutates the input.
+
+## 5. Persistence seam (`@mapatlas/core`; default impl in `@mapatlas/storage-idb`)
 
 ```ts
 export interface StorageAdapter {
   saveTrack(t: Track): Promise<void>;
   getTrack(id: Id): Promise<Track | undefined>;
-  listTracks(): Promise<Track[]>;
+  /** List projection — must NOT hydrate `points`. */
+  listTrackSummaries(): Promise<TrackSummary[]>;
   deleteTrack(id: Id): Promise<void>;
 
   saveEvent(e: MapEvent): Promise<void>;
@@ -125,10 +309,12 @@ export interface StorageAdapter {
 }
 ```
 
-**Contract:** all methods are async and side-effect-local by default; `clearAll()` must
-remove every track, event, and blob (consumers rely on this for a clean device wipe).
+**Contract:** all methods are async and side-effect-local by default; `listTrackSummaries()`
+returns a summary per stored track without loading its points; `deleteTrack` also deletes that
+track's events and any blob referenced only by them; `clearAll()` must remove every track, event,
+and blob (consumers rely on this for a clean device wipe).
 
-## 4. AI analyzer seam (`@mapatlas/core`)
+## 6. AI analyzer seam (`@mapatlas/core`)
 
 ```ts
 export interface AnalyzeInput {
@@ -151,22 +337,41 @@ export declare const noopAnalyzer: MediaAnalyzer;
 `runsRemotely`, the React layer surfaces that before sending. The engine never inspects or
 acts on label *meaning* — it stores and displays the result; the consumer interprets it.
 
-## 5. Basemap & offline tiles
+## 7. Basemap, terrain & offline tiles
+
+A `TileSource` is any layer the renderer composites: raster, vector, or an elevation raster
+driving hillshade and 3D terrain. `styleLayers` is an opaque JSON passthrough so `core` can
+describe a vector layer without depending on a renderer's style types.
 
 ```ts
+export type TileSourceKind = "xyz" | "wms" | "pmtiles" | "vector" | "raster-dem";
+export type TileSourceRole = "base" | "overlay" | "terrain" | "hillshade";
+
 export interface TileSource {
   id: string;
-  kind: "xyz" | "wms" | "pmtiles";
-  url: string;                 // template, WMS endpoint, or .pmtiles location
+  kind: TileSourceKind;
+  url: string;                 // template, WMS endpoint, style URL, or .pmtiles location
   attribution: string;         // rendered verbatim (license compliance)
+  role?: TileSourceRole;       // default "overlay" (the first source defaults to "base")
   opacity?: number;
   minZoom?: number; maxZoom?: number;
+  tileSize?: number;
+  encoding?: "mapbox" | "terrarium";   // raster-dem only
+  /** For "vector"/"raster-dem": renderer style layers applied to this source, verbatim.
+   *  Opaque to `core`; this is how contours, hillshade, and bathymetry styling are expressed. */
+  styleLayers?: JSONValue[];
+}
+
+export interface TerrainOptions {
+  sourceId: string;            // a TileSource with kind "raster-dem"
+  exaggeration?: number;       // default 1
 }
 
 export interface OfflineRegion {
   id: Id; name: string;
   bbox: [west: number, south: number, east: number, north: number];
   minZoom: number; maxZoom: number;
+  sourceIds?: string[];        // which TileSources this region covers (default: all base+overlay)
   sizeBytes?: number; downloadedAt?: number;
 }
 
@@ -175,41 +380,132 @@ export interface OfflineRegionStore {
            onProgress?: (fraction: number) => void): Promise<OfflineRegion>;
   list(): Promise<OfflineRegion[]>;
   delete(id: Id): Promise<void>;
-  estimateSize(region: Pick<OfflineRegion, "bbox" | "minZoom" | "maxZoom">): Promise<number>;
+  estimateSize(region: Pick<OfflineRegion, "bbox" | "minZoom" | "maxZoom" | "sourceIds">): Promise<number>;
 }
+
+/** Persistence for downloaded **map assets** — deliberately NOT the trip `StorageAdapter`.
+ *  Map bytes are large, replaceable, and evictable; tracks and photos are irreplaceable.
+ *  They must not compete for the same quota or be destroyed by the same wipe (ADR-0016). */
+export interface MapAssetStore {
+  put(key: string, data: Blob): Promise<void>;
+  get(key: string): Promise<Blob | undefined>;
+  delete(key: string): Promise<void>;
+  list(): Promise<string[]>;
+  estimateBytes(): Promise<number>;
+  /** Wipes downloaded map assets only. `StorageAdapter.clearAll()` must not touch them. */
+  clear(): Promise<void>;
+}
+
+/** Default implementation, shipped as `@mapatlas/offline-pmtiles`. */
+export declare function createPMTilesRegionStore(o: { sources: TileSource[]; assets: MapAssetStore }): OfflineRegionStore;
 ```
 
-## 6. Renderer (`@mapatlas/maplibre`)
+**Contract:** `download()` **copies bytes into the `MapAssetStore`** and resolves the region from
+local storage thereafter. A `.pmtiles` URL served by range requests is *remote* PMTiles, not an
+offline region — a region that still needs the network to draw has not been downloaded. The
+implementation must also honor the tile source's terms: see the licensing rule in
+`architecture.md §8`, which forbids region download against community tile services.
+
+## 8. Renderer (`@mapatlas/maplibre`)
 
 ```ts
+/** How an event, a track, and its endpoints are drawn. This is the presentation seam: the
+ *  engine knows nothing about categories, so the consumer maps them to marks. */
+export interface MarkerStyle {
+  html?: string;               // marker content, inserted verbatim — see the contract below
+  className?: string;
+  iconUrl?: string;            // consumer-supplied asset; the engine bundles none
+  color?: string;
+  sizePx?: [w: number, h: number];
+  anchor?: "center" | "bottom";
+  ariaLabel: string;           // required: the accessible name for this mark
+}
+
+export interface TrackLineStyle { color?: string; widthPx?: number; dashed?: boolean; opacity?: number; }
+
+export interface EventPresentation {
+  /** Called per event; keyed off `category`/`tags`/`fields` by the consumer. */
+  marker(e: MapEvent): MarkerStyle;
+  startMarker?(t: Track): MarkerStyle | null;    // default: a neutral built-in start mark
+  finishMarker?(t: Track): MarkerStyle | null;   // default: a neutral built-in finish mark
+  lapMarker?(l: TrackLap, t: Track): MarkerStyle | null;
+  /** Called per segment, so pauses/laps can be styled differently. */
+  trackLine?(t: Track, segmentIndex: number): TrackLineStyle;
+}
+
+export interface DrawModeHandlers {
+  onVertexAdd(at: LatLng): void;
+  onVertexMove(index: number, to: LatLng): void;
+  onVertexClick?(index: number): void;
+}
+
 export interface MapControllerOptions {
   container: HTMLElement;
   sources: TileSource[];          // ordered base → overlays
+  style?: string | JSONValue;     // base MapLibre style (URL or document); sources composite on top
+  terrain?: TerrainOptions | null;
+  presentation?: EventPresentation;
   center?: LatLng; zoom?: number;
+  attributionPrefix?: string;     // engine-owned, neutral; never a library default (ADR-0008)
 }
+
 export interface MapController {
   setSources(sources: TileSource[]): void;
+  setTerrain(t: TerrainOptions | null): void;
+  setPresentation(p: EventPresentation): void;
+  /** Draws one polyline per `track.segments` — never a line across a pause — plus the
+   *  start/finish/lap marks from the presentation. */
   renderTrack(track: Track | null): void;
   renderEvents(events: MapEvent[]): void;
+  /** The in-progress authored line (§4), drawn with draggable vertices while in draw mode. */
+  renderDraft(points: TrackPoint[] | null): void;
   showLivePosition(p: TrackPoint | null): void;
   fitTrack(track: Track): void;
+  fitBounds(bbox: [number, number, number, number], paddingPx?: number): void;
   recenter(to: LatLng, zoom?: number): void;
   onMapTap(cb: (at: LatLng) => void): () => void;
   onEventClick(cb: (id: Id) => void): () => void;
+  /** Enter vertex-editing interaction; the returned fn exits it. */
+  enterDrawMode(h: DrawModeHandlers): () => void;
   destroy(): void;
 }
 export declare function createMapController(o: MapControllerOptions): MapController;
 ```
 
-## 7. React bindings (`@mapatlas/react`)
+**Contract:** `MarkerStyle.html` is inserted into the DOM verbatim — it is **consumer-authored
+markup and must never be built from untrusted input** (see `SECURITY.md`). Every mark carries an
+`ariaLabel`; the engine supplies none, because only the consumer knows what a mark means. With no
+`presentation`, the renderer draws neutral built-in marks and no consumer branding.
+
+## 9. React bindings (`@mapatlas/react`)
 
 ```ts
 export function useTrackRecorder(opts?: {
   recorder?: TrackRecorder; store?: StorageAdapter; sampling?: Partial<SamplingPolicy>;
+  sensors?: SensorSource[];
 }): {
   status: TrackStatus; livePoint?: TrackPoint; track?: Track;
-  start(): Promise<void>; pause(): void; resume(): void; stop(): Promise<Track>;
+  channels: Record<string, number>;      // latest merged sensor values, for a live readout
+  start(): Promise<void>; pause(): void; resume(): void; markLap(label?: string): void;
+  stop(): Promise<Track>;
+  recovered?: Track;                     // an interrupted track found at mount
   error?: TrackRecorderError;
+};
+
+export function useTrackList(store: StorageAdapter): {
+  tracks: TrackSummary[]; loading: boolean;
+  refresh(): Promise<void>; remove(id: Id): Promise<void>;
+};
+
+export function useTrackDraft(opts?: { from?: Track; store?: StorageAdapter }): {
+  points: TrackPoint[]; canUndo: boolean; canRedo: boolean;
+  append(p: LatLng): void; insertAt(i: number, p: LatLng): void;
+  moveAt(i: number, to: LatLng): void; removeAt(i: number): void;
+  setTimeAt(i: number, t: number): void;
+  interpolateTimes(o: { startedAt: number; endedAt?: number; speedMps?: number }): void;
+  breakAt(i: number): void;
+  undo(): void; redo(): void;
+  save(): Promise<Track>;
 };
 
 export function useEventLog(store: StorageAdapter, trackId?: Id): {
@@ -225,26 +521,68 @@ export function useOfflineRegions(store: OfflineRegionStore): {
   remove(id: Id): Promise<void>;
 };
 
+/** A consumer-defined input rendered by <EventComposer> into `MapEvent.fields`.
+ *  The engine renders the label and stores the value; it assigns no meaning. */
+export interface FieldSpec {
+  key: string; label: string;
+  type: "text" | "number" | "boolean" | "select" | "date";
+  options?: { value: string; label: string }[];
+  unit?: string; required?: boolean; placeholder?: string;
+}
+
 // Components
 export function MapCanvas(props: {
-  sources: TileSource[]; track?: Track; events?: MapEvent[]; livePoint?: TrackPoint;
+  sources: TileSource[]; style?: string | JSONValue; terrain?: TerrainOptions | null;
+  presentation?: EventPresentation;
+  track?: Track; events?: MapEvent[]; livePoint?: TrackPoint;
+  draft?: TrackPoint[]; drawMode?: boolean; onDraw?: DrawModeHandlers;
   onMapTap?(at: LatLng): void; onEventClick?(id: Id): void;
 }): JSX.Element;
 
 export function EventComposer(props: {
-  at: LatLng; analyzer?: MediaAnalyzer;
+  at: LatLng;
+  store: StorageAdapter;                 // captured photos are written here as blobs
+  analyzer?: MediaAnalyzer;
+  /** Which affordance opens first — the comment field or the camera. Drives the
+   *  "one tap → note" vs "one tap → photo" consumer choice. */
+  mode?: "comment" | "photo";
+  fields?: FieldSpec[];                  // consumer-defined inputs → MapEvent.fields
+  categories?: { value: string; label: string }[];
+  occurredAt?: number;                   // defaults to now; settable when re-creating a trip
   onSave(input: Omit<MapEvent, "id" | "position">): void; onCancel(): void;
-}): JSX.Element;   // comment field + in-place photo capture; if analyzer, "Analyze photo" → suggested labels the user confirms
+}): JSX.Element;
 
-export function TripReview(props: { track: Track; events: MapEvent[] }): JSX.Element;
+export function TripReview(props: {
+  track: Track; events: MapEvent[];
+  sources: TileSource[]; style?: string | JSONValue; terrain?: TerrainOptions | null;
+  presentation?: EventPresentation;
+  /** Channel keys to chart under the map (e.g. ["heartRateBpm"]); defaults to all. */
+  channels?: string[];
+  onEventClick?(id: Id): void;
+}): JSX.Element;
 ```
 
-## 8. Portability (`@mapatlas/core`)
+## 10. Portability (`@mapatlas/core`)
 
 ```ts
-export function trackToGeoJSON(track: Track, events: MapEvent[]): GeoJSON.FeatureCollection;
-export function geoJSONToTrack(fc: GeoJSON.FeatureCollection): { track: Track; events: MapEvent[] };
+export interface MediaManifestEntry {
+  id: Id; mime: string;
+  blobKey?: string; url?: string;
+  width?: number; height?: number; bytes?: number;
+}
+
+export interface TrackExport {
+  geojson: GeoJSON.FeatureCollection;   // MultiLineString (one per segment) + Point features
+  media: MediaManifestEntry[];          // media travels by reference, never inlined
+}
+
+export function trackToGeoJSON(track: Track, events: MapEvent[]): TrackExport;
+export function geoJSONToTrack(e: TrackExport): { track: Track; events: MapEvent[] };
 ```
 
-**Contract:** export/import round-trips without losing geometry, timestamps, comments, tags,
-`fields`, or `analysis` (media travels by reference + a manifest, not inlined bytes).
+**Contract:** the track feature is a `MultiLineString` whose members are `track.segments`, with
+per-coordinate timestamps in `properties.coordTimes` and per-coordinate telemetry in
+`properties.channels` (`Record<string, (number | null)[]>`, aligned to the coordinates) plus
+`properties.channelDescriptors`, `properties.laps`, `properties.stats`, and `properties.origin`.
+Export/import round-trips without losing geometry, segmentation, timestamps, altitude, channels,
+laps, stats, comments, tags, `fields`, or `analysis`.

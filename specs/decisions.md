@@ -85,3 +85,131 @@ about a dependency's *behaviour in the product*; it is a technical/neutrality cr
 judgement about a project's authors.)
 **Consequences.** Richer graphics + bathymetry; higher GPU/battery cost than Leaflet (acceptable
 for the value); a raster renderer can still be added later as a sibling without touching `core`.
+
+## ADR-0009 — Telemetry rides on track points as named channels; devices are a seam
+**Context.** Workout consumers (Strava/Garmin-class) need heart rate, cadence, and power; marine
+and angling consumers need depth and water temperature. All of it is a numeric time series
+sampled alongside position, and none of it is GPS. `TrackPoint` had no room for it and no
+altitude, so it could not be added later without breaking the data model, storage, and export.
+**Decision.** `TrackPoint` gains `altitudeM`/`altitudeAccuracyM` and
+`channels?: Record<string, number>` — an open bag of consumer-defined numeric keys, described by
+`Track.channels: ChannelDescriptor[]` (`key`, `label`, `unit`, `aggregate`). Devices sit behind a
+`SensorSource` seam (`start/stop/onSample`); the recorder merges samples into **kept** points per
+a `SensorMergePolicy` (`maxAgeMs`, `reduce`). The engine ships `createPollingSensorSource` (the
+neutral primitive for "sample every N seconds") and a fake — **no device driver**, ever.
+**Consequences.** Telemetry is domain-neutral by construction: `heartRateBpm` and `depthM` take
+the identical code path, and the engine renders a number with a label and a unit without learning
+what it measures. `simplify` must preserve channels on kept points, `computeStats` rolls them up,
+and GeoJSON export carries per-coordinate channel arrays. A sensor failure is non-fatal — losing a
+heart-rate strap must never lose the trip.
+
+## ADR-0010 — A track is one geometry with segment and lap views over it
+**Context.** `pause()` existed but `points` was one flat array, so a paused trip rendered as a
+straight line across the gap, and laps/splits — table stakes for training and for trip logs —
+had nowhere to live. "Stats" was promised by the PRD but only `distanceM` existed, so every
+consumer would have re-derived duration, pace, and elevation gain differently.
+**Decision.** `Track.segments: TrackSegment[]` (contiguous **active** spans) and
+`Track.laps?: TrackLap[]` are **index ranges into `points`**, not copies. The gap between two
+segments *is* the pause. `TrackStats` is a defined type (distance, elapsed vs moving time, avg/max
+speed, elevation gain/loss, per-channel roll-ups) computed by one shared `computeStats`, used by
+recorders, drafts, and import alike. Export becomes a `MultiLineString`, one member per segment.
+**Consequences.** No geometry duplication and no drift between views. Renderers draw one line per
+segment and never bridge a pause. Elevation gain is hysteresis-filtered so GPS altitude noise does
+not inflate it. `distanceM` moves into `stats`.
+
+## ADR-0011 — `TileSource` describes raster, vector, and elevation sources
+**Context.** ADR-0008 chose MapLibre GL *for* vector styling — bathymetry, and by the same
+mechanism topographic contours, hillshade, and 3D terrain. But `TileSource` was still the
+raster-era shape inherited from the Leaflet design (`xyz | wms | pmtiles`, no style concept), so
+the contract could not express the capability the renderer was chosen for.
+**Decision.** `TileSource` gains `kind: "vector" | "raster-dem"`, a `role`
+(`base|overlay|terrain|hillshade`), `encoding` for DEMs, and `styleLayers?: JSONValue[]` — renderer
+style layers passed through **as opaque JSON**. `MapControllerOptions` gains a base `style`
+(document or URL) and `TerrainOptions` (`sourceId`, `exaggeration`).
+**Consequences.** Topographic and bathymetric basemaps are expressible, so ADR-0008 pays off.
+`core` still imports no renderer types — it forwards style JSON it does not interpret, which keeps
+the renderer swappable. `OfflineRegion` gains `sourceIds` so a region can cover a chosen subset.
+
+## ADR-0012 — Event presentation belongs to the consumer, not the renderer
+**Context.** The engine deliberately knows nothing about `category`, yet the renderer had to draw
+a mark for each event and offered no hook — so "show a custom sign for this kind of feature" was
+unbuildable without forking the renderer, and no start/finish marks existed at all.
+**Decision.** An `EventPresentation` seam: the consumer maps a `MapEvent` to a `MarkerStyle`, and
+optionally styles start, finish, lap marks, and each segment's line. Neutral built-in marks apply
+when it is absent. `MarkerStyle.ariaLabel` is **required** — only the consumer knows what a mark
+means, so only the consumer can name it for assistive tech.
+**Consequences.** The renderer stays domain-blind while consumers get arbitrary iconography. The
+engine bundles no icon assets. `MarkerStyle.html` is inserted verbatim, so it is consumer-trusted
+markup and must never be built from untrusted input — recorded in `SECURITY.md`.
+
+## ADR-0013 — Package layout: browser implementations live outside `core`
+**Context.** `api.md` placed `createWebTrackRecorder` in `@mapatlas/core` while the PRD required
+`core` to be Node-unit-testable with no DOM import — a direct contradiction the isolation scan
+would have caught only after Phase 3. The PMTiles `OfflineRegionStore` was required by the PRD but
+belonged to no package and had no exported factory.
+**Decision.** Seven packages. `core` keeps interfaces and pure logic; `@mapatlas/recorder-web`
+owns `createWebTrackRecorder` (DOM: geolocation, Wake Lock); `@mapatlas/offline-pmtiles` owns
+`createPMTilesRegionStore`. `recorder-web`, `storage-idb`, and `offline-pmtiles` may use browser
+APIs but must not import `react` or `maplibre-gl`; `maplibre` must not import `react`.
+**Consequences.** The isolation scan gets a per-package rule table instead of one rule. Both
+independent build harnesses arrived at this same split unprompted, which is corroboration that the
+five-package layout was under-specified rather than merely different.
+
+## ADR-0014 — Authored tracks are first-class; storage lists summaries, not tracks
+**Context.** Re-creating a past trip by hand is a core web-app flow, but `TrackRecorder` was the
+only path to a `Track` — the data model allowed a hand-built track while the product offered no
+way to make one. Separately, `listTracks()` returned every track fully hydrated with every point,
+which does not survive a trip list of any size.
+**Decision.** `TrackDraft` in `core` — a pure, undoable point-list editor with `breakAt`,
+`setTimeAt`, and `interpolateTimes` — whose `toTrack()` runs the *same* `finalizeTrack` and sets
+`origin: "authored"`. The renderer contributes only interaction (`enterDrawMode`, `renderDraft`),
+React contributes `useTrackDraft`. `listTracks()` is replaced by `listTrackSummaries():
+Promise<TrackSummary[]>`, which must not hydrate points; `getTrack(id)` hydrates on demand.
+**Consequences.** Review, stats, export, offline, and presentation work on an authored track with
+no special cases — the only difference is one enum field. Adapters need a summary index, and
+`TrackSummary` becomes part of the conformance suite. `Track.origin` also lets a consumer disclose
+provenance, which matters when a hand-drawn trip is presented next to a recorded one.
+
+## ADR-0015 — An interrupted recording is recoverable
+**Context.** `createWebTrackRecorder(store?)` accepted a store but the contract never said what it
+did with it. A multi-hour field trip held only in memory is lost to a tab kill, an OOM, or a
+phone reboot — the failure mode a field-logging engine most needs to survive.
+**Decision.** `TrackRecorderOptions.autosaveMs` persists the in-progress track (status
+`recording`/`paused`) on an interval; `recoverInterruptedTrack(store)` in `core` returns such a
+track so the consumer can offer resume-or-discard. `useTrackRecorder` surfaces it as `recovered`.
+**Consequences.** At most one autosave interval is ever lost. Storage adapters must tolerate
+repeated overwrites of a growing track. This narrows — but does not close — the gap left by
+ADR-0003: foreground-only recording still ends when the OS suspends the page, and a native
+background recorder remains the consumer's responsibility.
+
+## ADR-0016 — Map assets and trip data are separate stores
+**Context.** `createPMTilesRegionStore` took the trip `StorageAdapter`, so downloaded basemaps
+and irreplaceable user data shared one namespace. Two consequences followed that nobody wanted:
+`clearAll()` — which consumers call on sign-out for a clean device wipe — also destroyed every
+downloaded region, and gigabytes of replaceable map bytes competed for quota with tracks and
+photos that cannot be re-fetched from anywhere.
+**Decision.** A separate `MapAssetStore` interface (`put`/`get`/`delete`/`list`/`estimateBytes`/
+`clear`) owns downloaded map assets; `createPMTilesRegionStore({ sources, assets })` takes it
+instead of a `StorageAdapter`. `@mapatlas/storage-idb` ships `createIdbMapAssetStore()` backed by
+a **separate IndexedDB database**. `StorageAdapter.clearAll()` must not touch map assets, and
+`MapAssetStore.clear()` must not touch tracks or events.
+**Consequences.** Signing out no longer forces a multi-hundred-megabyte re-download. Map assets
+can be evicted first under pressure, which is the correct priority — they are re-downloadable and
+trips are not. Browsers still evict per origin, so this separates *intent and blast radius*, not
+physical quota; consumers must still drive `navigator.storage.persist()`.
+
+## ADR-0017 — Offline means local bytes, and not every source may be downloaded
+**Context.** Two failure modes sat one step apart in the plan. First, "PMTiles offline regions"
+reads as solved when a `.pmtiles` archive is merely *hosted* — but an archive read by HTTP range
+request still needs the network, so a region can look downloaded and fail in the field. Second,
+external review confirmed the OpenStreetMap Foundation's tile policy prohibits bulk downloading
+and offline prefetching from `tile.openstreetmap.org`, and directs applications needing offline
+maps to self-host or use a provider whose terms allow it.
+**Decision.** `OfflineRegionStore.download()` **copies bytes into a `MapAssetStore`** and resolves
+from local storage thereafter; remote PMTiles is not an offline region. Region download must never
+run against a community tile service — this binds the demo and the test fixtures, not just
+production. The Phase 6 acceptance test disables the network, which is the only honest proof.
+**Consequences.** A licensing constraint becomes a build-time constraint rather than a deployment
+footnote. The demo needs a self-hosted or offline-licensed source before Phase 6 can pass, which
+makes the DEM/basemap data decision a scheduling dependency, not a detail. Interactive browsing of
+a public host in development remains a courtesy question; bulk download does not.

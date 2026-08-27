@@ -41,13 +41,15 @@ Dependencies point one way: **consumers depend on MAP-ATLAS; MAP-ATLAS depends o
 consumer-specific.** No fish/plant/mushroom/product/auth/DB concept may enter any package
 here. Domain and privacy belong to the consuming app. Everything variable is behind an
 interface: `MediaAnalyzer` (AI), `StorageAdapter` (persistence), `TrackRecorder` (geolocation),
-`TileSource` (basemap). This is the property that makes the engine reusable — protect it.
+`SensorSource` (telemetry), `TileSource` (basemap), `EventPresentation` (how marks look).
+This is the property that makes the engine reusable — protect it.
 
 ## Intended stack (see architecture.md for rationale)
 
 - TypeScript (strict), monorepo workspaces.
-- `@mapatlas/core` (framework-agnostic) · `@mapatlas/maplibre` (renderer) ·
-  `@mapatlas/react` (bindings) · `@mapatlas/storage-idb` (default persistence) ·
+- `@mapatlas/core` (framework-agnostic) · `@mapatlas/recorder-web` (web GPS + sensors) ·
+  `@mapatlas/maplibre` (renderer) · `@mapatlas/react` (bindings) ·
+  `@mapatlas/storage-idb` (default persistence) · `@mapatlas/offline-pmtiles` (offline regions) ·
   `apps/demo` (a generic field-logger demo, no real domain).
 - Offline: PMTiles regions; default IndexedDB storage.
 - Tests: a fast unit runner (e.g. Vitest); seams tested with fakes, never live hardware.

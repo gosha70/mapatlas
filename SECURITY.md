@@ -21,6 +21,15 @@ to these rules:
   implicit. Document any network egress in the analyzer's contract.
 - **Storage stays local unless told otherwise.** The default `StorageAdapter` persists to
   on-device storage only. A sync/remote adapter is a consumer concern.
+- **The presentation seam is an injection boundary.** `MarkerStyle.html` (an
+  `EventPresentation`) is inserted into the DOM verbatim so consumers can draw their own marks.
+  It is **consumer-authored markup** and must never be built from user input, imported files, or
+  analyzer output. Consumers that need user-derived marker content must escape it themselves;
+  the engine escapes `ariaLabel` and text, not `html`.
+- **Sensor channels are location-adjacent data.** `TrackPoint.channels` may carry health
+  telemetry (heart rate) alongside a precise position and timestamp. It is stored and exported
+  exactly like the rest of a track: locally by default, never transmitted by the engine, and
+  subject to the consumer's own privacy transforms before anything leaves a device.
 - **No secrets in the repo**, ever — keys, tokens, tile-provider credentials belong in
   consumer configuration.
 

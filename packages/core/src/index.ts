@@ -10,7 +10,7 @@
 
 export type { JSONValue } from "./json.js";
 export type { BBox, LatLng } from "./geo.js";
-export { haversineDistanceMeters } from "./geo.js";
+export { geodesicDistanceMeters, haversineDistanceMeters } from "./geo.js";
 export type { ChannelAggregate, ChannelDescriptor, ChannelStats } from "./channels.js";
 export type { Id, IdFactoryOptions } from "./ids.js";
 export { ID_LENGTH, createIdFactory, newId } from "./ids.js";
@@ -27,6 +27,11 @@ export type {
 } from "./track.js";
 export type { MapEvent, MediaAnalysis, MediaRef } from "./event.js";
 export { simplify } from "./simplify.js";
+export {
+  TrackSegmentRangeError,
+  TrackTemporalOrderError,
+  assertValidTrackGeometry,
+} from "./validate.js";
 export type { SampleDecision, SampleReason, SamplingPolicy } from "./sampling.js";
 export {
   DEFAULT_MAX_ACCURACY_M,

@@ -279,3 +279,42 @@ total-function contract regardless.
 consumer can defend. The generic name `distanceMeters` is deliberately not used by either, so a
 future reader cannot pick "the distance function" by accident. If a consumer ever needs a
 different geodesic model, it replaces one function rather than auditing every call site.
+
+## ADR-0020 — `finalizeTrack` validates and throws; it never repairs
+**Context.** `sample()` deliberately does not invent sequencing policy, so it can report a
+negative `elapsedMs` and let the fix through on distance (T1.2). That leaves an open question:
+what happens when a track reaches finalization with a timestamp that runs backwards? Such a track
+yields nonsensical duration and speed, so something must decide — and the cheap-looking answer,
+sorting the points inside `finalizeTrack`, is wrong.
+
+`finalizeTrack` is the one canonicalization step shared by recorded, authored and imported tracks.
+Sorting there would change geometry semantics, not just repair time: `TrackSegment` and `TrackLap`
+address geometry by **index into the original point order**, and sensor samples are attached to
+specific points, so reordering to fix the clock would corrupt the route and detach telemetry. An
+out-of-order fix may also be a genuinely stale GPS observation rather than an array-order mistake,
+and only the layer that received it knows which.
+
+**Decision.** `finalizeTrack` validates and throws; it never repairs or reorders. The invariant is
+**non-decreasing**, `points[i].t >= points[i - 1].t`, so only a strict decrease throws — equal
+milliseconds are degenerate but not corrupt, two fixes can share one, and imported files often
+round to the second. `computeStats` is then responsible for not deriving an instantaneous speed
+from a pair whose `dt` is zero. The check runs **within** each segment and never across a
+boundary, where a gap is the entire point of the segmentation. Segment ranges are validated too —
+in bounds, not inverted, not overlapping — because a malformed range produces wrong geometry and
+wrong statistics just as silently. **All validation happens before any derivation**: finalization
+either returns a wholly valid track or throws having computed nothing.
+
+The layers divide explicitly:
+
+| Layer | Responsibility |
+|---|---|
+| `sample()` | Observational and pure. Reports negative `elapsedMs`; judges nothing. |
+| `recorder-web` | **Drops** a stale out-of-order fix before it is ever kept. Never reorders live observations — buffering would entangle `onPoint`, sensor merge, laps, segments and autosave. |
+| `TrackDraft` | Catches bad timing before `toTrack()`, alongside its incomplete-timestamp check. |
+| import | Preserves source ordering. Malformed order is surfaced, never silently rewritten. |
+| `finalizeTrack` | Enforces the canonical invariant. Throws `TrackTemporalOrderError(previousIndex, index, previousT, t)`. |
+
+**Consequences.** A caller that catches the error still holds exactly the input it passed in, and
+can decide to repair, discard, or show the offending indices to a user. No layer silently rewrites
+a recorded observation. The cost is that a recorder which admits a stale fix produces a track that
+cannot be finalized — which is the correct pressure, applied to the layer that can actually fix it.

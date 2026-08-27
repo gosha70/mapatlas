@@ -114,6 +114,10 @@ describe("public surface", () => {
         "resolveSamplingPolicy",
         "sample",
         "simplify",
+        "TrackSegmentRangeError",
+        "TrackTemporalOrderError",
+        "assertValidTrackGeometry",
+        "geodesicDistanceMeters",
       ].sort(),
     );
   });

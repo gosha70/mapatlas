@@ -349,6 +349,21 @@ export class TrackDraftIncompleteError extends Error {
 export declare function createTrackDraft(from?: Track): TrackDraft;
 
 /** The shared finalize used by recorders, drafts, and import. */
+/** Non-decreasing timestamps within a segment; time may stall but never run backwards. */
+export class TrackTemporalOrderError extends Error {
+  readonly previousIndex: number; readonly index: number;
+  readonly previousT: number; readonly t: number;
+}
+/** A segment range that does not describe the point array: out of bounds, inverted, overlapping. */
+export class TrackSegmentRangeError extends Error {
+  readonly segmentIndex: number; readonly segmentId: string;
+}
+/** Assert every invariant a finalized track must satisfy. Throws on the first violation,
+ *  never modifies the input. Ranges are checked before timestamps. */
+export declare function assertValidTrackGeometry(t: Pick<Track, "points" | "segments">): void;
+
+/** Validates first (ADR-0020), then derives. Either returns a wholly valid finalized track
+ *  or throws having computed nothing — no partial stats, no partial simplification. */
 export declare function finalizeTrack(t: Pick<Track, "points" | "segments"> & Partial<Track>): Track;
 export declare function computeStats(t: Pick<Track, "points" | "segments" | "channels">): TrackStats;
 /** Ramer–Douglas–Peucker over one continuous run of points.

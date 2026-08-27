@@ -42,7 +42,7 @@ testable, and it is CI-enforceable with an import scan (see §8).
 | `@mapatlas/recorder-web` | `core` | `createWebTrackRecorder`: `watchPosition` + Screen Wake Lock + sampling + sensor merge + autosave. **Separate from `core` because it touches the DOM** (ADR-0013) |
 | `@mapatlas/maplibre` | `core`, `maplibre-gl` | `MapController`: mount a MapLibre GL map, composite the ordered `TileSource` stack (raster · vector · `raster-dem`), 3D terrain + hillshade, render live position + per-segment track lines + start/finish/lap/event marks via `EventPresentation`, and the draw/edit interaction mode |
 | `@mapatlas/react` | `core`, `maplibre`, `react` | `<MapCanvas>`, `<EventComposer>`, `<TripReview>`, `useTrackRecorder`, `useTrackList`, `useTrackDraft`, `useEventLog`, `useOfflineRegions` |
-| `@mapatlas/storage-idb` | `core`, `idb` | Default `StorageAdapter` over IndexedDB (tracks, events, media blobs, summary index) |
+| `@mapatlas/storage-idb` | `core`, `idb` | Default `StorageAdapter` over IndexedDB (tracks, events, media blobs, summary index) **and** `createIdbMapAssetStore`, the default `MapAssetStore` — in a **separate database**, so the two can never wipe or starve each other (ADR-0016) |
 | `@mapatlas/offline-pmtiles` | `core`, `pmtiles` | `createPMTilesRegionStore`: download/list/delete a bbox×zoom region per source; renderer-neutral |
 | `apps/demo` | all above | A generic field-logger (no real domain) proving the loop; also the manual test bed |
 
@@ -54,7 +54,7 @@ All ids are opaque strings (ULID/UUID). Coordinates are WGS84 `{ lat, lng }`.
 
 - **`Track`** — one session: `id`, `startedAt`, `endedAt?`, `status`
   (`recording|paused|finalized`), `origin` (`recorded|authored|imported`), `points: TrackPoint[]`
-  (raw, the single source of truth) and `simplified?`, `segments: TrackSegment[]`, `laps?`,
+  (raw, the single source of truth), `segments: TrackSegment[]`, `simplifiedSegments?`, `laps?`,
   `channels?: ChannelDescriptor[]`, derived `stats?: TrackStats`, plus consumer `tags`/`meta`.
 - **`TrackSegment` / `TrackLap`** — index ranges into `points`, never copies of it. A segment is
   a contiguous **active** span; the gap between two segments *is* the pause. A lap is a split,
@@ -104,6 +104,12 @@ and never learns what they measure.
   the neutral primitive behind "take the heart rate every N seconds") and a fake for tests; it
   ships **no device driver**. A sensor failure surfaces on `onError` and never aborts a
   recording — losing a heart-rate strap must not lose the trip.
+- **`MapAssetStore`** — persistence for downloaded **map bytes**, deliberately not the
+  `StorageAdapter`. Map assets are large, replaceable, and the right thing to evict first; tracks
+  and photos are irreplaceable. Keeping them in one store meant a sign-out wipe destroyed
+  hundreds of megabytes of basemap and that the two competed for the same quota. Default:
+  `createIdbMapAssetStore` in `@mapatlas/storage-idb`, backed by its own IndexedDB database
+  (ADR-0016).
 - **`StorageAdapter`** — persistence for tracks, events, and media blobs. Default:
   IndexedDB (`@mapatlas/storage-idb`). A consumer can supply a remote/sync adapter. The
   engine treats storage as async CRUD and never assumes locality beyond the default.
@@ -144,9 +150,18 @@ The engine is usable end-to-end with zero network after a region is downloaded.
 - **Sampling** (configurable, sensible defaults): accept a fix only if it moved > `minDistanceM`
   since the last kept point OR `maxIntervalMs` elapsed, and drop fixes with
   `accuracyM > maxAccuracyM`. This avoids dense noise while anchored.
-- **Simplification**: keep raw points; also maintain a Douglas–Peucker–simplified line
-  (via an embedded `simplify` routine) for rendering and export. Simplification **preserves the
-  `channels` of the points it keeps** — a decimated line must not silently drop telemetry.
+- **Simplification is per segment**, not per track: `simplifiedSegments[n]` is the rendering
+  projection of `segments[n]`, one member each, same order. Two reasons, both fatal to the flat
+  alternative. A raw index means nothing inside a decimated array, so `TrackSegment.startIndex`
+  could no longer locate its own geometry; and running Douglas–Peucker across the concatenated
+  points would treat a pause as continuous line and smooth straight through it. Simplification
+  **preserves the `channels` and `altitudeM` of the points it keeps** — a decimated line must not
+  silently drop telemetry. The invariant to hold onto:
+
+  ```
+  points + segments      = canonical geometry (source of truth, what gets exported)
+  simplifiedSegments[n]  = rendering projection of segments[n] (derived, never exported)
+  ```
 - **Segments & laps**: `pause()` closes a segment and `resume()` opens the next, so a paused
   span is a gap in the geometry; `markLap()` records a split. Both are index ranges into
   `points` — one geometry, two views over it.
@@ -155,8 +170,9 @@ The engine is usable end-to-end with zero network after a region is downloaded.
   and per-channel roll-ups. Recorders, drafts, and import all call it, so a hand-drawn trip and
   a recorded one report numbers the same way.
 - **Geometry**: internally an array of points plus segment ranges; **export** as a GeoJSON
-  `MultiLineString` (one member per segment) + `Point` features (events), with `coordTimes` and
-  per-coordinate `channels` arrays. A consumer with PostGIS stores this as
+  `MultiLineString` (one member per segment, at **raw** fidelity — export is portability, and a
+  lossless round-trip and decimated geometry cannot both be true) + `Point` features (events),
+  with `coordTimes` and per-coordinate `channels` arrays. A consumer with PostGIS stores this as
   `geography(MultiLineString)` — but the engine has no database opinion.
 
 ## 6b. Manual authoring (drawn tracks)
@@ -164,7 +180,13 @@ The engine is usable end-to-end with zero network after a region is downloaded.
 A track that was never recorded is a first-class track. `TrackDraft` (`core`) is a pure,
 undoable point-list editor — append/insert/move/remove, `breakAt` for a pause, `setTimeAt` and
 `interpolateTimes` for timing — and `toTrack()` runs the *same* `finalizeTrack` as a recorder,
-tagging `origin: "authored"`. The renderer contributes only the interaction (`enterDrawMode`,
+tagging `origin: "authored"`.
+
+A draft holds `DraftTrackPoint[]`, whose `t` is **optional**, because authoring places vertices
+first and times them afterwards. A `TrackPoint` keeps `t` required: a recorded fix always has a
+clock reading, and weakening the finalized type to accommodate an intermediate editing state
+would push that uncertainty into every consumer. `toTrack()` is the boundary where the invariant
+is enforced, and it throws rather than inventing a timestamp (ADR-0018). The renderer contributes only the interaction (`enterDrawMode`,
 draggable vertices, `renderDraft`), and React contributes `useTrackDraft`.
 
 The consequence that matters: review, stats, export, offline, and the presentation seam all work

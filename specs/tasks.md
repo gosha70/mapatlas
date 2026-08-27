@@ -24,29 +24,41 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   (`import "react";`), which a naive `from`-only regex misses.
 - **T0.6 SPDX header check.** Fail build if a source file lacks `SPDX-License-Identifier: Apache-2.0`.
 - **T0.7 CI workflow.** `.github/workflows/ci.yml` running install → build → typecheck → lint →
-  test → `scan:isolation` → `scan:spdx` on push and PR. _AC:_ the workflow runs green, and a
-  planted isolation violation fails the job (not just the local script).
+  test → `scan:isolation` → `scan:spdx` on push and PR, plus a DCO sign-off check on PRs.
+  _AC:_ (a) the workflow runs green on GitHub, not merely locally; (b) the scanner's negative
+  cases — forbidden import, bare side-effect import, DOM global, domain token — are **automated
+  unit tests** that run inside that workflow, so a regression in the scanner fails CI; and
+  (c) one recorded end-to-end proof that a planted violation turns the job red. (a) and (b) are
+  standing guarantees; (c) is a one-time demonstration, since a repository cannot keep a broken
+  commit around to re-prove it.
 
 ## Phase 1 — `@mapatlas/core`
 - **T1.1 Types.** All of `api.md §1` + ids/util — incl. `altitudeM`, `channels`,
-  `ChannelDescriptor`, `TrackSegment`, `TrackLap`, `TrackStats`, `TrackSummary`, `origin`.
+  `ChannelDescriptor`, `TrackSegment`, `TrackLap`, `TrackStats`, `TrackSummary`, `origin`,
+  `simplifiedSegments`, and `DraftTrackPoint` (optional `t`) distinct from `TrackPoint`.
   _AC:_ exported, typechecked, no runtime dep.
 - **T1.2 Sampling.** `SamplingPolicy` + a pure `sample(prev, candidate, policy)` decision fn.
   _AC:_ unit tests for distance/interval/accuracy branches.
-- **T1.3 Simplify.** Douglas–Peucker `simplify(points, toleranceM)`. _AC:_ reduces a noisy
-  fixture 60–80% without visibly changing shape; endpoints preserved; **kept points retain their
-  `channels` and `altitudeM`**.
+- **T1.3 Simplify.** Douglas–Peucker `simplify(points, toleranceM)`, applied **per segment**.
+  _AC:_ reduces a noisy fixture 60–80% without visibly changing shape; endpoints preserved; kept
+  points retain their `channels` and `altitudeM`; a two-segment fixture yields
+  `simplifiedSegments.length === segments.length` and **no** simplified member spans the pause —
+  the first member ends at segment 1's last point and the second begins at segment 2's first.
 - **T1.4 Stats + finalize.** `computeStats` (distance haversine, elapsed vs moving time, avg/max
   speed, elevation gain/loss with hysteresis, per-channel roll-up honoring `aggregate`) and
-  `finalizeTrack` (segments + `simplified` + `stats`). _AC:_ distance and elevation gain within
+  `finalizeTrack` (segments + `simplifiedSegments` + `stats`). _AC:_ distance and elevation gain within
   tolerance of a known fixture; a fixture with a pause reports `movingTimeMs < durationMs`;
-  a flat-but-noisy altitude fixture reports ~0 gain, not accumulated noise.
+  a flat-but-noisy altitude fixture reports ~0 gain, not accumulated noise; **deleting
+  `simplifiedSegments` and re-running `finalizeTrack` reproduces it exactly** — it is a cache,
+  not state, and dropping it must not change the track.
 - **T1.5 EventLog logic.** Create/update/delete against a `StorageAdapter`. _AC:_ tested with fake.
-- **T1.6 Interfaces.** `StorageAdapter`, `MediaAnalyzer`, `TileSource`, `OfflineRegionStore`,
-  `TrackRecorder`, `SensorSource` per `api.md`; ship `noopAnalyzer`. _AC:_ typecheck;
-  `noopAnalyzer` returns `[]`.
+- **T1.6 Interfaces.** `StorageAdapter`, `MapAssetStore`, `MediaAnalyzer`, `TileSource`,
+  `OfflineRegionStore`, `TrackRecorder`, `SensorSource` per `api.md`; ship `noopAnalyzer`.
+  _AC:_ typecheck; `noopAnalyzer` returns `[]`; every seam Phase 2 and Phase 6 implement is
+  declared here — a Phase 1 that omits `MapAssetStore` leaves T2.3 with nothing to implement.
 - **T1.7 GeoJSON.** `trackToGeoJSON`/`geoJSONToTrack` returning/accepting `TrackExport`.
-  _AC:_ round-trip preserves geometry **as a `MultiLineString` per segment**, timestamps
+  _AC:_ round-trip preserves geometry **as a `MultiLineString` per segment at raw fidelity**
+  (exporting `simplifiedSegments` fails the losslessness requirement below), timestamps
   (`coordTimes`), `altitudeM`, per-coordinate `channels` + descriptors, laps, stats, origin,
   comment, tags, `fields`, `analysis` (media by reference in the manifest, never inlined).
 - **T1.8 Sensor channels.** `createPollingSensorSource`, `createFakeSensorSource`, and the
@@ -54,11 +66,14 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   land in `TrackPoint.channels`; a sample older than `maxAgeMs` is not merged; `reduce: "avg"`
   averages the samples that arrived since the previous kept point; a throwing `read()` raises
   `onError` and does not stop sampling.
-- **T1.9 Manual authoring.** `createTrackDraft` per `api.md §4` — append/insert/move/remove,
-  `breakAt`, `setTimeAt`, `interpolateTimes`, undo/redo, `toTrack`. _AC:_ undo/redo restores
-  exact prior state across every mutation; `interpolateTimes` preserves anchored timestamps and
-  produces a monotonically increasing series; `breakAt` yields two segments; `toTrack()` output
-  round-trips through `createTrackDraft(track)` unchanged; editing a track never mutates the input.
+- **T1.9 Manual authoring.** `createTrackDraft` per `api.md §4` over `DraftTrackPoint[]` —
+  append/insert/move/remove, `breakAt`, `setTimeAt`, `interpolateTimes`, undo/redo, `toTrack`.
+  _AC:_ a draft accepts a point with no `t` and reports it via `untimedIndices`; `toTrack()`
+  throws `TrackDraftIncompleteError` naming those indices rather than inventing a timestamp;
+  after `interpolateTimes` it succeeds; undo/redo restores exact prior state across every
+  mutation; `interpolateTimes` preserves anchored timestamps and produces a monotonically
+  increasing series; `breakAt` yields two segments; `toTrack()` output round-trips through
+  `createTrackDraft(track)` unchanged; editing a track never mutates the input.
 - **T1.10 Crash recovery.** `recoverInterruptedTrack(store)`. _AC:_ a store holding a track left
   in `recording` returns it; a store with only finalized tracks returns `undefined`.
 
@@ -67,13 +82,13 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   runnable against any adapter, covering summaries and cascade delete. _AC:_ passes against an
   in-memory fake; the summary case asserts a returned `TrackSummary` carries no point array and
   that its `stats`/`bbox`/`pointCount` match the stored track.
-- **T2.3 Map asset store.** `createIdbMapAssetStore()` implementing `MapAssetStore` in a
-  **separate IndexedDB database** from the trip store. _AC:_ `StorageAdapter.clearAll()` leaves
-  downloaded map assets intact; `MapAssetStore.clear()` leaves tracks and events intact.
 - **T2.2 IndexedDB adapter.** Implement `StorageAdapter` over `idb`, with a summary index so
   `listTrackSummaries()` does not read point blobs. _AC:_ passes T2.1 suite (use a
   fake-indexeddb in tests); `deleteTrack` cascades to its events and orphaned blobs;
   `clearAll()` removes tracks+events+blobs.
+- **T2.3 Map asset store.** `createIdbMapAssetStore()` implementing `MapAssetStore` in a
+  **separate IndexedDB database** from the trip store. _AC:_ `StorageAdapter.clearAll()` leaves
+  downloaded map assets intact; `MapAssetStore.clear()` leaves tracks and events intact.
 
 ## Phase 3 — `@mapatlas/recorder-web`
 - **T3.1 `createWebTrackRecorder`.** `watchPosition` + sampling (T1.2) + Wake Lock + error map.
@@ -110,7 +125,13 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   independent of it either way, so a failed spike costs only `@mapatlas/maplibre`.
   _AC:_ tapping appends a vertex, dragging moves one, the exit fn removes every listener and the
   draft layer; no drawing library appears in `@mapatlas/core`'s dependency tree.
-- **T4.6 Interaction + a11y.** `onMapTap`, `onEventClick`; controls keyboard-reachable, visible
+- **T4.6 Vertical acceptance fixture.** One realistic end-to-end fixture, not a unit stub: a
+  large track (≥5k raw points), a two-segment pause, a DEM + hillshade + contour source stack,
+  two consumer-defined event marks, and a locally-persisted PMTiles region. Exercised as a test
+  and reused by the demo. _AC:_ renders with the network disabled; the pause shows as a gap;
+  frame time and memory are recorded as a baseline. Its purpose is to surface renderer and
+  data-format assumptions here, in Phase 4, rather than in Phase 7 when they are expensive.
+- **T4.7 Interaction + a11y.** `onMapTap`, `onEventClick`; controls keyboard-reachable, visible
   focus, `prefers-reduced-motion` respected. _AC:_ a11y checks pass in the demo shell; draw-mode
   vertices are keyboard-operable, not pointer-only.
 

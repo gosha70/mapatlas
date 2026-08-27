@@ -21,10 +21,16 @@ privacy/sharing rules live in the consuming application.
 
 ## Status
 
-**Pre-implementation.** This repository currently contains the **specification and
-architecture** an autonomous coding agent (or a human) needs to plan and build the
-product. See [`specs/`](specs/). No runtime code has been written yet — that is the
-build phase, driven from these artifacts.
+**Phase 0 complete; core implementation begins in Phase 1.**
+
+The monorepo, toolchain, and enforcement are in place and green in CI: seven build units
+wired with TypeScript project references, strict TypeScript, Vitest, ESLint/Prettier, and
+the import-isolation and SPDX scanners that keep the one architectural rule honest. No
+product runtime logic exists yet — the engine's data model, seams, and track logic are
+[Phase 1](specs/roadmap.md).
+
+The [`specs/`](specs/) directory remains the governing contract: build against it, and
+change it in the same commit as any public interface it describes.
 
 ## What's here now (the build seed)
 

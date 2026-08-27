@@ -13,13 +13,14 @@ Stand up the monorepo so everything after it has a home and the gates exist.
 
 ## Phase 1 — Core domain (framework-agnostic)
 The heart, with no browser or renderer.
-- Data types (incl. altitude, `channels`, `segments`, `laps`, `origin`, `TrackSummary`);
-  `SamplingPolicy`; GPS sampling; `simplify` (Douglas–Peucker, channel-preserving);
+- Data types (incl. altitude, `channels`, `segments`, `laps`, `origin`, `TrackSummary`,
+  `simplifiedSegments`, and `DraftTrackPoint` distinct from `TrackPoint`);
+  `SamplingPolicy`; GPS sampling; `simplify` (Douglas–Peucker, per segment, channel-preserving);
   `computeStats` + `finalizeTrack`; `TrackDraft` (manual authoring, undo/redo, time
   interpolation); `SensorSource` + `createPollingSensorSource` + a fake; `EventLog` logic;
-  interface definitions (`StorageAdapter`, `MediaAnalyzer`, `TileSource`, `OfflineRegionStore`,
-  `TrackRecorder`); `noopAnalyzer`; `recoverInterruptedTrack`; GeoJSON export/import with the
-  media manifest.
+  interface definitions (`StorageAdapter`, `MapAssetStore`, `MediaAnalyzer`, `TileSource`,
+  `OfflineRegionStore`, `TrackRecorder`, `SensorSource`); `noopAnalyzer`;
+  `recoverInterruptedTrack`; GeoJSON export/import (raw geometry) with the media manifest.
 - **Exit:** `@mapatlas/core` is 100% unit-tested in Node with fakes; no DOM/maplibre/react import.
 
 ## Phase 2 — Persistence
@@ -42,9 +43,10 @@ The heart, with no browser or renderer.
   document, 3D terrain + hillshade, live position, **per-segment** track lines, marks via
   `EventPresentation` (events, start, finish, laps), tap-to-place, fit/recenter/fit-bounds,
   and the draw/edit mode (`renderDraft`, draggable vertices); keyboard-accessible controls.
-- **Exit:** renders a track + events from fixtures in the demo shell over a topographic
-  (terrain + hillshade + contour) source stack; a paused track renders as two lines, not one;
-  consumer-supplied marks render with their accessible names; a11y checks pass.
+- **Exit:** the vertical acceptance fixture (T4.6) renders over a topographic
+  (terrain + hillshade + contour) source stack with the network disabled; a paused track renders
+  as two lines, not one; consumer-supplied marks render with their accessible names; a11y checks
+  pass.
 
 ## Phase 5 — React bindings
 - `useTrackRecorder` (incl. live channels, laps, recovery), `useTrackList`, `useTrackDraft`,

@@ -28,6 +28,20 @@ export interface ChannelDescriptor {
   precision?: number;          // decimal places for display
 }
 
+/** A point being authored by hand (§4). Its timestamp may not exist yet: vertices are
+ *  placed first and timed later. `toTrack()` is the boundary where every invariant a
+ *  finalized track guarantees — a timestamp on every point above all — must hold. A
+ *  recorded point is never timeless, which is why `TrackPoint.t` stays required. */
+export interface DraftTrackPoint extends LatLng {
+  t?: number;
+  accuracyM?: number;
+  altitudeM?: number;
+  altitudeAccuracyM?: number;
+  speedMps?: number;
+  headingDeg?: number;
+  channels?: Record<string, number>;
+}
+
 export interface TrackPoint extends LatLng {
   t: number;              // epoch ms
   accuracyM?: number;
@@ -85,8 +99,17 @@ export interface Track {
   status: TrackStatus;
   origin: TrackOrigin;         // "authored" ⇒ drawn by hand (§4), not recorded from GPS
   points: TrackPoint[];        // raw kept points — the single source of truth
-  simplified?: TrackPoint[];   // Douglas–Peucker output for render/export
   segments: TrackSegment[];    // active spans; a recording with no pause has exactly one
+  /** Douglas–Peucker output for rendering, one member per `segments[n]` and in the same
+   *  order. Simplification is per segment: a raw index means nothing in a decimated array,
+   *  and simplifying the concatenated points would smooth a pause into continuous
+   *  geometry. Never used for export — see §10.
+   *
+   *  **A disposable cache.** Deleting this field must never change what the track means:
+   *  `finalizeTrack` regenerates it deterministically from `points` + `segments`, so the
+   *  same input yields byte-identical output. That is what makes a storage migration or a
+   *  change of simplification algorithm safe — drop the cache and rebuild (ADR-0018). */
+  simplifiedSegments?: TrackPoint[][];
   laps?: TrackLap[];
   channels?: ChannelDescriptor[];   // descriptors for the keys present in points[].channels
   stats?: TrackStats;               // derived on finalize
@@ -190,7 +213,7 @@ export declare function recoverInterruptedTrack(store: StorageAdapter): Promise<
 
 **Contract:** a recorder never emits a point that fails the accuracy filter; `pause()`/`resume()`
 open and close `segments` so a paused span is a real gap, never a straight line; `stop()` returns a
-finalized `Track` with `segments`, `simplified`, and `stats` populated; the web recorder requests a
+finalized `Track` with `segments`, `simplifiedSegments`, and `stats` populated; the web recorder requests a
 Wake Lock on `start` and releases it on `stop`/`pause`. With `autosaveMs` and a `store`, an
 interrupted recording is recoverable via `recoverInterruptedTrack`.
 
@@ -250,11 +273,11 @@ Pure, framework-free, undoable; the renderer's draw mode (§8) is the interactio
 
 ```ts
 export interface TrackDraft {
-  readonly points: TrackPoint[];
+  readonly points: DraftTrackPoint[];
   readonly canUndo: boolean;
   readonly canRedo: boolean;
-  append(p: LatLng & Partial<TrackPoint>): void;
-  insertAt(index: number, p: LatLng & Partial<TrackPoint>): void;
+  append(p: DraftTrackPoint): void;
+  insertAt(index: number, p: DraftTrackPoint): void;
   moveAt(index: number, to: LatLng): void;
   removeAt(index: number): void;
   setTimeAt(index: number, t: number): void;
@@ -267,9 +290,15 @@ export interface TrackDraft {
   breakAt(index: number): void;
   undo(): void;
   redo(): void;
-  onChange(cb: (points: TrackPoint[]) => void): () => void;
-  /** Finalizes exactly like `stop()`: segments + simplify + stats, `origin: "authored"`. */
+  onChange(cb: (points: DraftTrackPoint[]) => void): () => void;
+  /** Finalizes exactly like `stop()`: segments + simplify + stats, `origin: "authored"`.
+   *  Throws `TrackDraftIncompleteError` if any point still has no timestamp — call
+   *  `interpolateTimes` first. This is the one place the draft/track boundary is enforced. */
   toTrack(meta?: { id?: Id; tags?: string[]; meta?: Record<string, JSONValue> }): Track;
+}
+
+export class TrackDraftIncompleteError extends Error {
+  readonly untimedIndices: number[];
 }
 
 /** New draft, or an editable draft seeded from an existing track (recorded or authored). */
@@ -278,12 +307,16 @@ export declare function createTrackDraft(from?: Track): TrackDraft;
 /** The shared finalize used by recorders, drafts, and import. */
 export declare function finalizeTrack(t: Pick<Track, "points" | "segments"> & Partial<Track>): Track;
 export declare function computeStats(t: Pick<Track, "points" | "segments" | "channels">): TrackStats;
+/** Simplify one segment's points. `finalizeTrack` calls this once per segment to build
+ *  `simplifiedSegments`; it is never called across a segment boundary. Endpoints and the
+ *  `channels`/`altitudeM` of every kept point are preserved. */
 export declare function simplify(points: TrackPoint[], toleranceM: number): TrackPoint[];
 ```
 
 **Contract:** every mutation is undoable; `toTrack()` produces a `Track` indistinguishable in
 shape from a recorded one except for `origin`, and it round-trips through `createTrackDraft(track)`
-without loss. Editing an existing track never mutates the input.
+without loss. Editing an existing track never mutates the input. A draft may hold untimed points
+for as long as it likes; a `Track` may never — `toTrack()` is where that stops being allowed.
 
 ## 5. Persistence seam (`@mapatlas/core`; default impl in `@mapatlas/storage-idb`)
 
@@ -458,7 +491,7 @@ export interface MapController {
   renderTrack(track: Track | null): void;
   renderEvents(events: MapEvent[]): void;
   /** The in-progress authored line (§4), drawn with draggable vertices while in draw mode. */
-  renderDraft(points: TrackPoint[] | null): void;
+  renderDraft(points: DraftTrackPoint[] | null): void;
   showLivePosition(p: TrackPoint | null): void;
   fitTrack(track: Track): void;
   fitBounds(bbox: [number, number, number, number], paddingPx?: number): void;
@@ -498,7 +531,9 @@ export function useTrackList(store: StorageAdapter): {
 };
 
 export function useTrackDraft(opts?: { from?: Track; store?: StorageAdapter }): {
-  points: TrackPoint[]; canUndo: boolean; canRedo: boolean;
+  points: DraftTrackPoint[]; canUndo: boolean; canRedo: boolean;
+  /** Indices still lacking a timestamp — `save()` rejects while this is non-empty. */
+  untimedIndices: number[];
   append(p: LatLng): void; insertAt(i: number, p: LatLng): void;
   moveAt(i: number, to: LatLng): void; removeAt(i: number): void;
   setTimeAt(i: number, t: number): void;
@@ -535,7 +570,7 @@ export function MapCanvas(props: {
   sources: TileSource[]; style?: string | JSONValue; terrain?: TerrainOptions | null;
   presentation?: EventPresentation;
   track?: Track; events?: MapEvent[]; livePoint?: TrackPoint;
-  draft?: TrackPoint[]; drawMode?: boolean; onDraw?: DrawModeHandlers;
+  draft?: DraftTrackPoint[]; drawMode?: boolean; onDraw?: DrawModeHandlers;
   onMapTap?(at: LatLng): void; onEventClick?(id: Id): void;
 }): JSX.Element;
 
@@ -580,7 +615,10 @@ export function trackToGeoJSON(track: Track, events: MapEvent[]): TrackExport;
 export function geoJSONToTrack(e: TrackExport): { track: Track; events: MapEvent[] };
 ```
 
-**Contract:** the track feature is a `MultiLineString` whose members are `track.segments`, with
+**Contract:** the track feature is a `MultiLineString` whose members are `track.segments`
+**at raw fidelity — never `simplifiedSegments`**. Export is a portability format, and T1.7
+requires a lossless round-trip; shipping decimated geometry would quietly fail that. Simplified
+geometry is a rendering projection and is recomputed on import, not carried. Each member carries
 per-coordinate timestamps in `properties.coordTimes` and per-coordinate telemetry in
 `properties.channels` (`Record<string, (number | null)[]>`, aligned to the coordinates) plus
 `properties.channelDescriptors`, `properties.laps`, `properties.stats`, and `properties.origin`.

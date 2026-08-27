@@ -213,3 +213,38 @@ production. The Phase 6 acceptance test disables the network, which is the only 
 footnote. The demo needs a self-hosted or offline-licensed source before Phase 6 can pass, which
 makes the DEM/basemap data decision a scheduling dependency, not a detail. Interactive browsing of
 a public host in development remains a courtesy question; bulk download does not.
+
+## ADR-0018 — A draft point is a different type, and simplification is per segment
+**Context.** External review of the contract before Phase 1 found two type-level contradictions
+that would have been cheap now and expensive after `core` existed.
+
+First, `TrackDraft.points` was typed `TrackPoint[]` while the authoring contract promised that
+vertices could be placed first and timed later — but `TrackPoint.t` is required. The contract
+asked strict TypeScript to represent two incompatible states in one type.
+
+Second, `Track.simplified?: TrackPoint[]` was a single flat array while `TrackSegment` addresses
+geometry by index into raw `points`. After decimation those indices identify nothing, and running
+Douglas–Peucker over the concatenated array would smooth straight through a pause — the exact
+artifact ADR-0010 introduced segments to prevent.
+
+**Decision.** A separate `DraftTrackPoint` with optional `t` backs `TrackDraft`, `renderDraft`,
+and `useTrackDraft`; `TrackPoint.t` stays required. `toTrack()` is the boundary that enforces the
+finalized invariants and throws `TrackDraftIncompleteError` — naming the untimed indices — rather
+than inventing a timestamp. And `simplified` becomes `simplifiedSegments?: TrackPoint[][]`, one
+member per `segments[n]`, in the same order, produced by simplifying each segment independently.
+
+A consequence worth stating outright: **export carries raw geometry, never simplified.** T1.7
+requires a lossless round-trip, and that cannot be true of decimated points. Simplified geometry
+is a rendering projection, recomputed on import rather than carried.
+
+`simplifiedSegments` is therefore a **disposable cache**, and the contract says so explicitly:
+deleting it from a persisted or imported track must not change the semantic track, because
+`finalizeTrack` regenerates it deterministically from `points` + `segments`. Storage migrations
+and any future change of simplification algorithm are then safe by construction — drop the cache
+and rebuild, rather than migrating derived geometry that was never authoritative.
+
+**Consequences.** The weaker alternative — making `TrackPoint.t` optional — would have pushed an
+editing-state uncertainty into every consumer that ever reads a finalized track. The invariant is
+now stateable in one line: `points + segments` is canonical and exportable; `simplifiedSegments`
+is derived and disposable. Settled before T1.3 and T1.4, so the ambiguity never reaches storage,
+the renderer, or import/export.

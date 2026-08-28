@@ -6,7 +6,15 @@
     "declarationMap": false,
     "noEmit": true,
     "types": ["node"],
-    "lib": ["ES2022", "DOM"]
+    "lib": ["ES2022", "DOM"],
+    // The two specifiers the browser harness reaches for that are not in
+    // `@mapatlas/maplibre`'s export map, because the controller is not on the barrel yet.
+    // These mirror the aliases in `e2e/harness/vite.config.ts` and must move with them:
+    // vite resolves them to `dist`, this resolves them to the sources that produce it.
+    "paths": {
+      "@mapatlas/maplibre/controller": ["./packages/maplibre/src/controller/browser.ts"],
+      "@mapatlas/maplibre/protocols": ["./packages/maplibre/src/protocols/pmtiles.ts"]
+    }
   },
-  "include": ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts"]
+  "include": ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts", "e2e/**/*.ts"]
 }

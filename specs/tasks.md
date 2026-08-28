@@ -332,12 +332,17 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   `pmtiles://` scheme exactly once for all three kinds, never appending `/{z}/{x}/{y}`, and
   rejects a url already carrying the scheme, since it is the renderer's to add and no other
   renderer can read it; `styleLayers` pass through verbatim with only `source` and a namespaced
-  `id` filled in, since the engine has no opinion about how contours or bathymetry look, and
+  `id` filled in, since the engine has no opinion about how contours or bathymetry look, but
+  **deep-copied**, so mutating a nested `paint`, `layout`, `filter` or expression array
+  afterwards cannot change what was installed — prepared state is a snapshot, not a view, or the
+  call-time validation guarantee holds only at the top level;
   **every** supplied layer id is namespaced so two sources each carrying `labels` yield
   `a__labels` and `b__labels`; empty attribution is rejected, being a licence obligation; a WMS
   url without a bbox placeholder is rejected, since it renders one extent everywhere and reports
-  nothing, as is a WMS source of non-`raster` kind; duplicate source ids are rejected; order is
-  preserved and the first source defaults to `base`; geometry prefers `simplifiedSegments[n]` and
+  nothing, as is a WMS source of non-`raster` kind; duplicate source ids are rejected, as are
+  duplicate **final** layer ids across the whole stack — namespacing makes a collision unlikely
+  rather than impossible, since one source can supply `labels` twice and `a__b` carrying `c`
+  collides with `a` carrying `b__c`; order is preserved and the first source defaults to `base`; geometry prefers `simplifiedSegments[n]` and
   falls back to slicing raw points; a singleton segment emits **no line feature** while keeping
   its endpoint mark; and no empty or single-position `LineString` is ever emitted, asserted
   across every fixture.
@@ -352,8 +357,36 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   the package publishes the controller, not MapLibre's style specifications.
 - **T4.1 MapController + layers.** Mount a MapLibre GL map, optional base `style`, ordered
   `TileSource[]` across raster/vector/`raster-dem` kinds, engine-owned `attributionPrefix`.
-  _AC:_ base + overlay + vector composite in source order; attribution rendered verbatim; the
-  library's built-in attribution default is not shipped.
+  Construction is synchronous for the consumer, but source installation waits for MapLibre's
+  `load` event, so the narrow `MapLike` fake carries the load/event seam rather than just
+  `addSource`/`addLayer`.
+  _AC:_ base + overlay + vector composite in source order, which is MapLibre's draw order;
+  attribution rendered verbatim; the library's built-in attribution default is **not** shipped —
+  the control is constructed explicitly, never inherited; with no `style`, an explicit empty v8
+  document rather than a style-less map that would need `setStyle()` before rendering; desired
+  state is translated and validated **at the call**, so `setSources` either throws to its caller
+  or is guaranteed installable, and an invalid initial stack throws without constructing a map at
+  all — validating at install would make rejection asynchronous, surfacing from inside MapLibre's
+  `load` callback where no caller can catch it and the last valid stack is already abandoned;
+  before load, `setSources` replaces desired state only and load reconciles the latest **exactly
+  once**, so `setSources(A); setSources(B); load` installs B and never A; after load, replacement
+  removes old layers, then old sources, then adds the new stack in declared order, and a rejected
+  `setSources` leaves the visible map intact;
+  `ensurePmtilesProtocol` is called only for a stack containing `transport: "pmtiles"` and only
+  before that source is added — controller A without PMTiles registers nothing, B registers once,
+  C registers nothing further, and destroying B leaves the protocol registered.
+
+  Every guard above is **mutation-tested**: reversing the removal order, registering the protocol
+  after `addSource`, dropping the once-only load guard, installing eagerly, queuing commands
+  instead of modelling desired state, deferring validation to install, dropping either layer-id
+  uniqueness check, shallow-copying style layers at any of three depths, swapping lng/lat, and inheriting the attribution default each fail at least
+  one test. Two are settled in the browser, where a fake cannot: without the attribution override
+  MapLibre 6.6.0 renders `"© OpenStreetMap contributors | MapLibre"`, and the PMTiles pair fails
+  in both directions — never registering breaks the positive case, registering unconditionally
+  breaks the negative one.
+
+  The browser lane is **typechecked**: `e2e/**` is in `tsconfig.tests.json`, whose `paths` mirror
+  the harness's vite aliases and must move with them.
 - **T4.2 Terrain & topography.** `TerrainOptions` → 3D terrain + hillshade from a `raster-dem`
   source; `styleLayers` passthrough for contour/bathymetry layers. _AC:_ a fixture stack of
   DEM + hillshade + contours renders; `setTerrain(null)` fully removes terrain.

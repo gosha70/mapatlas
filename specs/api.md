@@ -753,8 +753,18 @@ Rejected as unrenderable rather than rendered wrong: `wms` with a non-`raster` k
 returns an image), a `wms` url with no bbox placeholder, and a url already carrying `pmtiles://`
 under any transport.
 
+Style layers are **deep-copied** during translation, so prepared state is a snapshot rather than
+a view: mutating a nested `paint`, `layout`, `filter` or expression array after `setSources`
+returned cannot change what the map installs, and cannot turn an accepted stack into one the
+renderer rejects at load. A shallow copy would leave that door open and weaken the guarantee
+above to the top level only.
+
 Style layer ids are namespaced `<sourceId>__<layerId>`, so two sources each carrying a layer
 called `labels` yield `a__labels` and `b__labels` instead of one silently replacing the other.
+Namespacing makes a collision unlikely, not impossible, so **final** layer ids are also checked
+for uniqueness across the whole stack and duplicates are rejected: one source supplying `labels`
+twice collides with itself, and source `a__b` carrying `c` collides with source `a` carrying
+`b__c`. Unique source ids do not imply unique layer ids.
 
 **Contract (`OfflineRegionStore`):** `download()` **copies bytes into the `MapAssetStore`** and
 resolves the region from local storage thereafter. A `.pmtiles` URL served by range requests is *remote* PMTiles, not an
@@ -827,6 +837,39 @@ export interface MapController {
 }
 export declare function createMapController(o: MapControllerOptions): MapController;
 ```
+
+**Delivery:** `createMapController` is built across Phase 4 and is **not yet on the package
+barrel**. T4.1 delivers construction plus `setSources`/`destroy`; T4.2 adds `setTerrain`; T4.3
+adds the track, event, draft and camera methods. The factory is exported from the barrel — and
+this declaration becomes true — when the returned object satisfies the whole interface.
+
+**Contract:** MapLibre rejects `addSource`/`addLayer` until its style has loaded, so
+`createMapController` returns synchronously while installation waits for that event. The
+controller models **desired state, not queued commands**: `setSources` called twice before the
+style loads installs the second stack once, and the first is never fetched or drawn.
+
+Desired state is **translated and validated at the call, not at install**. `setSources` either
+throws to its caller or is guaranteed installable — before the style has loaded as much as
+after. Storing raw sources would make rejection asynchronous: an invalid stack handed over early
+would return successfully and then throw from inside MapLibre's `load` callback, where no caller
+can catch it and where the last valid stack has already been abandoned. An invalid stack passed
+to `createMapController` throws without constructing a map at all, so no WebGL context is left
+behind for a controller the caller never receives.
+
+Replacement removes every old layer before any old source — MapLibre refuses to drop a source a
+layer still references — then adds the new stack in declared order, which is the draw order.
+Because translation already happened, a rejected `setSources` leaves the visible map intact.
+
+With no `style`, the controller supplies an **explicit empty v8 document** rather than letting
+MapLibre start style-less, which would require `setStyle()` before the map rendered at all. The
+attribution control is **always** constructed explicitly with `customAttribution`, never
+inherited: MapLibre's default control carries MapLibre's own attribution, and the engine does not
+put a library's branding in a consumer's app (ADR-0008). Each `TileSource.attribution` is
+still rendered — that is a licence obligation, not a preference.
+
+`ensurePmtilesProtocol` runs only when a source declares `transport: "pmtiles"`, and only before
+that source is added. `destroy()` removes the map and deliberately leaves the protocol
+registered: it is realm infrastructure other controllers depend on.
 
 **Contract:** `MarkerStyle.html` is inserted into the DOM verbatim — it is **consumer-authored
 markup and must never be built from untrusted input** (see `SECURITY.md`). Every mark carries an

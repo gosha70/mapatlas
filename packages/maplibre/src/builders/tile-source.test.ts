@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { TileSource } from "@mapatlas/core";
+import type { JSONValue, TileSource } from "@mapatlas/core";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -142,6 +142,21 @@ describe("vector sources carry the consumer's own layers", () => {
     expect(a.layers[0]?.id).not.toBe(b.layers[0]?.id);
   });
 
+  it("rejects two layers in one source that resolve to the same id", () => {
+    // Namespacing stops cross-source collisions; it does nothing about a source supplying
+    // `labels` twice. MapLibre refuses the second addLayer, which under a replacement would
+    // surface after teardown had already begun — so this is rejected before the map is
+    // touched at all.
+    const collide: TileSource = {
+      ...VECTOR,
+      styleLayers: [
+        { id: "labels", type: "symbol", "source-layer": "place" },
+        { id: "labels", type: "line", "source-layer": "place" },
+      ],
+    };
+    expect(() => buildTileSource(collide, 1)).toThrow(/resolve to the id "contours__labels"/);
+  });
+
   it("names an unnamed layer after its source and position", () => {
     expect(buildTileSource(VECTOR, 1).layers[1]).toMatchObject({ id: "contours__layer-1" });
   });
@@ -151,6 +166,35 @@ describe("vector sources carry the consumer's own layers", () => {
     const before = structuredClone(VECTOR.styleLayers);
     buildTileSource(VECTOR, 1);
     expect(VECTOR.styleLayers).toEqual(before);
+  });
+
+  it("deep-copies nested values, so the built layers are a snapshot and not a view", () => {
+    // The other direction, which a shallow spread leaves open: `paint`, `layout`, `filter`
+    // and every expression array would stay aliased to the caller's objects, so mutating one
+    // afterwards would change what the map installs — and could turn an already-accepted
+    // stack into one MapLibre rejects.
+    const stops: JSONValue[] = [10, 1];
+    // Nested two deep on both sides — an object inside an object, and an array inside an
+    // array. A copy that stops at one level protects neither, and MapLibre style layers are
+    // full of both: paint ramps and filter expressions nest arbitrarily.
+    const paint: Record<string, JSONValue> = { "line-width": ["interpolate", ["linear"], stops] };
+    const inner: JSONValue[] = ["get", "kind"];
+    const filter: JSONValue[] = ["==", inner, "index"];
+    const source: TileSource = {
+      ...VECTOR,
+      styleLayers: [{ id: "lines", type: "line", "source-layer": "contour", paint, filter }],
+    };
+
+    const built = buildTileSource(source, 1);
+    stops[1] = 20;
+    inner[1] = "mutated";
+    paint["line-color"] = "#f00";
+
+    expect(built.layers[0]).toMatchObject({
+      paint: { "line-width": ["interpolate", ["linear"], [10, 1]] },
+      filter: ["==", ["get", "kind"], "index"],
+    });
+    expect(built.layers[0]).not.toHaveProperty("paint.line-color");
   });
 
   it("rejects a style layer that is not an object or has no type", () => {
@@ -332,6 +376,47 @@ describe("the stack", () => {
     // MapLibre would silently keep one of them, and the map would be missing a layer with
     // nothing to say why.
     expect(() => buildTileSources([OSM, { ...OSM }])).toThrow(/share this id/);
+  });
+
+  it("rejects two sources whose namespaced layer ids collide", () => {
+    // Namespacing makes this unlikely, not impossible: source `a__b` carrying `c` and
+    // source `a` carrying `b__c` both resolve to `a__b__c`. Unique source ids do not imply
+    // unique layer ids.
+    const first: TileSource = {
+      id: "a__b",
+      kind: "vector",
+      transport: "tilejson",
+      url: "https://tiles.invalid/one.json",
+      attribution: "data",
+      styleLayers: [{ id: "c", type: "line", "source-layer": "x" }],
+    };
+    const second: TileSource = {
+      ...first,
+      id: "a",
+      styleLayers: [{ id: "b__c", type: "line", "source-layer": "x" }],
+    };
+
+    expect(() => buildTileSources([first, second])).toThrow(
+      /layer id "a__b__c" collides with the one from source "a__b"/,
+    );
+  });
+
+  it("accepts the same layer name under different sources, which is the point", () => {
+    const labels = [{ id: "labels", type: "symbol" as const, "source-layer": "place" }];
+    const template: TileSource = {
+      id: "a",
+      kind: "vector",
+      transport: "tilejson",
+      url: "https://tiles.invalid/one.json",
+      attribution: "data",
+      styleLayers: labels,
+    };
+
+    const built = buildTileSources([template, { ...template, id: "b" }]);
+    expect(built.flatMap((entry) => entry.layers.map((layer) => layer.id))).toEqual([
+      "a__labels",
+      "b__labels",
+    ]);
   });
 
   it("handles an empty stack", () => {

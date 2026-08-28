@@ -828,6 +828,30 @@ export interface MapController {
 export declare function createMapController(o: MapControllerOptions): MapController;
 ```
 
+**Delivery:** `createMapController` is built across Phase 4 and is **not yet on the package
+barrel**. T4.1 delivers construction plus `setSources`/`destroy`; T4.2 adds `setTerrain`; T4.3
+adds the track, event, draft and camera methods. The factory is exported from the barrel — and
+this declaration becomes true — when the returned object satisfies the whole interface.
+
+**Contract:** MapLibre rejects `addSource`/`addLayer` until its style has loaded, so
+`createMapController` returns synchronously while installation waits for that event. The
+controller models **desired state, not queued commands**: `setSources` called twice before the
+style loads installs the second stack once, and the first is never fetched or drawn. Replacement
+removes every old layer before any old source — MapLibre refuses to drop a source a layer still
+references — then adds the new stack in declared order, which is the draw order. Translation
+validates before anything is removed, so a rejected `setSources` leaves the visible map intact.
+
+With no `style`, the controller supplies an **explicit empty v8 document** rather than letting
+MapLibre start style-less, which would require `setStyle()` before the map rendered at all. The
+attribution control is **always** constructed explicitly with `customAttribution`, never
+inherited: MapLibre's default control carries MapLibre's own attribution, and the engine does not
+put a library's branding in a consumer's product (ADR-0008). Each `TileSource.attribution` is
+still rendered — that is a licence obligation, not a preference.
+
+`ensurePmtilesProtocol` runs only when a source declares `transport: "pmtiles"`, and only before
+that source is added. `destroy()` removes the map and deliberately leaves the protocol
+registered: it is realm infrastructure other controllers depend on.
+
 **Contract:** `MarkerStyle.html` is inserted into the DOM verbatim — it is **consumer-authored
 markup and must never be built from untrusted input** (see `SECURITY.md`). Every mark carries an
 `ariaLabel`; the engine supplies none, because only the consumer knows what a mark means. With no

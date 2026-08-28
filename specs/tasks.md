@@ -352,8 +352,27 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   the package publishes the controller, not MapLibre's style specifications.
 - **T4.1 MapController + layers.** Mount a MapLibre GL map, optional base `style`, ordered
   `TileSource[]` across raster/vector/`raster-dem` kinds, engine-owned `attributionPrefix`.
-  _AC:_ base + overlay + vector composite in source order; attribution rendered verbatim; the
-  library's built-in attribution default is not shipped.
+  Construction is synchronous for the consumer, but source installation waits for MapLibre's
+  `load` event, so the narrow `MapLike` fake carries the load/event seam rather than just
+  `addSource`/`addLayer`.
+  _AC:_ base + overlay + vector composite in source order, which is MapLibre's draw order;
+  attribution rendered verbatim; the library's built-in attribution default is **not** shipped —
+  the control is constructed explicitly, never inherited; with no `style`, an explicit empty v8
+  document rather than a style-less map that would need `setStyle()` before rendering; before
+  load, `setSources` replaces desired state only and load reconciles the latest **exactly once**,
+  so `setSources(A); setSources(B); load` installs B and never A; after load, replacement removes
+  old layers, then old sources, then adds the new stack in declared order; translation validates
+  before any removal, so a rejected `setSources` leaves the visible map intact;
+  `ensurePmtilesProtocol` is called only for a stack containing `transport: "pmtiles"` and only
+  before that source is added — controller A without PMTiles registers nothing, B registers once,
+  C registers nothing further, and destroying B leaves the protocol registered.
+
+  Every guard above is **mutation-tested**: reversing the removal order, registering the protocol
+  after `addSource`, dropping the once-only load guard, installing eagerly, queuing commands
+  instead of modelling desired state, validating after teardown, swapping lng/lat, and inheriting
+  the attribution default each fail at least one test. The attribution mutation is checked in the
+  browser lane, where MapLibre 6.6.0 renders `"© OpenStreetMap contributors | MapLibre"` without
+  the override.
 - **T4.2 Terrain & topography.** `TerrainOptions` → 3D terrain + hillshade from a `raster-dem`
   source; `styleLayers` passthrough for contour/bathymetry layers. _AC:_ a fixture stack of
   DEM + hillshade + contours renders; `setTerrain(null)` fully removes terrain.

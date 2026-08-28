@@ -12,11 +12,15 @@ import { recoverInterruptedTrack } from "@mapatlas/core";
 import type { Track } from "@mapatlas/core";
 import { createIdbStorageAdapter } from "@mapatlas/storage-idb";
 import { createWebTrackRecorder } from "@mapatlas/recorder-web";
+import { createMapController } from "@mapatlas/maplibre/controller";
 
 declare global {
   interface Window {
     mapatlas: {
       createWebTrackRecorder: typeof createWebTrackRecorder;
+      createMapController: typeof createMapController;
+      /** A sized, attached container, since a map with no dimensions never finishes load. */
+      mapContainer(): HTMLElement;
       createIdbStorageAdapter: typeof createIdbStorageAdapter;
       recoverInterruptedTrack: typeof recoverInterruptedTrack;
       /**
@@ -27,6 +31,8 @@ declare global {
        * for something that will never happen. These let a test wait for the event itself.
        */
       signals: Record<string, boolean>;
+      /** The controller under test, so a later `page.evaluate` can drive it. */
+      controller?: ReturnType<typeof createMapController>;
       /** Set by a running scenario, read by the test. */
       result?: unknown;
       lastTrack?: Track;
@@ -34,8 +40,18 @@ declare global {
   }
 }
 
+function mapContainer(): HTMLElement {
+  const element = document.createElement("div");
+  element.style.width = "800px";
+  element.style.height = "600px";
+  document.body.append(element);
+  return element;
+}
+
 window.mapatlas = {
   createWebTrackRecorder,
+  createMapController,
+  mapContainer,
   createIdbStorageAdapter,
   recoverInterruptedTrack,
   signals: {},

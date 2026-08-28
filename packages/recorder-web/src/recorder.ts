@@ -90,6 +90,22 @@ export function createWebTrackRecorderInternal(
   const sensors: readonly SensorSource[] = [...(options.sensors ?? [])];
 
   /**
+   * Every channel the configured sensors declare, cloned and de-duplicated **once**.
+   *
+   * Read lazily, this changed under a recording: mutating a descriptor mid-run rewrote the
+   * finalized track, and once autosave exists it would let successive snapshots of one
+   * recording disagree about what a channel is called. What a track declares is fixed when
+   * the recorder is built.
+   */
+  const declaredChannels: ChannelDescriptor[] = (() => {
+    const byKey = new Map<string, ChannelDescriptor>();
+    for (const sensor of sensors) {
+      for (const descriptor of sensor.channels) byKey.set(descriptor.key, { ...descriptor });
+    }
+    return [...byKey.values()];
+  })();
+
+  /**
    * Samples gathered since the previous **kept** point.
    *
    * Cleared each time a point is kept, so a channel value is attributed to the point it was
@@ -295,16 +311,6 @@ export function createWebTrackRecorderInternal(
     pendingSamples = [];
   };
 
-  /** Every descriptor the configured sensors declare, de-duplicated by key. */
-  const channelDescriptors = (): ChannelDescriptor[] => {
-    const byKey = new Map<string, ChannelDescriptor>();
-    for (const sensor of sensors) {
-      // Copied, so mutating a descriptor after stop cannot rewrite a finalized track.
-      for (const descriptor of sensor.channels) byKey.set(descriptor.key, { ...descriptor });
-    }
-    return [...byKey.values()];
-  };
-
   const beginWatching = (): void => {
     const forGeneration = generation;
     try {
@@ -419,7 +425,9 @@ export function createWebTrackRecorderInternal(
 
       const endedAt = points[points.length - 1]?.t ?? environment.now();
 
-      const descriptors = channelDescriptors();
+      // Copied again on the way out, so a caller holding the finalized track cannot reach
+      // back into what the next projection of this recording will declare.
+      const descriptors = declaredChannels.map((descriptor) => ({ ...descriptor }));
 
       finalized = finalizeTrack({
         points,

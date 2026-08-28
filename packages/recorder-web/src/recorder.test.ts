@@ -1125,22 +1125,31 @@ describe("a sensor start that resolves late", () => {
     aggregate: "avg" as const,
   });
 
-  /** A source whose `start()` only completes when the test says so. */
+  /**
+   * A source whose `start()` only completes when the test says so — **one resolver per
+   * call**, so a resumed generation cannot overwrite the pending completion of the
+   * generation before it. With a single slot the obsolete start was never resolved at all,
+   * and an implementation that stopped every stale completion would have passed.
+   */
   function deferredSensor() {
     const inner = createFakeSensorSource({ id: "slow", channels: [HR()] });
-    let release: (() => void) | undefined;
+    const pending: (() => void)[] = [];
     return {
       inner,
       source: {
         ...inner,
         start: () =>
           new Promise<void>((resolve) => {
-            release = () => {
+            pending.push(() => {
               void inner.start().then(resolve);
-            };
+            });
           }),
       },
-      release: () => release?.(),
+      /** Resolve the nth outstanding start, oldest first. */
+      release: (index = 0) => pending[index]?.(),
+      get pendingStarts() {
+        return pending.length;
+      },
     };
   }
 
@@ -1186,7 +1195,10 @@ describe("a sensor start that resolves late", () => {
   });
 
   it("leaves a sensor alone when a newer session has since started it", async () => {
-    // The stale completion must not stop a source the resumed generation now owns.
+    // The stale completion must not stop a source the resumed generation now owns. Both
+    // starts are resolved, resumed generation first and the obsolete one after, which is
+    // the ordering that actually exercises the reconciliation — resolving only the new one
+    // would pass against an implementation that stopped every stale completion.
     const env = createTestEnvironment();
     const deferred = deferredSensor();
     const recorder = createWebTrackRecorderInternal(
@@ -1200,11 +1212,42 @@ describe("a sensor start that resolves late", () => {
     recorder.resume();
     await flush();
 
-    deferred.release();
+    expect(deferred.pendingStarts).toBe(2);
+
+    deferred.release(1); // the resumed generation
+    await flush();
+    expect(deferred.inner.started).toBe(true);
+
+    deferred.release(0); // the obsolete one, arriving late
     await flush();
 
     expect(recorder.status).toBe("recording");
     expect(deferred.inner.started).toBe(true);
+  });
+
+  it("stops a stale completion that arrives with nothing running", async () => {
+    // The other half: with no newer session, the late start must be disowned. Without both
+    // cases, one direction of the reconciliation is untested.
+    const env = createTestEnvironment();
+    const deferred = deferredSensor();
+    const recorder = createWebTrackRecorderInternal(
+      { sensors: [deferred.source] },
+      env.environment,
+    );
+
+    await recorder.start();
+    await flush();
+    recorder.pause();
+    recorder.resume();
+    recorder.pause();
+    await flush();
+
+    deferred.release(1);
+    deferred.release(0);
+    await flush();
+
+    expect(recorder.status).toBe("paused");
+    expect(deferred.inner.started).toBe(false);
   });
 });
 
@@ -1233,5 +1276,72 @@ describe("stop before start", () => {
     expect(track.points).toHaveLength(1);
     expect(recorder.status).toBe("finalized");
     expect(env.liveWatches).toBe(0);
+  });
+});
+
+describe("declared channels are fixed when the recorder is built", () => {
+  it("ignores a descriptor mutated during the recording", async () => {
+    // Regression: descriptors were read only when stop() built the track, so mutating one
+    // mid-run rewrote the result — and once autosave exists, successive snapshots of one
+    // recording could disagree about what a channel is called.
+    const env = createTestEnvironment();
+    const channels = [
+      { key: "heartRateBpm", label: "Heart rate", unit: "bpm", aggregate: "avg" as const },
+    ];
+    const sensor = createFakeSensorSource({ id: "hr", channels });
+    const recorder = createWebTrackRecorderInternal({ sensors: [sensor] }, env.environment);
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+
+    const descriptor = channels[0];
+    if (descriptor !== undefined) descriptor.label = "MUTATED BEFORE STOP";
+
+    expect((await recorder.stop()).channels?.[0]?.label).toBe("Heart rate");
+  });
+
+  it("hands out descriptors the sensor no longer owns", async () => {
+    // Mutating the finalized track's own descriptor is a caller editing their own object —
+    // `stop()` is memoized, so it is the same one. What must not happen is that edit
+    // reaching the source, or the source's later edits reaching a track already handed out.
+    const env = createTestEnvironment();
+    const sensorChannels = [
+      { key: "heartRateBpm", label: "Heart rate", unit: "bpm", aggregate: "avg" as const },
+    ];
+    const sensor = createFakeSensorSource({ id: "hr", channels: sensorChannels });
+    const recorder = createWebTrackRecorderInternal({ sensors: [sensor] }, env.environment);
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    const track = await recorder.stop();
+
+    const declared = track.channels?.[0];
+    if (declared !== undefined) declared.label = "EDITED BY THE CALLER";
+
+    expect(sensorChannels[0]?.label).toBe("Heart rate");
+
+    const fromSource = sensorChannels[0];
+    if (fromSource !== undefined) fromSource.label = "EDITED BY THE SOURCE";
+
+    expect(track.channels?.[0]?.label).toBe("EDITED BY THE CALLER");
+  });
+
+  it("de-duplicates descriptors two sensors declare under one key", async () => {
+    const env = createTestEnvironment();
+    const shared = { key: "heartRateBpm", label: "Heart rate", unit: "bpm" };
+    const recorder = createWebTrackRecorderInternal(
+      {
+        sensors: [
+          createFakeSensorSource({ id: "strap", channels: [shared] }),
+          createFakeSensorSource({ id: "watch", channels: [{ ...shared }] }),
+        ],
+      },
+      env.environment,
+    );
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+
+    expect((await recorder.stop()).channels).toHaveLength(1);
   });
 });

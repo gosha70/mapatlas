@@ -24,10 +24,13 @@
     "scan:isolation": "node scripts/scan-isolation.mjs",
     "scan:spdx": "node scripts/scan-spdx.mjs",
     "verify": "npm run build && npm run typecheck && npm run lint && npm run test:coverage && npm run scan:isolation && npm run scan:spdx && npm run format:check",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:browser": "playwright test",
+    "test:browser:install": "playwright install --with-deps chromium"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.62.1",
     "@types/node": "26.4.0",
     "@types/react": "19.2.18",
     "@vitest/coverage-v8": "4.1.11",
@@ -39,6 +42,7 @@
     "react": "19.2.8",
     "typescript": "6.0.3",
     "typescript-eslint": "8.68.0",
+    "vite": "8.2.2",
     "vitest": "4.1.11"
   }
 }

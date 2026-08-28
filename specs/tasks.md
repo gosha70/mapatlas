@@ -23,6 +23,16 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   *proven to fail* on a planted violation of each rule — including a bare side-effect import
   (`import "react";`), which a naive `from`-only regex misses.
 - **T0.6 SPDX header check.** Fail build if a source file lacks `SPDX-License-Identifier: Apache-2.0`.
+- **T0.8 Browser lane.** A `browser` job running **in parallel** with `gates`, never behind it,
+  installing Chromium only. Playwright specs live under `e2e/` on a distinct pattern excluded
+  from Vitest, so `npm test` stays browser-free and fast. It exists for what a fake cannot
+  reach: real platform APIs, a real WebGL context, and — from T4.1 — MapLibre's ESM worker
+  loading, which is what breaks on a major-version bump and precisely what a module mock hides.
+  Browser binaries are deliberately **not cached**; Playwright's own guidance is that restoring
+  a cached browser costs about what downloading it does. One worker in CI, since WebGL contexts
+  are a shared finite resource and parallel workers make failures depend on what else was
+  rendering. Traces and screenshots upload on failure. _AC:_ the job is required, runs
+  concurrently, and covers the engine through real APIs rather than test-supplied ones.
 - **T0.7 CI workflow.** `.github/workflows/ci.yml` running install → build → typecheck → lint →
   test → `scan:isolation` → `scan:spdx` on push and PR, plus a DCO sign-off check on PRs.
   _AC:_ (a) the workflow runs green on GitHub, not merely locally; (b) the scanner's negative
@@ -278,6 +288,14 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   clears the timer, drains the queue, then saves the finalized track **last** under the same id;
   the `stopPromise` is memoized, not just the result, so concurrent stops await one drain and
   produce exactly one final save.
+  _AC — the interval is validated:_ exactly `0` or a positive finite number of milliseconds;
+  anything else throws `RangeError` rather than acquiring an undocumented meaning — `Infinity`
+  reached `setInterval` unchanged, and negative or `NaN` values quietly meant "disabled", which
+  only `0` means. Same boundary the polling sensor source enforces.
+  _AC — errors name their own cause:_ two configured sensors defining one key differently raise
+  `ChannelConflictError`, not `RecorderResumeError`; that path runs whether or not a track is
+  being resumed, and reporting "cannot resume this track" sends a reader looking for a snapshot
+  that never existed. `RecorderResumeError` is reserved for restored-state validation.
   _AC — one enablement rule:_ autosave is on when a store exists **and** the interval is
   positive, resolved once so the periodic write and the pause flush cannot disagree. Omitting
   `autosaveMs` uses the documented default; `0` writes nothing at all, pause included, while

@@ -5,7 +5,11 @@ import { createFakeSensorSource, createMemoryStorageAdapter } from "@mapatlas/co
 import { describe, expect, it } from "vitest";
 
 import type { PositionFix, WebRecorderEnvironment } from "./environment.js";
-import { RecorderResumeError, createWebTrackRecorderInternal } from "./recorder.js";
+import {
+  ChannelConflictError,
+  RecorderResumeError,
+  createWebTrackRecorderInternal,
+} from "./recorder.js";
 
 const T0 = 1_700_000_000_000;
 const ORIGIN = { lat: 59.33, lng: 18.06 };
@@ -1012,5 +1016,90 @@ describe("a channel definition must match in full", () => {
     );
 
     expect(recorder.status).toBe("finalized");
+  });
+});
+
+describe("the autosave interval is validated at the boundary", () => {
+  const invalid = [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN, -1, -0.5];
+
+  it.each(invalid)("rejects autosaveMs=%s", (autosaveMs) => {
+    // Regression: Infinity reached setInterval unchanged, while negative and NaN values
+    // quietly acquired the "disabled" meaning that only 0 has. Same boundary the polling
+    // sensor source enforces.
+    const env = createTestEnvironment();
+    const { store } = instrumentedStore();
+
+    expect(() => createWebTrackRecorderInternal({ store, autosaveMs }, env.environment)).toThrow(
+      RangeError,
+    );
+  });
+
+  it("accepts 0 and any positive finite interval", () => {
+    const env = createTestEnvironment();
+    const { store } = instrumentedStore();
+
+    for (const autosaveMs of [0, 1, 1000, 3_600_000]) {
+      expect(() =>
+        createWebTrackRecorderInternal({ store, autosaveMs }, env.environment),
+      ).not.toThrow();
+    }
+  });
+
+  it("rejects an invalid interval even without a store", () => {
+    // The value is nonsense whether or not anything would have used it.
+    const env = createTestEnvironment();
+    expect(() =>
+      createWebTrackRecorderInternal({ autosaveMs: Number.NaN }, env.environment),
+    ).toThrow(RangeError);
+  });
+});
+
+describe("a configuration conflict is not a recovery failure", () => {
+  it("reports two conflicting sensors as a channel conflict, not a resume error", () => {
+    // Regression: this path runs whether or not a track is being resumed, but reported
+    // "cannot resume this track" — sending a reader looking for a snapshot that never
+    // existed.
+    const env = createTestEnvironment();
+    const metres = createFakeSensorSource({
+      id: "a",
+      channels: [{ key: "depthM", label: "Depth", unit: "m" }],
+    });
+    const feet = createFakeSensorSource({
+      id: "b",
+      channels: [{ key: "depthM", label: "Depth", unit: "ft" }],
+    });
+
+    let thrown: ChannelConflictError | undefined;
+    try {
+      createWebTrackRecorderInternal({ sensors: [metres, feet] }, env.environment);
+    } catch (error) {
+      thrown = error as ChannelConflictError;
+    }
+
+    expect(thrown).toBeInstanceOf(ChannelConflictError);
+    expect(thrown).not.toBeInstanceOf(RecorderResumeError);
+    expect(thrown?.channelKey).toBe("depthM");
+    expect(thrown?.message).not.toMatch(/resume/i);
+  });
+
+  it("still reports a restored-track conflict as a resume error", () => {
+    const env = createTestEnvironment();
+    const stored: Track = {
+      id: "resumed",
+      startedAt: T0,
+      status: "recording",
+      origin: "recorded",
+      points: [{ lat: 59.33, lng: 18.06, t: T0 }],
+      segments: [{ id: "s", startIndex: 0, endIndex: 0, startedAt: T0 }],
+      channels: [{ key: "depthM", label: "Depth", unit: "m" }],
+    };
+    const feet = createFakeSensorSource({
+      id: "b",
+      channels: [{ key: "depthM", label: "Depth", unit: "ft" }],
+    });
+
+    expect(() =>
+      createWebTrackRecorderInternal({ resumeFrom: stored, sensors: [feet] }, env.environment),
+    ).toThrow(RecorderResumeError);
   });
 });

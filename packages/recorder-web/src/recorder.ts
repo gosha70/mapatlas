@@ -87,6 +87,17 @@ function toRecorderError(failure: PositionFailure): TrackRecorderError {
  */
 export const DEFAULT_AUTOSAVE_MS = 10_000;
 
+/** Two configured sensors describe one channel key differently. */
+export class ChannelConflictError extends Error {
+  readonly channelKey: string;
+
+  constructor(channelKey: string, detail: string) {
+    super(`conflicting channel definitions: ${detail}`);
+    this.name = "ChannelConflictError";
+    this.channelKey = channelKey;
+  }
+}
+
 /** A track offered to `resumeFrom` that cannot be continued. */
 export class RecorderResumeError extends Error {
   readonly reason: "temporal-order" | "channel-conflict" | "geometry" | "not-interrupted";
@@ -143,16 +154,16 @@ function describeChannel(descriptor: ChannelDescriptor): string {
   });
 }
 
-function assertSameChannel(
+/** The mismatch between two definitions of one channel, or undefined when they agree. */
+function channelMismatch(
   existing: ChannelDescriptor,
   incoming: ChannelDescriptor,
   context: string,
-): void {
-  if (describeChannel(existing) === describeChannel(incoming)) return;
-  throw new RecorderResumeError(
-    "channel-conflict",
+): string | undefined {
+  if (describeChannel(existing) === describeChannel(incoming)) return undefined;
+  return (
     `channel "${incoming.key}" ${context}: ${describeChannel(existing)} ` +
-      `does not match ${describeChannel(incoming)}`,
+    `does not match ${describeChannel(incoming)}`
   );
 }
 
@@ -171,7 +182,15 @@ function collectSensorChannels(sensors: readonly SensorSource[]): ChannelDescrip
         byKey.set(descriptor.key, { ...descriptor });
         continue;
       }
-      assertSameChannel(existing, descriptor, `is declared twice by the configured sensors`);
+      const mismatch = channelMismatch(
+        existing,
+        descriptor,
+        "is declared twice by the configured sensors",
+      );
+      // A configuration fault, not a recovery one: this path runs whether or not a track is
+      // being resumed, and reporting it as "cannot resume this track" would send a reader
+      // looking for a snapshot that does not exist.
+      if (mismatch !== undefined) throw new ChannelConflictError(descriptor.key, mismatch);
     }
   }
   return [...byKey.values()];
@@ -197,7 +216,12 @@ function mergeChannelDescriptors(
       merged.set(descriptor.key, { ...descriptor });
       continue;
     }
-    assertSameChannel(existing, descriptor, "was recorded under a different definition");
+    const mismatch = channelMismatch(
+      existing,
+      descriptor,
+      "was recorded under a different definition",
+    );
+    if (mismatch !== undefined) throw new RecorderResumeError("channel-conflict", mismatch);
   }
 
   return [...merged.values()];
@@ -271,6 +295,15 @@ export function createWebTrackRecorderInternal(
    * on writing snapshots the consumer had asked not to have.
    */
   const autosaveMs = options.autosaveMs ?? DEFAULT_AUTOSAVE_MS;
+  // Exactly `0`, or a positive finite number of milliseconds. Anything else is rejected
+  // rather than given an undocumented meaning: `Infinity` reached `setInterval` unchanged,
+  // and a negative or NaN interval quietly acquired the "disabled" sense that only `0` has.
+  // Same boundary the polling sensor source enforces.
+  if (autosaveMs !== 0 && (!Number.isFinite(autosaveMs) || autosaveMs <= 0)) {
+    throw new RangeError(
+      `autosaveMs must be 0 or a positive, finite number of milliseconds: ${autosaveMs}`,
+    );
+  }
   const autosaveEnabled = options.store !== undefined && autosaveMs > 0;
 
   let writeInFlight: Promise<void> | undefined;

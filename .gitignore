@@ -154,3 +154,9 @@ vite.config.ts.timestamp-*
 *.pmtiles
 *.mbtiles
 /tmp/
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

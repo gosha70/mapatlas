@@ -418,7 +418,8 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   The source *kind* cross-check is the one MapLibre makes at no point: terrain over ordinary
   imagery renders flat, indistinguishable from a DEM whose tiles failed.
 
-  Desired and **applied** terrain are tracked separately. `setTerrain(dem); setTerrain(null);
+  Desired terrain is stored separately from renderer-applied terrain; applied state is **read
+  from the renderer, never mirrored**. `setTerrain(dem); setTerrain(null);
   setTerrain(dem2)` before load makes **zero** MapLibre calls, and load makes exactly one, after
   the sources. After load, replacing terrain needs no `null` between — MapLibre takes a new
   definition directly; the explicit release exists only for the case where the DEM is about to

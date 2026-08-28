@@ -27,6 +27,9 @@ const ACTIVATION_KEYS: ReadonlySet<string> = new Set([" ", "Enter", "Spacebar"])
 
 export const MARK_WRAPPER_CLASS = "mapatlas-marker";
 
+/** The consumer's markup lives here, hidden from assistive tech and refreshed in place. */
+const CONTENT_CLASS = "mapatlas-marker__content";
+
 /**
  * Build the wrapper for one mark.
  *
@@ -78,4 +81,35 @@ export function createMarkerElement(
   }
 
   return wrapper;
+}
+
+/**
+ * Bring an existing wrapper up to date with a style.
+ *
+ * A mark that survives a re-render keeps its element, so a keyboard user does not lose focus
+ * mid-update — but keeping the element must not mean keeping what it *says*. A lap renamed
+ * between renders would otherwise announce its old name indefinitely, which is worse than
+ * rebuilding: the mark looks maintained and is lying.
+ *
+ * `anchor` is absent here on purpose. It is fixed when the renderer's marker is constructed
+ * and cannot be changed after, so a mark whose anchor changes is rebuilt rather than updated.
+ */
+export function applyMarkerStyle(wrapper: HTMLElement, style: MarkerStyle): void {
+  wrapper.className =
+    style.className === undefined ? MARK_WRAPPER_CLASS : `${MARK_WRAPPER_CLASS} ${style.className}`;
+  wrapper.setAttribute("aria-label", style.ariaLabel);
+
+  if (style.sizePx === undefined) {
+    wrapper.style.removeProperty("width");
+    wrapper.style.removeProperty("height");
+  } else {
+    const [width, height] = style.sizePx;
+    wrapper.style.width = `${String(width)}px`;
+    wrapper.style.height = `${String(height)}px`;
+  }
+  if (style.color === undefined) wrapper.style.removeProperty("color");
+  else wrapper.style.color = style.color;
+
+  const content = wrapper.querySelector(`.${CONTENT_CLASS}`);
+  if (content !== null) content.innerHTML = style.html ?? "";
 }

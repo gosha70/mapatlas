@@ -3,7 +3,7 @@
 import type { LayerSpecification, SourceSpecification, TerrainSpecification } from "maplibre-gl";
 
 import type { EngineFeatureCollection } from "./engine-layers.js";
-import type { MapConstructorOptions, MapLike, MarkerHandle } from "./environment.js";
+import type { MapConstructorOptions, MapLike, MarkerHandle, MarkerOptions } from "./environment.js";
 
 /**
  * A MapLibre stand-in that **enforces MapLibre's rules** rather than merely recording calls.
@@ -61,13 +61,32 @@ function styleTerrain(style: MapConstructorOptions["style"]): TerrainSpecificati
   return declared as TerrainSpecification;
 }
 
-export function createFakeMap(options: MapConstructorOptions): FakeMap {
+/**
+ * State a base style brought with it.
+ *
+ * Modelled separately from `options.style` because the case that matters is a style **URL**:
+ * the renderer fetches it, so nothing can inspect it beforehand, and whatever it declares is
+ * simply present by the time the controller runs.
+ */
+export interface PreinstalledStyleState {
+  readonly sources?: readonly string[];
+  readonly layers?: readonly LayerSpecification[];
+}
+
+export function createFakeMap(
+  options: MapConstructorOptions,
+  preinstalled: PreinstalledStyleState = {},
+): FakeMap {
   const calls: MapCall[] = [];
-  const sources = new Map<string, SourceSpecification>();
-  const layers = new Map<string, LayerSpecification>();
+  const sources = new Map<string, SourceSpecification>(
+    (preinstalled.sources ?? []).map((id) => [id, { type: "geojson" } as SourceSpecification]),
+  );
+  const layers = new Map<string, LayerSpecification>(
+    (preinstalled.layers ?? []).map((layer) => [layer.id, layer]),
+  );
   const sourceData = new Map<string, EngineFeatureCollection>();
   /** Layer ids in draw order, which `beforeId` inserts into rather than appends to. */
-  let order: string[] = [];
+  let order: string[] = (preinstalled.layers ?? []).map((layer) => layer.id);
   let loadListeners: (() => void)[] = [];
   // A style document may declare terrain, and MapLibre applies it without the controller
   // asking. Starting from the style rather than from `null` is what lets a test show that
@@ -208,6 +227,8 @@ export function createFakeMap(options: MapConstructorOptions): FakeMap {
 /** A marker the environment handed out, with what was done to it. */
 export interface FakeMarker extends MarkerHandle {
   readonly element: HTMLElement;
+  /** Fixed at construction by the renderer, which is why an anchor change forces a rebuild. */
+  readonly anchor: "center" | "bottom";
   readonly lngLat: readonly [number, number] | null;
   readonly attached: boolean;
   readonly removed: boolean;
@@ -220,13 +241,14 @@ export interface FakeMarker extends MarkerHandle {
  * can assert the whole accessibility contract on it: the name, the role, the tab stop, and
  * that activating it by keyboard does what clicking it does.
  */
-export function createFakeMarker(element: HTMLElement): FakeMarker {
+export function createFakeMarker(element: HTMLElement, options: MarkerOptions): FakeMarker {
   let lngLat: [number, number] | null = null;
   let attached = false;
   let removed = false;
 
   return {
     element,
+    anchor: options.anchor,
     get lngLat() {
       return lngLat;
     },

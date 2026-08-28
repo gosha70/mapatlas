@@ -10,6 +10,7 @@ import type {
   MapEnvironment,
   MapLike,
   MarkerHandle,
+  MarkerOptions,
 } from "./environment.js";
 import type { MapControllerCore, MapControllerOptions } from "./controller.js";
 import { createMapControllerInternal } from "./controller.js";
@@ -59,10 +60,14 @@ function adapt(map: MapLibreMap): MapLike {
     },
     getLayer: (id) => map.getLayer(id),
     setSourceData: (id: string, data: EngineFeatureCollection) => {
-      // The source is engine-owned and installed before anything calls this, so a missing
-      // one is a bug in the controller rather than something a consumer can cause.
       const source = map.getSource(id) as GeoJSONSource | undefined;
-      source?.setData(data as unknown as Parameters<GeoJSONSource["setData"]>[0]);
+      if (source === undefined) {
+        // Engine sources are installed before anything writes to them, so this is a bug in
+        // the controller. Swallowing it would produce a map with no track and no error —
+        // the failure mode this whole seam exists to make impossible.
+        throw new Error(`map controller: no source "${id}" to write to`);
+      }
+      source.setData(data as unknown as Parameters<GeoJSONSource["setData"]>[0]);
     },
     setTerrain: (terrain) => {
       map.setTerrain(terrain);
@@ -102,8 +107,10 @@ export function createBrowserMapEnvironment(): MapEnvironment {
       );
     },
 
-    createMarker(element: HTMLElement): MarkerHandle {
-      const marker = new Marker({ element });
+    createMarker(element: HTMLElement, options: MarkerOptions): MarkerHandle {
+      // `anchor` has to reach MapLibre's constructor: without it every mark is centred on
+      // its coordinate, so a pin sits half above the place it points at.
+      const marker = new Marker({ element, anchor: options.anchor });
       return {
         setLngLat: (lng, lat) => {
           marker.setLngLat([lng, lat]);

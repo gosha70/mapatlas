@@ -95,6 +95,18 @@ export interface MapConstructorOptions {
   attributionControl: { customAttribution: string[] };
 }
 
+/**
+ * Renderer options fixed when a marker is constructed.
+ *
+ * `anchor` says which part of the element sits on the coordinate — a pin's tip, a dot's
+ * centre — and MapLibre takes it at construction and never after. So it belongs here rather
+ * than in the element styling, and a mark whose anchor changes is rebuilt rather than
+ * updated.
+ */
+export interface MarkerOptions {
+  anchor: "center" | "bottom";
+}
+
 /** A placed marker, from the renderer's own marker implementation. */
 export interface MarkerHandle {
   setLngLat(lng: number, lat: number): void;
@@ -111,7 +123,7 @@ export interface MapEnvironment {
    * the environment owns the renderer's constructors, and the map instance owns operations
    * on a map. A `MapLike` that could build markers would be two things at once.
    */
-  createMarker(element: HTMLElement): MarkerHandle;
+  createMarker(element: HTMLElement, options: MarkerOptions): MarkerHandle;
   /**
    * Where engine-owned marker elements come from.
    *

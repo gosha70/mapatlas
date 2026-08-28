@@ -551,6 +551,57 @@ test("places real, accessible marks in the page", async ({ page }) => {
   // The consumer's markup is inside the wrapper and hidden, so a mark is announced once by
   // its name rather than twice by its name and its contents.
   await expect(marks.first().locator("[aria-hidden='true']")).toHaveCount(1);
+
+  // Laid out with real dimensions. A wrapper with no size and no content is positioned
+  // correctly, sits in the accessibility tree, and draws nothing — a failure no error
+  // reports, because nothing is wrong. Only a real layout engine can settle this.
+  const boxes = await marks.evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    }),
+  );
+  expect(boxes).toHaveLength(2);
+  for (const box of boxes) {
+    expect(box.width).toBeGreaterThan(0);
+    expect(box.height).toBeGreaterThan(0);
+  }
+
+  // And anchored at the tip, not the middle: the anchor has to reach MapLibre's constructor,
+  // or a pin sits half above the place it points at. MapLibre stamps its own class for this.
+  await expect(page.locator(".maplibregl-marker-anchor-bottom")).toHaveCount(2);
+  await expect(page.locator(".maplibregl-marker-anchor-center")).toHaveCount(0);
+});
+
+test("anchors the live position at its centre, not its base", async ({ page }) => {
+  // The other half of the anchor claim: a dot marks a position rather than a place, so it is
+  // centred on the coordinate. Two marks with the same anchor would prove nothing about
+  // whether the value is forwarded at all.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.showLivePosition({ lat: 59.33, lng: 18.06, t: 1_700_000_000_000 });
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION] as const,
+  );
+
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(1);
+  await expect(page.locator(".maplibregl-marker-anchor-center")).toHaveCount(1);
+  await expect(page.locator(".maplibregl-marker-anchor-bottom")).toHaveCount(0);
 });
 
 test("keeps its own layers when the consumer stack is replaced", async ({ page }) => {

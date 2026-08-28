@@ -21,7 +21,7 @@ import {
   buildTrackEndpointFeatures,
   buildTrackLineFeatures,
 } from "../builders/track-geojson.js";
-import { createMarkerElement } from "../marks/marker-element.js";
+import { applyMarkerStyle, createMarkerElement } from "../marks/marker-element.js";
 import type { MarkerStyle } from "../marks/marker-style.js";
 import { builtInMark } from "../marks/marker-style.js";
 import type { EngineFeature, EngineFeatureCollection } from "./engine-layers.js";
@@ -128,6 +128,47 @@ interface PreparedSources {
   readonly kinds: ReadonlyMap<string, TileSourceKind>;
 }
 
+/**
+ * Reject a base style that declares reserved ids.
+ *
+ * Only a style *document* can be checked: a style URL is fetched by the renderer, so a
+ * collision there surfaces as a duplicate-id error at load rather than here. Checking what
+ * can be checked still removes the case a consumer is most likely to hit — pasting a style
+ * that happens to name something under `mapatlas:`.
+ */
+function assertStyleLeavesTheNamespaceAlone(style: string | JSONValue | undefined): void {
+  if (typeof style !== "object" || style === null || Array.isArray(style)) return;
+  const document = style as Record<string, unknown>;
+
+  const sources = document["sources"];
+  if (typeof sources === "object" && sources !== null && !Array.isArray(sources)) {
+    for (const id of Object.keys(sources)) {
+      if (isEngineId(id)) {
+        throw new TileSourceError(
+          id,
+          `"${ENGINE_ID_PREFIX}" is reserved for the engine; a base style may not declare it`,
+        );
+      }
+    }
+  }
+
+  const layers = document["layers"];
+  if (Array.isArray(layers)) {
+    for (const layer of layers) {
+      const id =
+        typeof layer === "object" && layer !== null
+          ? (layer as Record<string, unknown>)["id"]
+          : undefined;
+      if (typeof id === "string" && isEngineId(id)) {
+        throw new TileSourceError(
+          id,
+          `"${ENGINE_ID_PREFIX}" is reserved for the engine; a base style may not declare it`,
+        );
+      }
+    }
+  }
+}
+
 function prepareSources(sources: readonly TileSource[]): PreparedSources {
   for (const source of sources) {
     if (isEngineId(source.id)) {
@@ -211,8 +252,11 @@ function prepareTerrain(
 interface PreparedRender {
   readonly trackLines: EngineFeatureCollection;
   readonly draft: EngineFeatureCollection;
-  readonly marks: readonly PreparedMark[];
-  readonly live: TrackPoint | null;
+  /** Marks the track contributes, kept apart from the events' so neither strands the other. */
+  readonly trackMarks: readonly PreparedMark[];
+  readonly eventMarks: readonly PreparedMark[];
+  /** A copy of the coordinate, never the caller's fix. */
+  readonly live: Position2D | null;
 }
 
 interface PreparedMark {
@@ -225,7 +269,8 @@ function emptyRender(): PreparedRender {
   return {
     trackLines: emptyCollection(),
     draft: emptyCollection(),
-    marks: [],
+    trackMarks: [],
+    eventMarks: [],
     live: null,
   };
 }
@@ -238,8 +283,13 @@ function trackMarks(track: Track | null): PreparedMark[] {
   for (const feature of buildTrackEndpointFeatures(track).features) {
     marks.push(pointMark(feature, feature.properties.kind === "track-start" ? "start" : "finish"));
   }
-  for (const [index, feature] of buildLapFeatures(track).features.entries()) {
-    marks.push({ ...pointMark(feature, "lap"), key: `lap:${track.id}:${String(index)}` });
+  for (const feature of buildLapFeatures(track).features) {
+    // Keyed by the lap's own id, not its position: inserting or removing an earlier lap
+    // would otherwise hand a focused element to a different lap and move it there.
+    marks.push({
+      ...pointMark(feature, "lap"),
+      key: `lap:${track.id}:${feature.properties.lapId ?? "unidentified"}`,
+    });
   }
   return marks;
 }
@@ -306,6 +356,12 @@ export function trackBounds(track: Track): BBox | null {
   return [west, south, east, north];
 }
 
+/** A mark on the map: the renderer's marker and the element it wraps. */
+interface PlacedMarker {
+  readonly marker: MarkerHandle;
+  readonly element: HTMLElement;
+}
+
 /** Padding used when framing a track, so its endpoints are not flush against the edge. */
 const FIT_PADDING_PX = 40;
 
@@ -341,6 +397,7 @@ export function createMapControllerInternal(
 ): MapControllerCore {
   // Before the map exists. A stack that cannot be translated is rejected without leaving a
   // WebGL context behind for a controller the caller never receives.
+  assertStyleLeavesTheNamespaceAlone(options.style);
   let preparedSources = prepareSources(options.sources);
   let desiredTerrain = prepareTerrain(options.terrain ?? null, preparedSources);
 
@@ -366,13 +423,18 @@ export function createMapControllerInternal(
    */
   let installed: BuiltTileSource[] = [];
 
-  /** Track geometry, marks and draft, translated at the call. */
-  let desiredTrack: Track | null = null;
-  let desiredEvents: readonly MapEvent[] = [];
+  /**
+   * Track geometry, marks and draft, translated at the call.
+   *
+   * Nothing the caller owns is kept. `renderTrack` stores the marks it derived rather than
+   * the track, so a later `renderEvents` rebuilds nothing from a `Track` the caller may have
+   * mutated in between — which would move a mark, or make it disagree with the line already
+   * prepared from the same track.
+   */
   let render: PreparedRender = emptyRender();
-  /** Live markers by key, so a re-render moves the ones that stayed rather than churning. */
-  let markers = new Map<string, MarkerHandle>();
-  let liveMarker: MarkerHandle | null = null;
+  /** Placed markers by key, so a re-render updates the ones that stayed rather than churning. */
+  let markers = new Map<string, PlacedMarker>();
+  let liveMarker: PlacedMarker | null = null;
 
   let loaded = false;
   let destroyed = false;
@@ -426,56 +488,88 @@ export function createMapControllerInternal(
    *
    * Asked of the map rather than remembered, for the reason the terrain fix established: a
    * flag records what this controller did, while the map records what is true.
+   *
+   * Each id is checked separately, and deliberately so. Gating the whole install on the
+   * anchor's presence reads "the anchor exists" as "the engine owns this map" — and a base
+   * style that happens to declare one reserved id would then skip *every* source and layer,
+   * leaving a map with no track and nothing to say why. Per-id installation degrades into a
+   * loud duplicate-id error from the renderer instead, which is the correct outcome for a
+   * collision this controller cannot prevent.
    */
   function installEngineState(): void {
-    if (map.getLayer(ENGINE_LAYER_ANCHOR) !== undefined) return;
-    for (const [id, source] of ENGINE_SOURCES) map.addSource(id, source);
-    for (const layer of ENGINE_LAYERS) map.addLayer(layer);
+    for (const [id, source] of ENGINE_SOURCES) {
+      if (!installedSources.has(id)) {
+        map.addSource(id, source);
+        installedSources.add(id);
+      }
+    }
+    for (const layer of ENGINE_LAYERS) {
+      if (map.getLayer(layer.id) === undefined) map.addLayer(layer);
+    }
   }
+
+  /** Engine sources this controller added, since the map cannot be asked about a source. */
+  const installedSources = new Set<string>();
 
   /** Push prepared geometry into the persistent sources, and reconcile the marker set. */
   function applyRender(): void {
     map.setSourceData(ENGINE_SOURCE.track, render.trackLines);
     map.setSourceData(ENGINE_SOURCE.draft, render.draft);
 
-    const next = new Map<string, MarkerHandle>();
-    for (const mark of render.marks) {
-      const [lng, lat] = mark.lngLat;
-      // A mark that was already there is moved rather than rebuilt: recreating the element
-      // would drop focus, which is exactly what a keyboard user would be holding.
+    const next = new Map<string, PlacedMarker>();
+    for (const mark of [...render.trackMarks, ...render.eventMarks]) {
       const existing = markers.get(mark.key);
-      if (existing !== undefined) {
-        existing.setLngLat(lng, lat);
-        next.set(mark.key, existing);
-        markers.delete(mark.key);
-        continue;
-      }
-      const marker = environment.createMarker(
-        createMarkerElement(environment.document, mark.style),
-      );
-      marker.setLngLat(lng, lat);
-      marker.addTo(map);
-      next.set(mark.key, marker);
+      if (existing !== undefined) markers.delete(mark.key);
+      next.set(mark.key, place(mark, existing));
     }
-    for (const stale of markers.values()) stale.remove();
+    for (const stale of markers.values()) stale.marker.remove();
     markers = next;
 
     applyLivePosition();
   }
 
+  /**
+   * Put one mark on the map, reusing the element behind it where that is safe.
+   *
+   * Reuse keeps focus: recreating the element would drop it, and a keyboard user is exactly
+   * who would be holding it when a track updates underneath them. But keeping the element
+   * must not mean keeping what it says — a lap renamed between renders would announce its
+   * old name indefinitely — so the style is reapplied every time.
+   *
+   * `anchor` is not updated, because MapLibre fixes it when the marker is constructed. That
+   * is safe **only while every mark's anchor follows from its kind**, which is true of the
+   * built-ins: a key that reuses an element always describes the same kind of mark. T4.4 ends
+   * that guarantee by letting a consumer choose the anchor, and must rebuild rather than
+   * reuse when it changes — recorded there rather than guessed at here, since a branch no
+   * test can reach is a branch nothing keeps honest.
+   */
+  function place(mark: PreparedMark, existing: PlacedMarker | undefined): PlacedMarker {
+    const [lng, lat] = mark.lngLat;
+
+    if (existing !== undefined) {
+      applyMarkerStyle(existing.element, mark.style);
+      existing.marker.setLngLat(lng, lat);
+      return existing;
+    }
+
+    const element = createMarkerElement(environment.document, mark.style);
+    const marker = environment.createMarker(element, { anchor: mark.style.anchor ?? "bottom" });
+    marker.setLngLat(lng, lat);
+    marker.addTo(map);
+    return { marker, element };
+  }
+
   function applyLivePosition(): void {
     if (render.live === null) {
-      liveMarker?.remove();
+      liveMarker?.marker.remove();
       liveMarker = null;
       return;
     }
-    if (liveMarker === null) {
-      liveMarker = environment.createMarker(
-        createMarkerElement(environment.document, builtInMark("live")),
-      );
-      liveMarker.addTo(map);
-    }
-    liveMarker.setLngLat(render.live.lng, render.live.lat);
+    const [lng, lat] = render.live;
+    liveMarker = place(
+      { key: "live", lngLat: [lng, lat], style: builtInMark("live") },
+      liveMarker ?? undefined,
+    );
   }
 
   /** Re-translate everything the engine draws, then apply it if the map can take it. */
@@ -538,19 +632,18 @@ export function createMapControllerInternal(
 
     renderTrack(track: Track | null): void {
       if (destroyed) throw new MapControllerDestroyedError("renderTrack");
-      desiredTrack = track;
+      // Both projections are taken here, from the same track, in one pass. Keeping the track
+      // and re-deriving marks on the next `renderEvents` would read a caller's object again,
+      // and a mutation in between would leave marks disagreeing with the line beside them.
       prepareRender({
         trackLines: track === null ? emptyCollection() : buildTrackLineFeatures(track),
-        // Marks are rebuilt from both, because a track's own marks and its events share one
-        // marker set and reconciling half of it would strand the other half.
-        marks: [...trackMarks(track), ...eventMarks(desiredEvents)],
+        trackMarks: trackMarks(track),
       });
     },
 
     renderEvents(events: MapEvent[]): void {
       if (destroyed) throw new MapControllerDestroyedError("renderEvents");
-      desiredEvents = events;
-      prepareRender({ marks: [...trackMarks(desiredTrack), ...eventMarks(events)] });
+      prepareRender({ eventMarks: eventMarks(events) });
     },
 
     renderDraft(points: DraftTrackPoint[] | null): void {
@@ -560,7 +653,9 @@ export function createMapControllerInternal(
 
     showLivePosition(point: TrackPoint | null): void {
       if (destroyed) throw new MapControllerDestroyedError("showLivePosition");
-      prepareRender({ live: point });
+      // The coordinate, copied — not the fix. A recorder that reuses one point object per
+      // update would otherwise move a mark that was never asked to move.
+      prepareRender({ live: point === null ? null : [point.lng, point.lat] });
     },
 
     fitTrack(track: Track): void {
@@ -596,9 +691,9 @@ export function createMapControllerInternal(
       installed = [];
       // Markers live in the DOM outside MapLibre's container-emptying, so they are removed
       // explicitly rather than left behind as orphaned nodes holding listeners.
-      for (const marker of markers.values()) marker.remove();
+      for (const placed of markers.values()) placed.marker.remove();
       markers = new Map();
-      liveMarker?.remove();
+      liveMarker?.marker.remove();
       liveMarker = null;
       map.remove();
     },

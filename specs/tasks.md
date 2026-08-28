@@ -502,7 +502,13 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   `setPresentation` **prepares the currently desired track and events against the prospective
   presentation before committing it**, so a consumer callback that throws leaves both the
   visible map and desired state unchanged — the same transactional rule `setSources` follows for
-  terrain. _AC:_ two events of different `category` render with different consumer-supplied
+  terrain.
+
+  **A mark whose `anchor` changes must be rebuilt, not reused.** T4.3 reuses a mark's element
+  across renders to preserve focus and reapplies its style, but the renderer fixes `anchor` when
+  the marker is constructed and it cannot be updated after. That is safe in T4.3 only because
+  every built-in mark's anchor follows from its kind, so a reused element always describes the
+  same kind of mark. Consumer-chosen anchors end that guarantee. _AC:_ two events of different `category` render with different consumer-supplied
   marks and their `ariaLabel`s; with no presentation supplied, neutral defaults render and no
   consumer branding appears; a presentation whose `marker()` throws changes nothing.
 - **T4.5 Draw/edit mode.** `enterDrawMode` with add/move/click vertex handlers and draggable

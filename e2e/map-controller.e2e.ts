@@ -466,3 +466,142 @@ test("takes ownership of terrain a base style declared", async ({ page }) => {
     .poll(async () => page.evaluate(() => window.mapatlas.probe?.getTerrain() ?? null))
     .toBeNull();
 });
+
+/** A short track with two points, so it has a line, a start mark and a finish mark. */
+const TRACK = {
+  id: "trk-1",
+  startedAt: 1_700_000_000_000,
+  status: "finalized",
+  origin: "recorded",
+  points: [
+    { lat: 59.33, lng: 18.06, t: 1_700_000_000_000 },
+    { lat: 59.34, lng: 18.07, t: 1_700_000_060_000 },
+  ],
+  segments: [{ id: "seg-1", startIndex: 0, endIndex: 1, startedAt: 1_700_000_000_000 }],
+};
+
+test("renders a track through layers MapLibre actually accepts", async ({ page }) => {
+  // The engine's own layers carry filter expressions — `["==", ["geometry-type"], "Point"]` —
+  // and MapLibre validates those. It can report a validation error and return *without*
+  // adding the layer rather than throwing, so their presence has to be asked of the library.
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, track]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.renderTrack(track as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, TRACK] as const,
+  );
+
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
+  const layers = await page.evaluate(() => ({
+    track: window.mapatlas.probe?.hasLayer("mapatlas:track-line") ?? false,
+    draftLine: window.mapatlas.probe?.hasLayer("mapatlas:draft-line") ?? false,
+    draftVertex: window.mapatlas.probe?.hasLayer("mapatlas:draft-vertex") ?? false,
+  }));
+  expect(layers).toEqual({ track: true, draftLine: true, draftVertex: true });
+  expect(errors).toEqual([]);
+});
+
+test("places real, accessible marks in the page", async ({ page }) => {
+  // The accessibility contract asserted against a real browser's DOM rather than an
+  // implementation of one: a name, a role, and a tab stop on an element the engine owns,
+  // with the consumer's markup hidden inside it.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, track]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.renderTrack(track as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, TRACK] as const,
+  );
+
+  const marks = page.locator(".mapatlas-marker");
+  await expect(marks).toHaveCount(2);
+  await expect(marks.first()).toHaveAttribute("role", "img");
+  await expect(marks.first()).toHaveAttribute("aria-label", /Track (start|finish)/);
+  // The consumer's markup is inside the wrapper and hidden, so a mark is announced once by
+  // its name rather than twice by its name and its contents.
+  await expect(marks.first().locator("[aria-hidden='true']")).toHaveCount(1);
+});
+
+test("keeps its own layers when the consumer stack is replaced", async ({ page }) => {
+  // MapLibre throws on an unknown `beforeId`, so a broken anchor surfaces here as a page
+  // error rather than as a track quietly drawn beneath a fresh basemap.
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, track]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.renderTrack(track as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, TRACK] as const,
+  );
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
+
+  await page.evaluate(
+    ([raster]) => {
+      window.mapatlas.probe?.controller.setSources([
+        {
+          id: "replacement",
+          kind: "raster",
+          transport: "template",
+          url: raster as string,
+          attribution: "Replacement basemap",
+        },
+      ]);
+    },
+    [RASTER_TEMPLATE] as const,
+  );
+
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText("Replacement basemap");
+  expect(await page.evaluate(() => window.mapatlas.probe?.hasLayer("mapatlas:track-line"))).toBe(
+    true,
+  );
+  // The marks survive too: they are DOM, not layers, and nothing about the basemap changing
+  // should disturb where the user's track began and ended.
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(2);
+  expect(errors).toEqual([]);
+});

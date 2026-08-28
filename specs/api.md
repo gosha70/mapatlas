@@ -840,8 +840,13 @@ export declare function createMapController(o: MapControllerOptions): MapControl
 
 **Delivery:** `createMapController` is built across Phase 4 and is **not yet on the package
 barrel**. T4.1 delivers construction plus `setSources`/`destroy`; T4.2 adds `setTerrain`; T4.3
-adds the track, event, draft and camera methods. The factory is exported from the barrel — and
-this declaration becomes true — when the returned object satisfies the whole interface.
+adds `renderTrack`, `renderEvents`, `renderDraft`, `showLivePosition` and the camera methods;
+T4.4 adds `setPresentation`; T4.5 adds `enterDrawMode`; T4.7 adds `onMapTap` and `onEventClick`.
+
+The factory is exported from the barrel — and this declaration becomes true — only when the
+returned object provides **every** method above. Until then it provides none of them as
+placeholders: a method that exists and throws "not supported yet" is worse than one that is
+absent, because a consumer discovers the gap at runtime instead of at compile time.
 
 **Contract:** MapLibre rejects `addSource`/`addLayer` until its style has loaded, so
 `createMapController` returns synchronously while installation waits for that event. The

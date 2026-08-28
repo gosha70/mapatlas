@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { Map as MapLibreMap, addProtocol } from "maplibre-gl";
-import type { StyleSpecification } from "maplibre-gl";
+import { Map as MapLibreMap, Marker, addProtocol } from "maplibre-gl";
+import type { GeoJSONSource, LayerSpecification, StyleSpecification } from "maplibre-gl";
 import { Protocol } from "pmtiles";
 
-import type { MapConstructorOptions, MapEnvironment, MapLike } from "./environment.js";
+import type { EngineFeatureCollection } from "./engine-layers.js";
+import type {
+  MapConstructorOptions,
+  MapEnvironment,
+  MapLike,
+  MarkerHandle,
+} from "./environment.js";
 import type { MapControllerCore, MapControllerOptions } from "./controller.js";
 import { createMapControllerInternal } from "./controller.js";
 
@@ -14,18 +20,105 @@ import { createMapControllerInternal } from "./controller.js";
  * This module is the only one in the package that imports `maplibre-gl` and `pmtiles` as
  * **values**; everything else takes types, which erase. That is what keeps the builders and
  * the controller's own logic testable in Node with no DOM and no WebGL.
+ *
+ * `createMap` returns an adapter rather than the `Map` itself. Most of `MapLike` is a subset
+ * of MapLibre's own surface, but `setSourceData` is not: MapLibre spells it
+ * `getSource(id).setData(...)`, and a seam shaped around a two-step lookup would push a cast
+ * into every caller. The seam says what the engine needs; the adapter says how MapLibre
+ * provides it.
  */
+/**
+ * Which real map is behind each adapter.
+ *
+ * A marker has to be added *to a map*, and the adapter deliberately does not expose the one
+ * it wraps — a seam that leaked its implementation would let anything reach past it. The
+ * environment builds both, so it is the one place entitled to know the pairing, and a
+ * WeakMap keeps it from holding a destroyed map alive.
+ */
+const backing = new WeakMap<MapLike, MapLibreMap>();
+
+function adapt(map: MapLibreMap): MapLike {
+  const adapter: MapLike = {
+    on: (type, listener) => {
+      map.on(type, listener);
+    },
+    off: (type, listener) => {
+      map.off(type, listener);
+    },
+    addSource: (id, source) => {
+      map.addSource(id, source);
+    },
+    removeSource: (id) => {
+      map.removeSource(id);
+    },
+    addLayer: (layer: LayerSpecification, beforeId?: string) => {
+      map.addLayer(layer, beforeId);
+    },
+    removeLayer: (id) => {
+      map.removeLayer(id);
+    },
+    getLayer: (id) => map.getLayer(id),
+    setSourceData: (id: string, data: EngineFeatureCollection) => {
+      // The source is engine-owned and installed before anything calls this, so a missing
+      // one is a bug in the controller rather than something a consumer can cause.
+      const source = map.getSource(id) as GeoJSONSource | undefined;
+      source?.setData(data as unknown as Parameters<GeoJSONSource["setData"]>[0]);
+    },
+    setTerrain: (terrain) => {
+      map.setTerrain(terrain);
+    },
+    getTerrain: () => map.getTerrain(),
+    fitBounds: ([west, south, east, north], paddingPx) => {
+      map.fitBounds(
+        [
+          [west, south],
+          [east, north],
+        ],
+        { padding: paddingPx, animate: false },
+      );
+    },
+    jumpTo: (camera) => {
+      map.jumpTo(camera.zoom === undefined ? { center: camera.center } : camera);
+    },
+    remove: () => {
+      map.remove();
+    },
+  };
+  backing.set(adapter, map);
+  return adapter;
+}
+
 export function createBrowserMapEnvironment(): MapEnvironment {
   return {
     createMap(options: MapConstructorOptions): MapLike {
-      return new MapLibreMap({
-        container: options.container,
-        style: options.style as StyleSpecification | string,
-        ...(options.center === undefined ? {} : { center: options.center }),
-        ...(options.zoom === undefined ? {} : { zoom: options.zoom }),
-        attributionControl: options.attributionControl,
-      });
+      return adapt(
+        new MapLibreMap({
+          container: options.container,
+          style: options.style as StyleSpecification | string,
+          ...(options.center === undefined ? {} : { center: options.center }),
+          ...(options.zoom === undefined ? {} : { zoom: options.zoom }),
+          attributionControl: options.attributionControl,
+        }),
+      );
     },
+
+    createMarker(element: HTMLElement): MarkerHandle {
+      const marker = new Marker({ element });
+      return {
+        setLngLat: (lng, lat) => {
+          marker.setLngLat([lng, lat]);
+        },
+        addTo: (map) => {
+          const underlying = backing.get(map);
+          if (underlying !== undefined) marker.addTo(underlying);
+        },
+        remove: () => {
+          marker.remove();
+        },
+      };
+    },
+
+    document: globalThis.document,
 
     protocolRegistrar: {
       addProtocol(scheme: string, handler: unknown): void {

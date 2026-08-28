@@ -1,11 +1,41 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { JSONValue, LatLng, TerrainOptions, TileSource, TileSourceKind } from "@mapatlas/core";
+import type {
+  BBox,
+  DraftTrackPoint,
+  JSONValue,
+  LatLng,
+  MapEvent,
+  TerrainOptions,
+  TileSource,
+  TileSourceKind,
+  Track,
+  TrackPoint,
+} from "@mapatlas/core";
 
 import type { BuiltTileSource } from "../builders/tile-source.js";
-import { buildTileSources, usesPmtiles } from "../builders/tile-source.js";
+import { TileSourceError, buildTileSources, usesPmtiles } from "../builders/tile-source.js";
+import type { PointFeature, Position2D } from "../builders/track-geojson.js";
+import {
+  buildLapFeatures,
+  buildTrackEndpointFeatures,
+  buildTrackLineFeatures,
+} from "../builders/track-geojson.js";
+import { createMarkerElement } from "../marks/marker-element.js";
+import type { MarkerStyle } from "../marks/marker-style.js";
+import { builtInMark } from "../marks/marker-style.js";
+import type { EngineFeature, EngineFeatureCollection } from "./engine-layers.js";
+import {
+  ENGINE_ID_PREFIX,
+  ENGINE_LAYERS,
+  ENGINE_LAYER_ANCHOR,
+  ENGINE_SOURCE,
+  ENGINE_SOURCES,
+  emptyCollection,
+  isEngineId,
+} from "./engine-layers.js";
 import { ensurePmtilesProtocol } from "../protocols/pmtiles.js";
-import type { MapEnvironment, MapLike } from "./environment.js";
+import type { MapEnvironment, MapLike, MarkerHandle } from "./environment.js";
 
 /**
  * The map controller's source stack and terrain (T4.1, T4.2).
@@ -99,6 +129,17 @@ interface PreparedSources {
 }
 
 function prepareSources(sources: readonly TileSource[]): PreparedSources {
+  for (const source of sources) {
+    if (isEngineId(source.id)) {
+      // Rejected during preparation, before any desired state changes — the same treatment a
+      // duplicate id gets, and for the same reason: MapLibre keys by id, so a collision means
+      // one of them silently wins, and here the loser would be the user's own track.
+      throw new TileSourceError(
+        source.id,
+        `"${ENGINE_ID_PREFIX}" is reserved for engine-owned sources and layers`,
+      );
+    }
+  }
   return {
     built: buildTileSources(sources),
     needsPmtiles: sources.some(usesPmtiles),
@@ -156,10 +197,129 @@ function prepareTerrain(
   return { source: terrain.sourceId, exaggeration };
 }
 
+/**
+ * Everything the engine draws, translated at the call and applied when the map can take it.
+ *
+ * Same discipline as sources and terrain: `renderTrack` builds its features immediately, so
+ * a track handed over before the style loads is already GeoJSON by the time `load` fires,
+ * and nothing has to be remembered about *how* to build it later.
+ *
+ * Lines live in GeoJSON sources; marks are DOM markers. That split is not stylistic —
+ * `MarkerStyle.html` is inserted verbatim and every mark has to be keyboard-reachable, and a
+ * symbol layer is neither.
+ */
+interface PreparedRender {
+  readonly trackLines: EngineFeatureCollection;
+  readonly draft: EngineFeatureCollection;
+  readonly marks: readonly PreparedMark[];
+  readonly live: TrackPoint | null;
+}
+
+interface PreparedMark {
+  readonly key: string;
+  readonly lngLat: Position2D;
+  readonly style: MarkerStyle;
+}
+
+function emptyRender(): PreparedRender {
+  return {
+    trackLines: emptyCollection(),
+    draft: emptyCollection(),
+    marks: [],
+    live: null,
+  };
+}
+
+/** Start, finish and lap marks for a track, in the order they occur along it. */
+function trackMarks(track: Track | null): PreparedMark[] {
+  if (track === null) return [];
+  const marks: PreparedMark[] = [];
+
+  for (const feature of buildTrackEndpointFeatures(track).features) {
+    marks.push(pointMark(feature, feature.properties.kind === "track-start" ? "start" : "finish"));
+  }
+  for (const [index, feature] of buildLapFeatures(track).features.entries()) {
+    marks.push({ ...pointMark(feature, "lap"), key: `lap:${track.id}:${String(index)}` });
+  }
+  return marks;
+}
+
+function pointMark(feature: PointFeature, kind: "start" | "finish" | "lap"): PreparedMark {
+  return {
+    key: `${feature.properties.kind}:${feature.properties.trackId}`,
+    lngLat: feature.geometry.coordinates,
+    style: builtInMark(kind, feature.properties.label),
+  };
+}
+
+/** A mark per event, keyed by event id so a re-render of the same events is stable. */
+function eventMarks(events: readonly MapEvent[]): PreparedMark[] {
+  return events.map((event) => ({
+    key: `event:${event.id}`,
+    lngLat: [event.position.lng, event.position.lat] as Position2D,
+    style: builtInMark("event"),
+  }));
+}
+
+/**
+ * The draft as a line plus its vertices, from one source.
+ *
+ * A single point is a vertex and no line, for the same reason a singleton segment is: a
+ * `LineString` needs two positions, and an invalid one is either rejected or drawn as
+ * nothing.
+ */
+function draftFeatures(points: readonly DraftTrackPoint[] | null): EngineFeatureCollection {
+  if (points === null || points.length === 0) return emptyCollection();
+
+  const coordinates: Position2D[] = points.map((point) => [point.lng, point.lat]);
+  const features: EngineFeature[] = coordinates.map((coordinate, index) => ({
+    type: "Feature",
+    geometry: { type: "Point", coordinates: coordinate },
+    properties: { kind: "draft-vertex", index },
+  }));
+
+  if (coordinates.length > 1) {
+    features.unshift({
+      type: "Feature",
+      geometry: { type: "LineString", coordinates },
+      properties: { kind: "draft-line" },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+/** The bounding box of every point in a track, or `null` for a track with none. */
+export function trackBounds(track: Track): BBox | null {
+  const first = track.points[0];
+  if (first === undefined) return null;
+
+  let west = first.lng;
+  let east = first.lng;
+  let south = first.lat;
+  let north = first.lat;
+  for (const point of track.points) {
+    if (point.lng < west) west = point.lng;
+    if (point.lng > east) east = point.lng;
+    if (point.lat < south) south = point.lat;
+    if (point.lat > north) north = point.lat;
+  }
+  return [west, south, east, north];
+}
+
+/** Padding used when framing a track, so its endpoints are not flush against the edge. */
+const FIT_PADDING_PX = 40;
+
 /** The part of `MapController` delivered so far. Widened by T4.3 (track and events). */
 export interface MapControllerCore {
   setSources(sources: TileSource[]): void;
   setTerrain(terrain: TerrainOptions | null): void;
+  renderTrack(track: Track | null): void;
+  renderEvents(events: MapEvent[]): void;
+  renderDraft(points: DraftTrackPoint[] | null): void;
+  showLivePosition(point: TrackPoint | null): void;
+  fitTrack(track: Track): void;
+  fitBounds(bbox: BBox, paddingPx?: number): void;
+  recenter(to: LatLng, zoom?: number): void;
   destroy(): void;
 }
 
@@ -199,8 +359,21 @@ export function createMapControllerInternal(
     },
   });
 
-  /** What the map does show, so teardown removes exactly what was added. */
+  /**
+   * What the map shows for the **consumer's** stack, so teardown removes exactly what was
+   * added. Engine sources and layers are tracked nowhere: they are installed once, never
+   * removed, and their presence is asked of the map.
+   */
   let installed: BuiltTileSource[] = [];
+
+  /** Track geometry, marks and draft, translated at the call. */
+  let desiredTrack: Track | null = null;
+  let desiredEvents: readonly MapEvent[] = [];
+  let render: PreparedRender = emptyRender();
+  /** Live markers by key, so a re-render moves the ones that stayed rather than churning. */
+  let markers = new Map<string, MarkerHandle>();
+  let liveMarker: MarkerHandle | null = null;
+
   let loaded = false;
   let destroyed = false;
 
@@ -222,22 +395,93 @@ export function createMapControllerInternal(
     //    leaving style terrain running under a controller that believes it has none.
     if (map.getTerrain() !== null) map.setTerrain(null);
 
-    // 2. Layers before sources, for the same reason one step down. The reverse order would
+    // 2. Engine state, once. Before the consumer layers, because they are inserted *below*
+    //    its first layer and MapLibre rejects a `beforeId` that is not in the style yet.
+    installEngineState();
+
+    // 3. Layers before sources, for the same reason one step down. The reverse order would
     //    leave the map with layers pointing at nothing.
     for (const entry of installed) for (const layer of entry.layers) map.removeLayer(layer.id);
     for (const entry of installed) map.removeSource(entry.id);
     installed = [];
 
-    // 3. Declared order, because MapLibre draws layers in the order they are added: the
-    //    stack a consumer describes is the stack they get.
+    // 4. Declared order, because MapLibre draws layers in the order they are added: the
+    //    stack a consumer describes is the stack they get. Every one goes *below* the engine
+    //    anchor, so a replaced basemap cannot land on top of the track it sits beneath.
     for (const entry of built) {
       map.addSource(entry.id, entry.source);
-      for (const layer of entry.layers) map.addLayer(layer);
+      for (const layer of entry.layers) map.addLayer(layer, ENGINE_LAYER_ANCHOR);
       installed.push(entry);
     }
 
-    // 4. Terrain last, once the DEM it names is back in the style.
+    // 5. Terrain last, once the DEM it names is back in the style.
     applyTerrain();
+
+    // 6. And whatever the engine was asked to draw, which survives every stack replacement.
+    applyRender();
+  }
+
+  /**
+   * Install the engine's own sources and layers, once per style.
+   *
+   * Asked of the map rather than remembered, for the reason the terrain fix established: a
+   * flag records what this controller did, while the map records what is true.
+   */
+  function installEngineState(): void {
+    if (map.getLayer(ENGINE_LAYER_ANCHOR) !== undefined) return;
+    for (const [id, source] of ENGINE_SOURCES) map.addSource(id, source);
+    for (const layer of ENGINE_LAYERS) map.addLayer(layer);
+  }
+
+  /** Push prepared geometry into the persistent sources, and reconcile the marker set. */
+  function applyRender(): void {
+    map.setSourceData(ENGINE_SOURCE.track, render.trackLines);
+    map.setSourceData(ENGINE_SOURCE.draft, render.draft);
+
+    const next = new Map<string, MarkerHandle>();
+    for (const mark of render.marks) {
+      const [lng, lat] = mark.lngLat;
+      // A mark that was already there is moved rather than rebuilt: recreating the element
+      // would drop focus, which is exactly what a keyboard user would be holding.
+      const existing = markers.get(mark.key);
+      if (existing !== undefined) {
+        existing.setLngLat(lng, lat);
+        next.set(mark.key, existing);
+        markers.delete(mark.key);
+        continue;
+      }
+      const marker = environment.createMarker(
+        createMarkerElement(environment.document, mark.style),
+      );
+      marker.setLngLat(lng, lat);
+      marker.addTo(map);
+      next.set(mark.key, marker);
+    }
+    for (const stale of markers.values()) stale.remove();
+    markers = next;
+
+    applyLivePosition();
+  }
+
+  function applyLivePosition(): void {
+    if (render.live === null) {
+      liveMarker?.remove();
+      liveMarker = null;
+      return;
+    }
+    if (liveMarker === null) {
+      liveMarker = environment.createMarker(
+        createMarkerElement(environment.document, builtInMark("live")),
+      );
+      liveMarker.addTo(map);
+    }
+    liveMarker.setLngLat(render.live.lng, render.live.lat);
+  }
+
+  /** Re-translate everything the engine draws, then apply it if the map can take it. */
+  function prepareRender(next: Partial<PreparedRender>): void {
+    render = { ...render, ...next };
+    if (loaded) applyRender();
   }
 
   function applyTerrain(): void {
@@ -292,6 +536,56 @@ export function createMapControllerInternal(
       if (loaded) applyTerrain();
     },
 
+    renderTrack(track: Track | null): void {
+      if (destroyed) throw new MapControllerDestroyedError("renderTrack");
+      desiredTrack = track;
+      prepareRender({
+        trackLines: track === null ? emptyCollection() : buildTrackLineFeatures(track),
+        // Marks are rebuilt from both, because a track's own marks and its events share one
+        // marker set and reconciling half of it would strand the other half.
+        marks: [...trackMarks(track), ...eventMarks(desiredEvents)],
+      });
+    },
+
+    renderEvents(events: MapEvent[]): void {
+      if (destroyed) throw new MapControllerDestroyedError("renderEvents");
+      desiredEvents = events;
+      prepareRender({ marks: [...trackMarks(desiredTrack), ...eventMarks(events)] });
+    },
+
+    renderDraft(points: DraftTrackPoint[] | null): void {
+      if (destroyed) throw new MapControllerDestroyedError("renderDraft");
+      prepareRender({ draft: draftFeatures(points) });
+    },
+
+    showLivePosition(point: TrackPoint | null): void {
+      if (destroyed) throw new MapControllerDestroyedError("showLivePosition");
+      prepareRender({ live: point });
+    },
+
+    fitTrack(track: Track): void {
+      if (destroyed) throw new MapControllerDestroyedError("fitTrack");
+      // A track with no points has no extent to frame. Moving the camera to an invented one
+      // would be worse than leaving it where the user put it.
+      const bounds = trackBounds(track);
+      if (bounds !== null) map.fitBounds(bounds, FIT_PADDING_PX);
+    },
+
+    fitBounds(bbox: BBox, paddingPx?: number): void {
+      if (destroyed) throw new MapControllerDestroyedError("fitBounds");
+      map.fitBounds(bbox, paddingPx ?? FIT_PADDING_PX);
+    },
+
+    recenter(to: LatLng, zoom?: number): void {
+      if (destroyed) throw new MapControllerDestroyedError("recenter");
+      // Camera moves apply immediately rather than waiting for `load`: a map has a transform
+      // from the moment it exists, and a consumer who recenters before the style resolves
+      // means it now, not eventually.
+      map.jumpTo(
+        zoom === undefined ? { center: [to.lng, to.lat] } : { center: [to.lng, to.lat], zoom },
+      );
+    },
+
     destroy(): void {
       // Idempotent, and deliberately silent about the PMTiles protocol: `addProtocol`
       // installs on the MapLibre runtime rather than on this map, so unregistering it would
@@ -300,6 +594,12 @@ export function createMapControllerInternal(
       destroyed = true;
       map.off("load", onLoad);
       installed = [];
+      // Markers live in the DOM outside MapLibre's container-emptying, so they are removed
+      // explicitly rather than left behind as orphaned nodes holding listeners.
+      for (const marker of markers.values()) marker.remove();
+      markers = new Map();
+      liveMarker?.remove();
+      liveMarker = null;
       map.remove();
     },
   };

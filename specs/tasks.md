@@ -448,23 +448,67 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   clears it.
 
   Twelve terrain mutations each fail at least one test, four of them in the browser.
-- **T4.3 Track & events render.** Live position, **one polyline per segment**, start/finish/lap
-  marks, event marks, `fitTrack`, `fitBounds`, `recenter`.
+- **T4.3 Track, events & draft render.** `renderTrack`, `renderEvents`, `renderDraft`,
+  `showLivePosition`, `fitTrack`, `fitBounds`, `recenter`. **Not** `enterDrawMode` — that is
+  interaction, needs its own event seam, and is T4.5.
   Geometry comes from `simplifiedSegments[n]` when present, falling back to slicing the raw
   points for `segments[n]` — the cache is disposable (ADR-0018), so a track that arrives without
   it must still draw rather than render nothing.
   A **singleton segment** gets no line feature at all: a GeoJSON `LineString` needs at least two
   positions, so one point cannot be a line. Its endpoint and marker rendering stay, since a
-  single kept fix is still a place the user was. _AC:_ renders from fixtures; a two-segment
-  fixture renders two lines with no connecting geometry across the pause; a track with
-  `simplifiedSegments` deleted renders identically in shape; a one-point segment produces marks
-  but no line, and no empty or single-position `LineString` is ever emitted.
-- **T4.4 Presentation seam.** `EventPresentation` for event/start/finish/lap marks and
-  per-segment line style; neutral built-in defaults when absent. _AC:_ two events of different
-  `category` render with different consumer-supplied marks and their `ariaLabel`s; with no
-  presentation supplied, neutral defaults render and no consumer branding appears.
-- **T4.5 Draw/edit mode.** `renderDraft`, `enterDrawMode` with add/move/click vertex handlers
-  and draggable vertices. A third-party drawing library may back this **only** if it is first
+  single kept fix is still a place the user was.
+
+  **Engine state is namespaced and persistent.** Reserved prefix `mapatlas:` for every
+  engine-owned source and layer id; a consumer `TileSource` claiming it is rejected during
+  preparation, before desired state changes, exactly as a duplicate id is. Consumer and engine
+  registries are kept apart so `setSources` tears down only consumer state.
+
+  Ordering belongs to **layers**, not sources: replacing consumer sources would otherwise add
+  their layers above a persistent track layer. `MapLike.addLayer` takes a `beforeId`, and
+  consumer layers are inserted before a stable engine anchor so they stay below engine overlays
+  without those overlays being torn down and rebuilt.
+
+  Engine sources are installed **once** after load and updated through `setData` thereafter, so
+  live position and draft edits cause no layer-order drift and no teardown churn.
+  `renderTrack(null)`, `renderEvents([])`, `renderDraft(null)` and `showLivePosition(null)` apply
+  **empty feature collections** and remove the corresponding DOM markers rather than removing
+  sources and layers.
+
+  **Marks are DOM markers**, since `MarkerStyle.html` is inserted verbatim and must be
+  keyboard-reachable. Marker construction belongs to `MapEnvironment`, not `MapLike`: the
+  environment owns the renderer's constructors, the map instance owns map operations. A marker
+  is not accessible for having an `aria-label`, so the engine owns a wrapper element carrying
+  the `aria-label`, a `tabIndex`, an appropriate `role`, and Enter/Space activation for
+  clickable event marks; consumer-authored `html` is inserted inside it.
+
+  _AC:_ renders from fixtures; a two-segment fixture renders two lines with no connecting
+  geometry across the pause; a track with `simplifiedSegments` deleted renders identically in
+  shape; a one-point segment produces marks but no line, and no empty or single-position
+  `LineString` is ever emitted; a consumer source id under `mapatlas:` is rejected before any
+  state changes; replacing consumer sources leaves engine sources, layers and their relative
+  order untouched; clearing any engine layer applies an empty collection rather than removing
+  it; a mark that persists across a re-render is **moved, not rebuilt**, since recreating the
+  element would drop the focus a keyboard user is holding; every marker the engine creates
+  satisfies the full accessibility contract.
+
+  **What each lane proves.** Layer *ordering* is settled deterministically: the fake models
+  insertion position and rejects an unknown `beforeId` exactly as MapLibre does, so appending
+  instead of anchoring fails there. The browser lane proves something different and
+  complementary — that MapLibre accepts the engine's layers at all, filter expressions included,
+  and that a **broken** anchor fails loudly. It does not prove ordering, because `getLayer` says
+  nothing about position; the claim is not made.
+- **T4.4 Presentation seam.** `setPresentation`, `EventPresentation` for event/start/finish/lap
+  marks and per-segment line style; neutral built-in defaults when absent.
+  `setPresentation` **prepares the currently desired track and events against the prospective
+  presentation before committing it**, so a consumer callback that throws leaves both the
+  visible map and desired state unchanged — the same transactional rule `setSources` follows for
+  terrain. _AC:_ two events of different `category` render with different consumer-supplied
+  marks and their `ariaLabel`s; with no presentation supplied, neutral defaults render and no
+  consumer branding appears; a presentation whose `marker()` throws changes nothing.
+- **T4.5 Draw/edit mode.** `enterDrawMode` with add/move/click vertex handlers and draggable
+  vertices, over the draft geometry T4.3 already renders. Needs its own deterministic event
+  seam — pointer events, vertex hit-testing and drag are what make this a separate task rather
+  than an appendix to the render surface — plus one real-browser drag. A third-party drawing library may back this **only** if it is first
   verified against the exact pinned `maplibre-gl` version; the `TrackDraft` contract stays
   independent of it either way, so a failed spike costs only `@mapatlas/maplibre`.
   _AC:_ tapping appends a vertex, dragging moves one, the exit fn removes every listener and the

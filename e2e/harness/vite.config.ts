@@ -30,6 +30,9 @@ export default defineConfig({
       "@mapatlas/maplibre/controller": fileURLToPath(
         new URL("../../packages/maplibre/dist/controller/browser.js", import.meta.url),
       ),
+      "@mapatlas/maplibre/protocols": fileURLToPath(
+        new URL("../../packages/maplibre/dist/protocols/pmtiles.js", import.meta.url),
+      ),
       "@mapatlas/maplibre": fileURLToPath(
         new URL("../../packages/maplibre/dist/index.js", import.meta.url),
       ),

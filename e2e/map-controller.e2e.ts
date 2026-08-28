@@ -173,35 +173,65 @@ test("replaces a live stack against the real map", async ({ page }) => {
   expect(controllerErrors).toEqual([]);
 });
 
-test("wires the real PMTiles protocol into the real MapLibre runtime", async ({ page }) => {
+test("registers the real PMTiles protocol on the real MapLibre runtime", async ({ page }) => {
   // `new Protocol()` and `addProtocol(protocol.tile)` are the documented integration between
-  // two exactly-pinned packages. This does not wait for tiles — there is no archive to
-  // serve — it proves the two libraries still fit together at these versions, which is what
-  // a major bump breaks and what a module mock would hide.
+  // two exactly-pinned packages, and registration is load-gated — so a canvas proves
+  // nothing here, since one appears whether or not a source was ever installed. This waits
+  // on the registration itself: false before, true only once the style loaded, `install()`
+  // ran, a real `Protocol` was constructed and `maplibregl.addProtocol` accepted its tile
+  // handler. A break at either version fails here rather than at a consumer's first archive.
   await page.goto("/");
 
-  const failure = await page.evaluate(() => {
-    try {
+  expect(await page.evaluate(() => window.mapatlas.isPmtilesProtocolRegistered())).toBe(false);
+
+  await page.evaluate(() => {
+    window.mapatlas.createMapController({
+      container: window.mapatlas.mapContainer(),
+      sources: [
+        {
+          id: "offline",
+          kind: "raster",
+          transport: "pmtiles",
+          url: "https://cdn.invalid/region.pmtiles",
+          attribution: "© OpenStreetMap contributors",
+        },
+      ],
+    });
+  });
+
+  await expect
+    .poll(async () => page.evaluate(() => window.mapatlas.isPmtilesProtocolRegistered()))
+    .toBe(true);
+});
+
+test("registers nothing for a stack with no PMTiles source", async ({ page }) => {
+  // The other half of the same claim, against the real runtime: a consumer who never asks
+  // for PMTiles never constructs a Protocol and never touches the MapLibre global. Without
+  // this, the test above would still pass if the controller registered unconditionally.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([url, attribution]) => {
       window.mapatlas.createMapController({
         container: window.mapatlas.mapContainer(),
         sources: [
           {
-            id: "offline",
+            id: "osm",
             kind: "raster",
-            transport: "pmtiles",
-            url: "https://cdn.invalid/region.pmtiles",
-            attribution: "© OpenStreetMap contributors",
+            transport: "template",
+            url: url!,
+            attribution: attribution!,
           },
         ],
       });
-      return null;
-    } catch (error) {
-      return error instanceof Error ? error.message : String(error);
-    }
-  });
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION],
+  );
 
-  expect(failure).toBeNull();
-  await expect(page.locator("canvas.maplibregl-canvas")).toHaveCount(1);
+  // Waiting for the attribution first means the map really did finish loading and install,
+  // so this is "registered nothing" rather than "was asked too early".
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
+  expect(await page.evaluate(() => window.mapatlas.isPmtilesProtocolRegistered())).toBe(false);
 });
 
 test("destroy tears the real map down", async ({ page }) => {

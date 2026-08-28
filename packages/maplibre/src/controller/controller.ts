@@ -17,6 +17,13 @@ import type { MapEnvironment, MapLike } from "./environment.js";
  * before the style loads installs the third stack once, not three stacks in sequence — the
  * first two describe a map nobody ever saw.
  *
+ * **Desired state is *prepared* state, translated and validated at the call.** Storing raw
+ * `TileSource[]` would make rejection asynchronous: an invalid stack handed over before the
+ * style loaded would return successfully and then throw from inside MapLibre's `load`
+ * callback, where no caller can catch it and where the previous valid stack has already been
+ * abandoned. Translating up front means `setSources` either throws to the caller or is
+ * guaranteed installable, whether the map is ready or not.
+ *
  * **Installation waits for `load`.** MapLibre rejects `addSource` and `addLayer` until the
  * style is ready, so construction is synchronous for the consumer while the install path
  * hangs off that event.
@@ -53,6 +60,22 @@ export class MapControllerDestroyedError extends Error {
   }
 }
 
+/**
+ * A stack that has already been translated and validated, so installing it cannot fail on
+ * anything the engine is able to check.
+ *
+ * `needsPmtiles` is captured here rather than recomputed at install time because it is a
+ * property of the sources, and the sources are no longer around by then.
+ */
+interface PreparedSources {
+  readonly built: BuiltTileSource[];
+  readonly needsPmtiles: boolean;
+}
+
+function prepare(sources: readonly TileSource[]): PreparedSources {
+  return { built: buildTileSources(sources), needsPmtiles: sources.some(usesPmtiles) };
+}
+
 /** The part of `MapController` T4.1 delivers. Widened by T4.2 (terrain) and T4.3 (track). */
 export interface MapSourceController {
   setSources(sources: TileSource[]): void;
@@ -74,6 +97,10 @@ export function createMapControllerInternal(
   options: MapControllerOptions,
   environment: MapEnvironment,
 ): MapSourceController {
+  // Before the map exists. A stack that cannot be translated is rejected without leaving a
+  // WebGL context behind for a controller the caller never receives.
+  let prepared = prepare(options.sources);
+
   const map: MapLike = environment.createMap({
     container: options.container,
     style: options.style ?? EMPTY_STYLE,
@@ -89,22 +116,19 @@ export function createMapControllerInternal(
     },
   });
 
-  /** What the map should show. The latest call wins, whether or not it has been applied. */
-  let desired: readonly TileSource[] = options.sources;
   /** What the map does show, so teardown removes exactly what was added. */
   let installed: BuiltTileSource[] = [];
   let loaded = false;
   let destroyed = false;
 
   function install(): void {
-    // Translate first. `buildTileSources` validates, so an unrenderable stack throws before
-    // a single source is removed — a rejected `setSources` leaves the visible map intact
-    // rather than half torn down.
-    const built = buildTileSources(desired);
+    // Nothing here can fail on the sources: they were translated and validated when the
+    // caller handed them over. This function only applies what was already prepared.
+    const { built, needsPmtiles } = prepared;
 
     // Before adding, and only when something actually needs it: a consumer with no PMTiles
     // source never constructs a Protocol and never touches the MapLibre global.
-    if (desired.some(usesPmtiles)) ensurePmtilesProtocol(environment.protocolRegistrar);
+    if (needsPmtiles) ensurePmtilesProtocol(environment.protocolRegistrar);
 
     // Layers before sources, in that order. MapLibre refuses to remove a source that a
     // layer still references, and the reverse order would leave the map with layers
@@ -123,7 +147,7 @@ export function createMapControllerInternal(
   }
 
   function onLoad(): void {
-    // Once. `desired` is read here rather than captured anywhere earlier, so whatever the
+    // Once. `prepared` is read here rather than captured anywhere earlier, so whatever the
     // consumer last asked for is what gets installed.
     if (loaded || destroyed) return;
     loaded = true;
@@ -135,7 +159,9 @@ export function createMapControllerInternal(
   return {
     setSources(sources: TileSource[]): void {
       if (destroyed) throw new MapControllerDestroyedError("setSources");
-      desired = sources;
+      // Translate before storing, so an invalid stack throws to this caller and leaves the
+      // previous desired state — and the visible map — exactly as it was.
+      prepared = prepare(sources);
       if (loaded) install();
     },
 

@@ -13,12 +13,21 @@ import type { Track } from "@mapatlas/core";
 import { createIdbStorageAdapter } from "@mapatlas/storage-idb";
 import { createWebTrackRecorder } from "@mapatlas/recorder-web";
 import { createMapController } from "@mapatlas/maplibre/controller";
+import { isPmtilesProtocolRegistered } from "@mapatlas/maplibre/protocols";
 
 declare global {
   interface Window {
     mapatlas: {
       createWebTrackRecorder: typeof createWebTrackRecorder;
       createMapController: typeof createMapController;
+      /**
+       * Whether the realm's PMTiles handler has been registered.
+       *
+       * Not a test-only export: it is an honest query the module already publishes. A
+       * browser test needs it because registration is load-gated, so nothing observable in
+       * the DOM distinguishes "the protocol was registered" from "the map drew a canvas".
+       */
+      isPmtilesProtocolRegistered: typeof isPmtilesProtocolRegistered;
       /** A sized, attached container, since a map with no dimensions never finishes load. */
       mapContainer(): HTMLElement;
       createIdbStorageAdapter: typeof createIdbStorageAdapter;
@@ -51,6 +60,7 @@ function mapContainer(): HTMLElement {
 window.mapatlas = {
   createWebTrackRecorder,
   createMapController,
+  isPmtilesProtocolRegistered,
   mapContainer,
   createIdbStorageAdapter,
   recoverInterruptedTrack,

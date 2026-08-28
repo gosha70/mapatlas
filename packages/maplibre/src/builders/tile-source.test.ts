@@ -142,6 +142,21 @@ describe("vector sources carry the consumer's own layers", () => {
     expect(a.layers[0]?.id).not.toBe(b.layers[0]?.id);
   });
 
+  it("rejects two layers in one source that resolve to the same id", () => {
+    // Namespacing stops cross-source collisions; it does nothing about a source supplying
+    // `labels` twice. MapLibre refuses the second addLayer, which under a replacement would
+    // surface after teardown had already begun — so this is rejected before the map is
+    // touched at all.
+    const collide: TileSource = {
+      ...VECTOR,
+      styleLayers: [
+        { id: "labels", type: "symbol", "source-layer": "place" },
+        { id: "labels", type: "line", "source-layer": "place" },
+      ],
+    };
+    expect(() => buildTileSource(collide, 1)).toThrow(/resolve to the id "contours__labels"/);
+  });
+
   it("names an unnamed layer after its source and position", () => {
     expect(buildTileSource(VECTOR, 1).layers[1]).toMatchObject({ id: "contours__layer-1" });
   });
@@ -332,6 +347,47 @@ describe("the stack", () => {
     // MapLibre would silently keep one of them, and the map would be missing a layer with
     // nothing to say why.
     expect(() => buildTileSources([OSM, { ...OSM }])).toThrow(/share this id/);
+  });
+
+  it("rejects two sources whose namespaced layer ids collide", () => {
+    // Namespacing makes this unlikely, not impossible: source `a__b` carrying `c` and
+    // source `a` carrying `b__c` both resolve to `a__b__c`. Unique source ids do not imply
+    // unique layer ids.
+    const first: TileSource = {
+      id: "a__b",
+      kind: "vector",
+      transport: "tilejson",
+      url: "https://tiles.invalid/one.json",
+      attribution: "data",
+      styleLayers: [{ id: "c", type: "line", "source-layer": "x" }],
+    };
+    const second: TileSource = {
+      ...first,
+      id: "a",
+      styleLayers: [{ id: "b__c", type: "line", "source-layer": "x" }],
+    };
+
+    expect(() => buildTileSources([first, second])).toThrow(
+      /layer id "a__b__c" collides with the one from source "a__b"/,
+    );
+  });
+
+  it("accepts the same layer name under different sources, which is the point", () => {
+    const labels = [{ id: "labels", type: "symbol" as const, "source-layer": "place" }];
+    const template: TileSource = {
+      id: "a",
+      kind: "vector",
+      transport: "tilejson",
+      url: "https://tiles.invalid/one.json",
+      attribution: "data",
+      styleLayers: labels,
+    };
+
+    const built = buildTileSources([template, { ...template, id: "b" }]);
+    expect(built.flatMap((entry) => entry.layers.map((layer) => layer.id))).toEqual([
+      "a__labels",
+      "b__labels",
+    ]);
   });
 
   it("handles an empty stack", () => {

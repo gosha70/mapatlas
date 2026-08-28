@@ -210,6 +210,25 @@ function layersFor(source: TileSource, role: TileSourceRole): LayerSpecification
   }
 }
 
+/**
+ * Two layers cannot share a final id.
+ *
+ * Namespacing stops one source's `labels` from overwriting another's, but it does not stop a
+ * source from supplying `labels` twice, and it does not stop a source called `a__b` carrying
+ * `c` from colliding with a source called `a` carrying `b__c`. MapLibre refuses the second
+ * `addLayer`, which would surface *after* a replacement had begun tearing the old stack
+ * down — so the translation rejects it while nothing has been touched.
+ */
+function assertUniqueLayerIds(layers: readonly LayerSpecification[], sourceId: string): void {
+  const seen = new Set<string>();
+  for (const layer of layers) {
+    if (seen.has(layer.id)) {
+      throw new TileSourceError(sourceId, `two style layers resolve to the id "${layer.id}"`);
+    }
+    seen.add(layer.id);
+  }
+}
+
 /** Translate one `TileSource` into the source and layers MapLibre needs. */
 export function buildTileSource(source: TileSource, index: number): BuiltTileSource {
   validate(source);
@@ -230,6 +249,9 @@ export function buildTileSource(source: TileSource, index: number): BuiltTileSou
           }
         : {};
 
+  const layers = layersFor(source, role);
+  assertUniqueLayerIds(layers, source.id);
+
   return {
     id: source.id,
     role,
@@ -240,7 +262,7 @@ export function buildTileSource(source: TileSource, index: number): BuiltTileSou
       attribution: source.attribution,
       ...bounds,
     } as SourceSpecification,
-    layers: layersFor(source, role),
+    layers,
   };
 }
 
@@ -258,5 +280,25 @@ export function buildTileSources(sources: readonly TileSource[]): BuiltTileSourc
     }
     seen.add(source.id);
   }
-  return sources.map((source, index) => buildTileSource(source, index));
+
+  const built = sources.map((source, index) => buildTileSource(source, index));
+
+  // Across the whole stack, not just within a source: namespacing makes a collision
+  // unlikely, not impossible — `a__b` carrying `c` and `a` carrying `b__c` both resolve to
+  // `a__b__c`.
+  const owners = new Map<string, string>();
+  for (const entry of built) {
+    for (const layer of entry.layers) {
+      const owner = owners.get(layer.id);
+      if (owner !== undefined) {
+        throw new TileSourceError(
+          entry.id,
+          `layer id "${layer.id}" collides with the one from source "${owner}"`,
+        );
+      }
+      owners.set(layer.id, entry.id);
+    }
+  }
+
+  return built;
 }

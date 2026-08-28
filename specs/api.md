@@ -755,6 +755,10 @@ under any transport.
 
 Style layer ids are namespaced `<sourceId>__<layerId>`, so two sources each carrying a layer
 called `labels` yield `a__labels` and `b__labels` instead of one silently replacing the other.
+Namespacing makes a collision unlikely, not impossible, so **final** layer ids are also checked
+for uniqueness across the whole stack and duplicates are rejected: one source supplying `labels`
+twice collides with itself, and source `a__b` carrying `c` collides with source `a` carrying
+`b__c`. Unique source ids do not imply unique layer ids.
 
 **Contract (`OfflineRegionStore`):** `download()` **copies bytes into the `MapAssetStore`** and
 resolves the region from local storage thereafter. A `.pmtiles` URL served by range requests is *remote* PMTiles, not an
@@ -836,10 +840,19 @@ this declaration becomes true — when the returned object satisfies the whole i
 **Contract:** MapLibre rejects `addSource`/`addLayer` until its style has loaded, so
 `createMapController` returns synchronously while installation waits for that event. The
 controller models **desired state, not queued commands**: `setSources` called twice before the
-style loads installs the second stack once, and the first is never fetched or drawn. Replacement
-removes every old layer before any old source — MapLibre refuses to drop a source a layer still
-references — then adds the new stack in declared order, which is the draw order. Translation
-validates before anything is removed, so a rejected `setSources` leaves the visible map intact.
+style loads installs the second stack once, and the first is never fetched or drawn.
+
+Desired state is **translated and validated at the call, not at install**. `setSources` either
+throws to its caller or is guaranteed installable — before the style has loaded as much as
+after. Storing raw sources would make rejection asynchronous: an invalid stack handed over early
+would return successfully and then throw from inside MapLibre's `load` callback, where no caller
+can catch it and where the last valid stack has already been abandoned. An invalid stack passed
+to `createMapController` throws without constructing a map at all, so no WebGL context is left
+behind for a controller the caller never receives.
+
+Replacement removes every old layer before any old source — MapLibre refuses to drop a source a
+layer still references — then adds the new stack in declared order, which is the draw order.
+Because translation already happened, a rejected `setSources` leaves the visible map intact.
 
 With no `style`, the controller supplies an **explicit empty v8 document** rather than letting
 MapLibre start style-less, which would require `setStyle()` before the map rendered at all. The

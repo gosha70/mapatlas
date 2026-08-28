@@ -117,6 +117,36 @@ describe("installation waits for the style to load", () => {
     expect(rig.map.calls.some((call) => call.op !== "remove" && call.id === "osm")).toBe(false);
   });
 
+  it("rejects an invalid stack at the call, not from inside the load callback", () => {
+    // Storing raw sources would make rejection asynchronous: this call would return
+    // successfully, then throw from inside MapLibre's `load` handler where no caller can
+    // catch it — and the last valid stack would already have been abandoned.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+
+    expect(() => {
+      controller.setSources([{ ...SEAMARKS, attribution: "" }]);
+    }).toThrow(/attribution/);
+
+    rig.map.fireLoad();
+
+    // The rejected stack never became the desired one.
+    expect(rig.map.sourceIds).toEqual(["osm"]);
+  });
+
+  it("refuses to construct at all when the initial stack is invalid", () => {
+    // And leaves no map behind: a WebGL context belonging to a controller the caller never
+    // receives is a leak nothing can close.
+    const rig = harness();
+
+    expect(() =>
+      createMapControllerInternal(
+        { container: CONTAINER, sources: [{ ...OSM, attribution: "" }] },
+        rig.environment,
+      ),
+    ).toThrow(/attribution/);
+    expect(() => rig.map).toThrow(/no map was constructed/);
+  });
+
   it("reconciles exactly once even if load fires again", () => {
     const { harness: rig } = mount({ sources: [OSM] });
 
@@ -205,8 +235,9 @@ describe("replacing the stack after load", () => {
   });
 
   it("leaves the visible map intact when the new stack is invalid", () => {
-    // Translation validates before anything is removed, so a rejected setSources is a
-    // no-op rather than a half-torn-down map showing nothing.
+    // The same guarantee as before load, at the other moment: translation happens at the
+    // call, so a rejected setSources is a no-op rather than a half-torn-down map showing
+    // nothing.
     const { controller, harness: rig } = mount({ sources: [OSM] });
     rig.map.fireLoad();
     const before = [...rig.map.calls];

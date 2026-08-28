@@ -1022,3 +1022,216 @@ describe("sensor channels", () => {
     expect((await recorder.stop()).points[0]?.channels).toEqual({ heartRateBpm: 120 });
   });
 });
+
+describe("the recorder owns what sensors hand it", () => {
+  const HR = () => ({
+    key: "heartRateBpm",
+    label: "Heart rate",
+    unit: "bpm",
+    aggregate: "avg" as const,
+  });
+
+  it("keeps a sample dated after the current fix for the next point", async () => {
+    // Regression: the whole buffer was cleared on every kept point, so a sample the core
+    // contract assigns to the *next* point was discarded instead. A sensor whose clock runs
+    // slightly ahead of the GPS would have reported nothing at all.
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HR()] });
+    const recorder = createWebTrackRecorderInternal({ sensors: [sensor] }, env.environment);
+
+    await recorder.start();
+    sensor.emit({ t: T0 + 1000, values: { heartRateBpm: 150 } });
+    env.deliver(fix(0, T0)); // predates the sample: not this point's
+    env.deliver(fix(500, T0 + 2000)); // now it is
+
+    const track = await recorder.stop();
+    expect(track.points[0]?.channels).toBeUndefined();
+    expect(track.points[1]?.channels).toEqual({ heartRateBpm: 150 });
+  });
+
+  it("still discards a sample the next point finds too old", async () => {
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HR()] });
+    const recorder = createWebTrackRecorderInternal(
+      { sensors: [sensor], sensorMerge: { maxAgeMs: 5000 } },
+      env.environment,
+    );
+
+    await recorder.start();
+    sensor.emit({ t: T0 + 1000, values: { heartRateBpm: 150 } });
+    env.deliver(fix(0, T0));
+    env.deliver(fix(500, T0 + 600_000)); // ten minutes later: the sample is stale now
+
+    const track = await recorder.stop();
+    expect(track.points[1]?.channels).toBeUndefined();
+  });
+
+  it("clones each sample, so a source reusing one object cannot rewrite the buffer", async () => {
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HR()] });
+    const recorder = createWebTrackRecorderInternal(
+      { sensors: [sensor], sensorMerge: { reduce: "avg" } },
+      env.environment,
+    );
+
+    await recorder.start();
+    const reused = { t: T0 - 200, values: { heartRateBpm: 100 } };
+    sensor.emit(reused);
+    reused.values.heartRateBpm = 140;
+    reused.t = T0 - 100;
+    sensor.emit(reused);
+    env.deliver(fix(0, T0));
+
+    // 100 and 140 averaged, not 140 twice.
+    expect((await recorder.stop()).points[0]?.channels).toEqual({ heartRateBpm: 120 });
+  });
+
+  it("copies descriptors, so mutating one after stop cannot rewrite the track", async () => {
+    const env = createTestEnvironment();
+    const channels = [HR()];
+    const sensor = createFakeSensorSource({ id: "hr", channels });
+    const recorder = createWebTrackRecorderInternal({ sensors: [sensor] }, env.environment);
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    const track = await recorder.stop();
+
+    const descriptor = channels[0];
+    if (descriptor !== undefined) descriptor.label = "MUTATED";
+
+    expect(track.channels?.[0]?.label).toBe("Heart rate");
+  });
+
+  it("snapshots the configured sensors, so mutating the array changes nothing", async () => {
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HR()] });
+    const configured = [sensor];
+    const recorder = createWebTrackRecorderInternal({ sensors: configured }, env.environment);
+
+    configured.push(createFakeSensorSource({ id: "late", channels: [] }));
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+
+    expect((await recorder.stop()).channels).toHaveLength(1);
+  });
+});
+
+describe("a sensor start that resolves late", () => {
+  const HR = () => ({
+    key: "heartRateBpm",
+    label: "Heart rate",
+    unit: "bpm",
+    aggregate: "avg" as const,
+  });
+
+  /** A source whose `start()` only completes when the test says so. */
+  function deferredSensor() {
+    const inner = createFakeSensorSource({ id: "slow", channels: [HR()] });
+    let release: (() => void) | undefined;
+    return {
+      inner,
+      source: {
+        ...inner,
+        start: () =>
+          new Promise<void>((resolve) => {
+            release = () => {
+              void inner.start().then(resolve);
+            };
+          }),
+      },
+      release: () => release?.(),
+    };
+  }
+
+  it("does not leave the sensor running after a pause", async () => {
+    // Regression: pause called stop() before the source was even active, so the pending
+    // start later resolved and left it running with nothing subscribed.
+    const env = createTestEnvironment();
+    const deferred = deferredSensor();
+    const recorder = createWebTrackRecorderInternal(
+      { sensors: [deferred.source] },
+      env.environment,
+    );
+
+    await recorder.start();
+    await flush();
+    recorder.pause();
+    await flush();
+
+    deferred.release();
+    await flush();
+
+    expect(recorder.status).toBe("paused");
+    expect(deferred.inner.started).toBe(false);
+  });
+
+  it("does not leave the sensor running after a stop", async () => {
+    const env = createTestEnvironment();
+    const deferred = deferredSensor();
+    const recorder = createWebTrackRecorderInternal(
+      { sensors: [deferred.source] },
+      env.environment,
+    );
+
+    await recorder.start();
+    await flush();
+    await recorder.stop();
+    await flush();
+
+    deferred.release();
+    await flush();
+
+    expect(deferred.inner.started).toBe(false);
+  });
+
+  it("leaves a sensor alone when a newer session has since started it", async () => {
+    // The stale completion must not stop a source the resumed generation now owns.
+    const env = createTestEnvironment();
+    const deferred = deferredSensor();
+    const recorder = createWebTrackRecorderInternal(
+      { sensors: [deferred.source] },
+      env.environment,
+    );
+
+    await recorder.start();
+    await flush();
+    recorder.pause();
+    recorder.resume();
+    await flush();
+
+    deferred.release();
+    await flush();
+
+    expect(recorder.status).toBe("recording");
+    expect(deferred.inner.started).toBe(true);
+  });
+});
+
+describe("stop before start", () => {
+  it("is rejected rather than producing an empty track", async () => {
+    // Regression: it memoized an empty finalized track while leaving `started` false, so a
+    // later start() succeeded and every subsequent stop() returned that cached empty track
+    // before any cleanup — a live watch and status "recording".
+    const env = createTestEnvironment();
+    const recorder = createWebTrackRecorderInternal({}, env.environment);
+
+    await expect(recorder.stop()).rejects.toThrow(/never started/);
+    expect(env.liveWatches).toBe(0);
+  });
+
+  it("leaves the recorder usable afterwards", async () => {
+    const env = createTestEnvironment();
+    const recorder = createWebTrackRecorderInternal({}, env.environment);
+
+    await expect(recorder.stop()).rejects.toThrow();
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    const track = await recorder.stop();
+
+    expect(track.points).toHaveLength(1);
+    expect(recorder.status).toBe("finalized");
+    expect(env.liveWatches).toBe(0);
+  });
+});

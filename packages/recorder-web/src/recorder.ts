@@ -85,7 +85,9 @@ export function createWebTrackRecorderInternal(
 ): TrackRecorder {
   const samplingPolicy: SamplingPolicy = resolveSamplingPolicy(options.sampling);
   const mergePolicy: SensorMergePolicy = resolveSensorMergePolicy(options.sensorMerge);
-  const sensors: readonly SensorSource[] = options.sensors ?? [];
+  // Snapshotted: a consumer mutating the array it passed must not change which sensors a
+  // running recording listens to.
+  const sensors: readonly SensorSource[] = [...(options.sensors ?? [])];
 
   /**
    * Samples gathered since the previous **kept** point.
@@ -96,6 +98,8 @@ export function createWebTrackRecorderInternal(
    */
   let pendingSamples: SensorSample[] = [];
   let sensorUnsubscribes: (() => void)[] = [];
+  /** Whether sensors are wanted running right now — consulted by a late `start()`. */
+  let sensorsDesired = false;
 
   let status: TrackStatus = "finalized";
   let started = false;
@@ -195,7 +199,12 @@ export function createWebTrackRecorderInternal(
     // will ever look at, and attaching telemetry to it would only carry it into the past.
     const channels = mergeSensorSamples(pendingSamples, candidate.t, mergePolicy);
     if (Object.keys(channels).length > 0) candidate.channels = channels;
-    pendingSamples = [];
+
+    // Only what this point could have consumed is discarded. `mergeSensorSamples` excludes
+    // a sample dated after the point because it belongs to the *next* one — clearing the
+    // whole buffer would throw that away instead, and a sensor whose clock runs slightly
+    // ahead of the GPS would report nothing at all.
+    pendingSamples = pendingSamples.filter((pending) => pending.t > candidate.t);
 
     points.push(candidate);
     lastKept = candidate;
@@ -238,11 +247,14 @@ export function createWebTrackRecorderInternal(
    * ignored: losing a heart-rate strap must not lose the trip. (ADR-0009)
    */
   const startSensors = (forGeneration: number): void => {
+    sensorsDesired = true;
     for (const sensor of sensors) {
       sensorUnsubscribes.push(
         sensor.onSample((sensorSample) => {
           if (forGeneration !== generation || status !== "recording") return;
-          pendingSamples.push(sensorSample);
+          // Cloned: a source reusing one sample object would otherwise rewrite readings
+          // already buffered, turning an average of 100 and 140 into 140.
+          pendingSamples.push({ t: sensorSample.t, values: { ...sensorSample.values } });
         }),
         sensor.onError((error) => {
           if (forGeneration !== generation) return;
@@ -250,18 +262,30 @@ export function createWebTrackRecorderInternal(
         }),
       );
 
-      void sensor.start().catch((error: unknown) => {
-        if (forGeneration !== generation) return;
-        emitError({
-          kind: "sensor",
-          message: error instanceof Error ? error.message : String(error),
-          sourceId: sensor.id,
+      void sensor
+        .start()
+        .then(() => {
+          // A start still pending when pause or stop ran: the immediate `stop()` may have
+          // happened before the source was even active, so it would be left running with
+          // nothing subscribed. Reconcile against what is wanted *now* — and leave it alone
+          // if a newer generation has since started it, since that session owns it.
+          if (forGeneration !== generation && !sensorsDesired) {
+            void sensor.stop().catch(() => undefined);
+          }
+        })
+        .catch((error: unknown) => {
+          if (forGeneration !== generation) return;
+          emitError({
+            kind: "sensor",
+            message: error instanceof Error ? error.message : String(error),
+            sourceId: sensor.id,
+          });
         });
-      });
     }
   };
 
   const stopSensors = (): void => {
+    sensorsDesired = false;
     for (const unsubscribe of sensorUnsubscribes) unsubscribe();
     sensorUnsubscribes = [];
     for (const sensor of sensors) {
@@ -275,7 +299,8 @@ export function createWebTrackRecorderInternal(
   const channelDescriptors = (): ChannelDescriptor[] => {
     const byKey = new Map<string, ChannelDescriptor>();
     for (const sensor of sensors) {
-      for (const descriptor of sensor.channels) byKey.set(descriptor.key, descriptor);
+      // Copied, so mutating a descriptor after stop cannot rewrite a finalized track.
+      for (const descriptor of sensor.channels) byKey.set(descriptor.key, { ...descriptor });
     }
     return [...byKey.values()];
   };
@@ -373,6 +398,14 @@ export function createWebTrackRecorderInternal(
       // Idempotent, and identical: a second call returns the same track rather than a new
       // one with a fresh id over the same points.
       if (finalized !== undefined) return Promise.resolve(finalized);
+
+      // Stopping something never started used to memoize an empty track while leaving
+      // `started` false, so a subsequent `start()` succeeded and every later `stop()`
+      // returned the cached empty track before any cleanup — a live watch, status
+      // "recording", and a track with no points.
+      if (!started) {
+        return Promise.reject(new Error("cannot stop a recorder that was never started"));
+      }
 
       closeSegment();
       stopWatching();

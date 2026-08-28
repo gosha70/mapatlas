@@ -247,6 +247,17 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   `SensorMergePolicy` is honoured for both reduce and `maxAgeMs`; sensors start and stop with the
   recording and across pause/resume; a sample arriving from an obsolete generation is ignored; and
   a sensor failure surfaces on `onError` with its `sourceId` **without ending the recording**.
+  A sample dated *after* the current fix is **retained for the next point**, not discarded — the
+  merge contract assigns it there, and a sensor clock running slightly ahead of the GPS would
+  otherwise report nothing. The recorder owns what a source hands it: the configured array,
+  each descriptor, and each sample are copied, so a source reusing one sample object cannot
+  rewrite a buffered reading and mutating a descriptor after stop cannot rewrite the track.
+  A `start()` still pending when pause or stop runs is reconciled on completion and stopped —
+  unless a newer generation has since started it, which owns it.
+  _AC — lifecycle edges:_ `stop()` before `start()` **rejects** rather than memoizing an empty
+  track; the previous behaviour left `started` false, so a later `start()` succeeded while every
+  subsequent `stop()` returned the cached empty track before any cleanup, leaving a live watch and
+  status `recording`.
 - **T3.4 Autosave + recovery.** Persist the in-progress track every `autosaveMs`.
   _AC:_ simulating a crash mid-recording, `recoverInterruptedTrack` returns a track containing
   all points written before the last autosave.

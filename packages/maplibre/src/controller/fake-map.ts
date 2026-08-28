@@ -36,11 +36,19 @@ export interface FakeMap extends MapLike {
   /** The layer definitions as installed, so a test can assert on what MapLibre received. */
   readonly layerSpecs: readonly LayerSpecification[];
   /** How the controller constructed this map. */
-  /** The terrain currently applied, which is what MapLibre's own `getTerrain()` reports. */
+  /** The terrain currently applied, matching what MapLibre's own `getTerrain()` reports. */
   readonly terrain: TerrainSpecification | null;
   readonly options: MapConstructorOptions;
   readonly loadListenerCount: number;
   fireLoad(): void;
+}
+
+/** Terrain declared by a base style document, if any. */
+function styleTerrain(style: MapConstructorOptions["style"]): TerrainSpecification | null {
+  if (typeof style !== "object" || style === null || Array.isArray(style)) return null;
+  const declared = (style as Record<string, unknown>)["terrain"];
+  if (typeof declared !== "object" || declared === null || Array.isArray(declared)) return null;
+  return declared as TerrainSpecification;
 }
 
 export function createFakeMap(options: MapConstructorOptions): FakeMap {
@@ -48,7 +56,10 @@ export function createFakeMap(options: MapConstructorOptions): FakeMap {
   const sources = new Map<string, SourceSpecification>();
   const layers = new Map<string, LayerSpecification>();
   let loadListeners: (() => void)[] = [];
-  let terrain: TerrainSpecification | null = null;
+  // A style document may declare terrain, and MapLibre applies it without the controller
+  // asking. Starting from the style rather than from `null` is what lets a test show that
+  // the controller owns terrain it did not itself set.
+  let terrain: TerrainSpecification | null = styleTerrain(options.style);
   let removed = false;
 
   function assertLive(operation: string): void {
@@ -135,6 +146,10 @@ export function createFakeMap(options: MapConstructorOptions): FakeMap {
       }
       terrain = next;
       calls.push({ op: "setTerrain", source: next === null ? null : next.source });
+    },
+
+    getTerrain(): TerrainSpecification | null {
+      return terrain;
     },
 
     remove(): void {

@@ -277,7 +277,7 @@ test("applies real terrain and removes it, as MapLibre itself reports", async ({
 
   await page.evaluate(
     ([raster, dem, attribution]) => {
-      const probe = window.mapatlas.mountWithTerrainProbe({
+      const probe = window.mapatlas.mountWithProbe({
         container: window.mapatlas.mapContainer(),
         sources: [
           {
@@ -297,25 +297,26 @@ test("applies real terrain and removes it, as MapLibre itself reports", async ({
           },
         ],
       });
-      window.mapatlas.terrainProbe = probe;
+      window.mapatlas.probe = probe;
     },
     [RASTER_TEMPLATE, DEM_TEMPLATE, OSM_ATTRIBUTION],
   );
 
   await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
-  expect(await page.evaluate(() => window.mapatlas.terrainProbe?.getTerrain() ?? null)).toBeNull();
+  expect(await page.evaluate(() => window.mapatlas.probe?.getTerrain() ?? null)).toBeNull();
 
   await page.evaluate(() => {
-    window.mapatlas.terrainProbe?.controller.setTerrain({ sourceId: "dem", exaggeration: 1.5 });
+    window.mapatlas.probe?.controller.setTerrain({ sourceId: "dem", exaggeration: 1.5 });
   });
-  expect(
-    await page.evaluate(() => window.mapatlas.terrainProbe?.getTerrain() ?? null),
-  ).toMatchObject({ source: "dem", exaggeration: 1.5 });
+  expect(await page.evaluate(() => window.mapatlas.probe?.getTerrain() ?? null)).toMatchObject({
+    source: "dem",
+    exaggeration: 1.5,
+  });
 
   await page.evaluate(() => {
-    window.mapatlas.terrainProbe?.controller.setTerrain(null);
+    window.mapatlas.probe?.controller.setTerrain(null);
   });
-  expect(await page.evaluate(() => window.mapatlas.terrainProbe?.getTerrain() ?? null)).toBeNull();
+  expect(await page.evaluate(() => window.mapatlas.probe?.getTerrain() ?? null)).toBeNull();
 });
 
 test("accepts a DEM + hillshade + contours stack", async ({ page }) => {
@@ -330,7 +331,7 @@ test("accepts a DEM + hillshade + contours stack", async ({ page }) => {
       const errors: string[] = [];
       window.addEventListener("error", (event) => errors.push(event.message));
       try {
-        const probe = window.mapatlas.mountWithTerrainProbe({
+        const probe = window.mapatlas.mountWithProbe({
           container: window.mapatlas.mapContainer(),
           sources: [
             {
@@ -369,7 +370,7 @@ test("accepts a DEM + hillshade + contours stack", async ({ page }) => {
           ],
           terrain: { sourceId: "dem", exaggeration: 1 },
         });
-        window.mapatlas.terrainProbe = probe;
+        window.mapatlas.probe = probe;
         return null;
       } catch (error) {
         return error instanceof Error ? error.message : String(error);
@@ -380,9 +381,88 @@ test("accepts a DEM + hillshade + contours stack", async ({ page }) => {
 
   expect(failure).toBeNull();
   await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText("Contour data");
+
+  // The assertion that stops this going false-green. Attribution proves the *source* was
+  // accepted; it says nothing about the layers. MapLibre can report a layer-validation error
+  // and return without adding the layer rather than throwing, so a stack whose hillshade and
+  // contour layers were both silently dropped would still reach every check above. Ask the
+  // library whether the generated ids are in the style.
+  const layers = await page.evaluate(() => ({
+    shade: window.mapatlas.probe?.hasLayer("dem__shade") ?? false,
+    lines: window.mapatlas.probe?.hasLayer("contours__lines") ?? false,
+    absent: window.mapatlas.probe?.hasLayer("contours__never") ?? false,
+  }));
+  expect(layers).toEqual({ shade: true, lines: true, absent: false });
+
   // Terrain came from the constructor, so this also proves the load-time ordering: the DEM
   // was installed before terrain named it, or MapLibre would have refused.
-  expect(
-    await page.evaluate(() => window.mapatlas.terrainProbe?.getTerrain() ?? null),
-  ).toMatchObject({ source: "dem" });
+  expect(await page.evaluate(() => window.mapatlas.probe?.getTerrain() ?? null)).toMatchObject({
+    source: "dem",
+  });
+});
+
+/** A base style that brings its own terrain, which MapLibre applies as the style loads. */
+const STYLE_WITH_TERRAIN = {
+  version: 8,
+  sources: {
+    "style-dem": {
+      type: "raster-dem",
+      tiles: ["https://tiles.invalid/dem/{z}/{x}/{y}.png"],
+      tileSize: 512,
+      encoding: "mapbox",
+    },
+  },
+  layers: [],
+  terrain: { source: "style-dem", exaggeration: 1 },
+};
+
+test("MapLibre does apply a base style's terrain on its own", async ({ page }) => {
+  // Establishes the premise the next test depends on. Without it, "terrain is null after
+  // load" would pass against a library that never applied the style's terrain at all, and
+  // the controller's ownership would be unproven rather than proven.
+  await page.goto("/");
+
+  await page.evaluate((style) => {
+    window.mapatlas.rawMap = window.mapatlas.mountRawMap(style);
+  }, STYLE_WITH_TERRAIN);
+
+  await expect
+    .poll(async () => page.evaluate(() => window.mapatlas.rawMap?.getTerrain() ?? null))
+    .not.toBeNull();
+});
+
+test("takes ownership of terrain a base style declared", async ({ page }) => {
+  // The controller never applied this terrain, but it does own it. One that remembered only
+  // what *it* set would believe there is none and leave the style's running — so applied
+  // state is read from the map, which cannot drift. The test above proves MapLibre really
+  // does apply it, so reaching null here is a clearing rather than an absence.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([style, raster, attribution]) => {
+      window.mapatlas.probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        style: style as never,
+        // No terrain of its own: desired state is "none", and the style's terrain is what
+        // the controller has to clear to make that true.
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+    },
+    [STYLE_WITH_TERRAIN, RASTER_TEMPLATE, OSM_ATTRIBUTION] as const,
+  );
+
+  // Waiting on the attribution first means the style loaded and the controller installed, so
+  // this is "cleared after MapLibre applied it" rather than "read before it did".
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
+  await expect
+    .poll(async () => page.evaluate(() => window.mapatlas.probe?.getTerrain() ?? null))
+    .toBeNull();
 });

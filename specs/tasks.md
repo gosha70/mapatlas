@@ -398,17 +398,25 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   adds track and event sources they join the same ordering rather than becoming a second
   special case.
 
-  _AC:_ a fixture stack of DEM + hillshade + contours renders, proven against MapLibre's own
-  style validation rather than the builders' idea of it; `setTerrain(null)` fully removes
-  terrain, proven by the library's own `getTerrain()` going null.
+  _AC:_ a fixture stack of DEM + hillshade + contours renders, proven by asking MapLibre whether
+  the generated layer ids `dem__shade` and `contours__lines` are in the style — the library can
+  report a layer-validation error and return **without adding the layer** rather than throwing,
+  so "no exception" and "the source's attribution appeared" both go green on a stack whose
+  layers were silently dropped; `setTerrain(null)` fully removes terrain, proven by the
+  library's own `getTerrain()` going null.
 
   `setTerrain` is validated **against desired sources, not the installed map** — before load
   the map holds nothing, so validating against it would accept everything and fail later. The
   named source must exist and have `kind === "raster-dem"`; `role` is deliberately not checked,
   since `kind` states capability while `role` states stack behaviour and a DEM may drive terrain
   while also carrying a hillshade layer. `exaggeration` must be finite and `>= 0` per the style
-  spec — zero accepted, negative and non-finite rejected. MapLibre reports neither usefully:
-  terrain over a raster source renders flat, indistinguishable from a DEM that failed to load.
+  spec — zero accepted, negative and non-finite rejected.
+
+  Two of those are checks MapLibre 6.6 also makes: it validates a `TerrainSpecification` and
+  rejects a source the style does not hold. The value here is **when** — synchronously, at this
+  package's own public boundary, rather than from inside a `load` callback no caller can catch.
+  The source *kind* cross-check is the one MapLibre makes at no point: terrain over ordinary
+  imagery renders flat, indistinguishable from a DEM whose tiles failed.
 
   Desired and **applied** terrain are tracked separately. `setTerrain(dem); setTerrain(null);
   setTerrain(dem2)` before load makes **zero** MapLibre calls, and load makes exactly one, after
@@ -424,8 +432,21 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   falsifying case is that a rejected call must not change what a later `load` installs.
 
   The fake refuses `removeSource` while terrain references it, which makes the four-phase order
-  a behavioural requirement rather than an assertion about a call log. Nine terrain mutations
-  each fail at least one test, two of them in the browser.
+  a behavioural requirement rather than an assertion about a call log. That rule is
+  **deliberately stronger than MapLibre 6.6**, which checks only layer references there:
+  MAP-ATLAS treats terrain as a dependency of the sources it names, like any other consumer of
+  the stack.
+
+  Applied terrain is **read from the map, never mirrored in a flag**. A base `style` may declare
+  its own `terrain`, which MapLibre applies as the style loads — before the controller has done
+  anything. A remembered "what I applied" flag starts at `null` in that case and stays wrong,
+  leaving style terrain running under a controller reporting none. The controller is
+  authoritative: desired terrain of `null` clears whatever the map actually has. Pinned in the
+  browser as a pair, since one test alone cannot distinguish clearing from absence — the first
+  proves MapLibre applies a style's terrain unaided, the second proves the controller then
+  clears it.
+
+  Twelve terrain mutations each fail at least one test, four of them in the browser.
 - **T4.3 Track & events render.** Live position, **one polyline per segment**, start/finish/lap
   marks, event marks, `fitTrack`, `fitBounds`, `recenter`.
   Geometry comes from `simplifiedSegments[n]` when present, falling back to slicing the raw

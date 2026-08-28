@@ -62,8 +62,11 @@ const NO_CUSTOM_ATTRIBUTION: readonly string[] = Object.freeze([]);
 /**
  * Terrain that the controller will not install, refused at the call.
  *
- * MapLibre cannot report most of these usefully: terrain pointed at a raster source renders
- * a silently flat map, which is indistinguishable from a DEM that failed to load.
+ * MapLibre 6.6 validates a `TerrainSpecification` and rejects a source the style does not
+ * hold — but only when `setTerrain` reaches it, which for this controller is at `load`, long
+ * after the call that introduced the fault. What it does not check at all is whether the
+ * source is an *elevation* raster: terrain over ordinary imagery renders a silently flat
+ * map, indistinguishable from a DEM whose tiles failed.
  */
 export class MapTerrainError extends Error {
   constructor(detail: string) {
@@ -115,9 +118,11 @@ const DEFAULT_EXAGGERATION = 1;
 /**
  * Check terrain against a source stack and normalise it, or throw.
  *
- * Both rules are ones MapLibre will not enforce in time to help. A missing source is
- * rejected by `setTerrain`, but only once the style has loaded — long after the call that
- * introduced it. A source of the wrong kind is not rejected at all: it renders flat.
+ * Two different kinds of check. MapLibre does reject a missing source and does validate a
+ * `TerrainSpecification`, so the value here is *when*: synchronously, at this package's own
+ * public boundary, rather than from inside a `load` callback no caller can catch. The source
+ * *kind* cross-check is the one MapLibre does not make at all — terrain over ordinary
+ * imagery renders flat, with nothing to say why.
  *
  * `role` is deliberately not checked. `kind` states what a source *is* — an elevation
  * raster — while `role` states how it participates in the stack, and a DEM can legitimately
@@ -143,7 +148,8 @@ function prepareTerrain(
   const exaggeration = terrain.exaggeration ?? DEFAULT_EXAGGERATION;
   if (!Number.isFinite(exaggeration) || exaggeration < 0) {
     // The style spec defines exaggeration as >= 0. Zero is legitimate — flat terrain that is
-    // still terrain — so it is accepted; NaN and Infinity are not.
+    // still terrain — so it is accepted; NaN and Infinity are not. Checked here so the
+    // rejection lands on the caller rather than at load.
     throw new MapTerrainError(`exaggeration must be a finite number >= 0, got ${exaggeration}`);
   }
 
@@ -195,15 +201,6 @@ export function createMapControllerInternal(
 
   /** What the map does show, so teardown removes exactly what was added. */
   let installed: BuiltTileSource[] = [];
-  /**
-   * Whether terrain has actually reached MapLibre.
-   *
-   * Distinct from `desiredTerrain` on purpose. Before `load` a consumer may set terrain,
-   * clear it and set it again; none of that should reach the map, and at load exactly the
-   * last one should. Tracking only the desire would lose the difference between "nothing
-   * applied yet" and "applied and needing release before the DEM source is removed".
-   */
-  let appliedTerrain: PreparedTerrain | null = null;
   let loaded = false;
   let destroyed = false;
 
@@ -217,11 +214,13 @@ export function createMapControllerInternal(
     if (needsPmtiles) ensurePmtilesProtocol(environment.protocolRegistrar);
 
     // 1. Release terrain first. It references a DEM source that is about to be removed, and
-    //    MapLibre refuses to remove a source anything still holds — terrain included.
-    if (appliedTerrain !== null) {
-      map.setTerrain(null);
-      appliedTerrain = null;
-    }
+    //    MAP-ATLAS treats terrain as a dependency of the sources it names.
+    //
+    //    Asked of the map rather than remembered. Applied terrain is not always terrain this
+    //    controller applied: a base `style` may declare its own, which MapLibre honours as
+    //    the style loads. A mirrored flag would start wrong in that case and stay wrong,
+    //    leaving style terrain running under a controller that believes it has none.
+    if (map.getTerrain() !== null) map.setTerrain(null);
 
     // 2. Layers before sources, for the same reason one step down. The reverse order would
     //    leave the map with layers pointing at nothing.
@@ -244,17 +243,15 @@ export function createMapControllerInternal(
   function applyTerrain(): void {
     if (desiredTerrain === null) {
       // Only if something is actually applied: `setTerrain(null)` on a map with no terrain
-      // is a call that says nothing, and it would show up in every operation log.
-      if (appliedTerrain !== null) {
-        map.setTerrain(null);
-        appliedTerrain = null;
-      }
+      // is a call that says nothing, and it would show up in every operation log. Asking the
+      // map rather than a remembered flag is what makes "no terrain" authoritative — it
+      // clears a base style's terrain too, which the controller never applied but does own.
+      if (map.getTerrain() !== null) map.setTerrain(null);
       return;
     }
     // Replacing terrain needs no `null` between: MapLibre takes a new definition directly.
     // The explicit release in `reconcile` exists for the other case — the DEM disappearing.
     map.setTerrain({ source: desiredTerrain.source, exaggeration: desiredTerrain.exaggeration });
-    appliedTerrain = desiredTerrain;
   }
 
   function onLoad(): void {

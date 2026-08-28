@@ -70,9 +70,10 @@ describe("it enforces what MapLibre enforces", () => {
   });
 
   it("rejects removing a source terrain still references", () => {
-    // This is what makes the controller's release-terrain-first ordering a behavioural
-    // requirement rather than an assertion about a call log: get it wrong and this throws,
-    // exactly as MapLibre's own removeSource does.
+    // Deliberately stronger than MapLibre 6.6, which checks only layer references here.
+    // MAP-ATLAS treats terrain as a source dependency like any other, and encoding that
+    // makes the controller's release-terrain-first ordering a behavioural requirement rather
+    // than an assertion about a call log.
     const map = createFakeMap(OPTIONS);
     map.addSource("dem", RASTER);
     map.setTerrain({ source: "dem", exaggeration: 1 });
@@ -87,6 +88,15 @@ describe("it enforces what MapLibre enforces", () => {
     }).not.toThrow();
   });
 
+  it("starts from terrain the style declared, as MapLibre does", () => {
+    // The case a controller's own "what I applied" bookkeeping gets wrong.
+    const map = createFakeMap({
+      ...OPTIONS,
+      style: { version: 8, sources: {}, layers: [], terrain: { source: "style-dem" } },
+    });
+    expect(map.getTerrain()).toEqual({ source: "style-dem" });
+  });
+
   it("reports the terrain currently applied, as MapLibre's getTerrain does", () => {
     const map = createFakeMap(OPTIONS);
     expect(map.terrain).toBeNull();
@@ -97,6 +107,7 @@ describe("it enforces what MapLibre enforces", () => {
 
     map.setTerrain(null);
     expect(map.terrain).toBeNull();
+    expect(map.getTerrain()).toBeNull();
   });
 
   it("rejects removing what was never added", () => {

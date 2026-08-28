@@ -505,6 +505,47 @@ describe("terrain is prepared desired state over the source stack", () => {
     expect(terrainCalls(rig.map)).toEqual(["dem", null]);
   });
 
+  it("clears terrain a base style brought, which it never applied but does own", () => {
+    // MapLibre honours a style's own `terrain` as the style loads, before the controller has
+    // done anything. A remembered "what I applied" flag starts at null and would leave that
+    // terrain running under a controller reporting none — so applied state is read from the
+    // map, which cannot drift.
+    const style = { version: 8, sources: {}, layers: [], terrain: { source: "style-dem" } };
+    const { harness: rig } = mount({ sources: [OSM], style });
+    expect(rig.map.terrain).toEqual({ source: "style-dem" });
+
+    rig.map.fireLoad();
+
+    expect(rig.map.terrain).toBeNull();
+  });
+
+  it("replaces a base style's terrain with its own", () => {
+    const style = { version: 8, sources: {}, layers: [], terrain: { source: "style-dem" } };
+    const { harness: rig } = mount({
+      sources: [OSM, DEM],
+      style,
+      terrain: { sourceId: "dem", exaggeration: 2 },
+    });
+
+    rig.map.fireLoad();
+
+    expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 2 });
+  });
+
+  it("clears a base style's terrain on an explicit setTerrain(null) after load", () => {
+    const style = { version: 8, sources: {}, layers: [], terrain: { source: "style-dem" } };
+    const { controller, harness: rig } = mount({
+      sources: [OSM, DEM],
+      style,
+      terrain: { sourceId: "dem" },
+    });
+    rig.map.fireLoad();
+
+    controller.setTerrain(null);
+
+    expect(rig.map.terrain).toBeNull();
+  });
+
   it("says nothing to MapLibre when clearing terrain that was never applied", () => {
     const { controller, harness: rig } = mount({ sources: [OSM, DEM] });
     rig.map.fireLoad();
@@ -526,8 +567,8 @@ describe("terrain is validated at the call", () => {
   });
 
   it("rejects a source that is not an elevation raster", () => {
-    // MapLibre does not reject this: terrain over a raster source renders flat, which is
-    // indistinguishable from a DEM that failed to load.
+    // The one check MapLibre makes at no point: terrain over a raster source renders flat,
+    // which is indistinguishable from a DEM that failed to load.
     const { controller } = mount({ sources: [OSM] });
     expect(() => {
       controller.setTerrain({ sourceId: "osm" });
@@ -545,6 +586,8 @@ describe("terrain is validated at the call", () => {
   });
 
   it("rejects an exaggeration the style spec does not allow, but accepts zero", () => {
+    // MapLibre 6.6 validates this too; the difference is when. Here it lands on the caller,
+    // rather than from inside a load callback nobody can catch.
     const { controller } = mount({ sources: [OSM, DEM] });
 
     for (const exaggeration of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
@@ -584,8 +627,9 @@ describe("terrain is validated at the call", () => {
 
 describe("a stack replacement is atomic with respect to terrain", () => {
   it("releases terrain, tears down, rebuilds, then restores it — in that order", () => {
-    // The fake refuses to remove a source terrain still holds, so this order is a
-    // behavioural requirement rather than an assertion about a log.
+    // The fake refuses to remove a source terrain still holds — a rule MAP-ATLAS enforces
+    // and MapLibre 6.6 does not — so this order is a behavioural requirement rather than an
+    // assertion about a log.
     const { controller, harness: rig } = mount({ sources: [OSM, DEM] });
     rig.map.fireLoad();
     controller.setTerrain({ sourceId: "dem", exaggeration: 2 });

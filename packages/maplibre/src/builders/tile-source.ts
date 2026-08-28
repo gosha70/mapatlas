@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { TileSource, TileSourceRole } from "@mapatlas/core";
+import type { JSONValue, TileSource, TileSourceRole } from "@mapatlas/core";
 import type { LayerSpecification, SourceSpecification } from "maplibre-gl";
 
 /**
@@ -95,12 +95,36 @@ function rasterLayer(source: TileSource, role: TileSourceRole): LayerSpecificati
 }
 
 /**
+ * A deep copy of a JSON value.
+ *
+ * Not `JSON.parse(JSON.stringify(x))`: that round-trips through a string, turns `undefined`
+ * into a dropped key, and reports a cycle as a cryptic serialiser error. A recursive walk
+ * over the value's own shape is smaller and says what it does. `JSONValue` is acyclic by
+ * definition, which is what makes the walk safe to write without cycle tracking.
+ */
+function cloneJsonValue(value: JSONValue): JSONValue {
+  if (Array.isArray(value)) return value.map(cloneJsonValue);
+  if (typeof value === "object" && value !== null) {
+    const copy: Record<string, JSONValue> = {};
+    for (const [key, nested] of Object.entries(value)) copy[key] = cloneJsonValue(nested);
+    return copy;
+  }
+  return value;
+}
+
+/**
  * Consumer style layers, bound to this source.
  *
  * `source` is filled in and **every** id is namespaced — the one the consumer supplied as
  * well as the one they omitted — so two sources carrying a layer called `labels` produce
  * `a__labels` and `b__labels` rather than one silently replacing the other. Nothing else is
- * touched: paint, filter and layout are the consumer's business.
+ * interpreted: paint, filter and layout are the consumer's business.
+ *
+ * They are, however, **deep-copied**. A shallow spread leaves `paint`, `layout`, `filter` and
+ * every expression array aliased to the caller's objects, so mutating one after `setSources`
+ * returned would change what the map installs — and could turn an accepted stack into one
+ * MapLibre rejects at load, which is precisely the asynchronous failure that translating at
+ * the call exists to remove. Prepared state has to be a snapshot, not a view.
  */
 function consumerLayers(source: TileSource): LayerSpecification[] {
   return (source.styleLayers ?? []).map((layer, index) => {
@@ -113,7 +137,7 @@ function consumerLayers(source: TileSource): LayerSpecification[] {
     }
     const localId = typeof spec["id"] === "string" ? spec["id"] : `layer-${String(index)}`;
     return {
-      ...spec,
+      ...(cloneJsonValue(layer) as Record<string, JSONValue>),
       id: `${source.id}${LAYER_ID_SEPARATOR}${localId}`,
       source: source.id,
     } as LayerSpecification;

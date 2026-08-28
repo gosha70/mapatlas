@@ -753,6 +753,12 @@ Rejected as unrenderable rather than rendered wrong: `wms` with a non-`raster` k
 returns an image), a `wms` url with no bbox placeholder, and a url already carrying `pmtiles://`
 under any transport.
 
+Style layers are **deep-copied** during translation, so prepared state is a snapshot rather than
+a view: mutating a nested `paint`, `layout`, `filter` or expression array after `setSources`
+returned cannot change what the map installs, and cannot turn an accepted stack into one the
+renderer rejects at load. A shallow copy would leave that door open and weaken the guarantee
+above to the top level only.
+
 Style layer ids are namespaced `<sourceId>__<layerId>`, so two sources each carrying a layer
 called `labels` yield `a__labels` and `b__labels` instead of one silently replacing the other.
 Namespacing makes a collision unlikely, not impossible, so **final** layer ids are also checked

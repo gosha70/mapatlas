@@ -332,7 +332,10 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   `pmtiles://` scheme exactly once for all three kinds, never appending `/{z}/{x}/{y}`, and
   rejects a url already carrying the scheme, since it is the renderer's to add and no other
   renderer can read it; `styleLayers` pass through verbatim with only `source` and a namespaced
-  `id` filled in, since the engine has no opinion about how contours or bathymetry look, and
+  `id` filled in, since the engine has no opinion about how contours or bathymetry look, but
+  **deep-copied**, so mutating a nested `paint`, `layout`, `filter` or expression array
+  afterwards cannot change what was installed — prepared state is a snapshot, not a view, or the
+  call-time validation guarantee holds only at the top level;
   **every** supplied layer id is namespaced so two sources each carrying `labels` yield
   `a__labels` and `b__labels`; empty attribution is rejected, being a licence obligation; a WMS
   url without a bbox placeholder is rejected, since it renders one extent everywhere and reports
@@ -376,7 +379,7 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   Every guard above is **mutation-tested**: reversing the removal order, registering the protocol
   after `addSource`, dropping the once-only load guard, installing eagerly, queuing commands
   instead of modelling desired state, deferring validation to install, dropping either layer-id
-  uniqueness check, swapping lng/lat, and inheriting the attribution default each fail at least
+  uniqueness check, shallow-copying style layers at any of three depths, swapping lng/lat, and inheriting the attribution default each fail at least
   one test. Two are settled in the browser, where a fake cannot: without the attribution override
   MapLibre 6.6.0 renders `"© OpenStreetMap contributors | MapLibre"`, and the PMTiles pair fails
   in both directions — never registering breaks the positive case, registering unconditionally

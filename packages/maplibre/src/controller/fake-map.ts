@@ -32,6 +32,8 @@ export interface FakeMap extends MapLike {
   /** What the map currently holds, in installation order. */
   readonly sourceIds: readonly string[];
   readonly layerIds: readonly string[];
+  /** The layer definitions as installed, so a test can assert on what MapLibre received. */
+  readonly layerSpecs: readonly LayerSpecification[];
   /** How the controller constructed this map. */
   readonly options: MapConstructorOptions;
   readonly loadListenerCount: number;
@@ -41,7 +43,7 @@ export interface FakeMap extends MapLike {
 export function createFakeMap(options: MapConstructorOptions): FakeMap {
   const calls: MapCall[] = [];
   const sources = new Map<string, SourceSpecification>();
-  const layers = new Map<string, string>();
+  const layers = new Map<string, LayerSpecification>();
   let loadListeners: (() => void)[] = [];
   let removed = false;
 
@@ -59,6 +61,9 @@ export function createFakeMap(options: MapConstructorOptions): FakeMap {
     },
     get layerIds() {
       return [...layers.keys()];
+    },
+    get layerSpecs() {
+      return [...layers.values()];
     },
     get loadListenerCount() {
       return loadListeners.length;
@@ -84,7 +89,9 @@ export function createFakeMap(options: MapConstructorOptions): FakeMap {
     removeSource(id: string): void {
       assertLive("removeSource");
       if (!sources.has(id)) throw new FakeMapError(`no source "${id}"`);
-      const dependent = [...layers.entries()].find(([, source]) => source === id);
+      const dependent = [...layers.entries()].find(
+        ([, spec]) => "source" in spec && spec.source === id,
+      );
       if (dependent !== undefined) {
         throw new FakeMapError(`source "${id}" is still used by layer "${dependent[0]}"`);
       }
@@ -99,7 +106,7 @@ export function createFakeMap(options: MapConstructorOptions): FakeMap {
       if (typeof source !== "string" || !sources.has(source)) {
         throw new FakeMapError(`layer "${layer.id}" names no installed source`);
       }
-      layers.set(layer.id, source);
+      layers.set(layer.id, layer);
       calls.push({ op: "addLayer", id: layer.id, source });
     },
 

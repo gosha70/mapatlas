@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { TileSource } from "@mapatlas/core";
+import type { JSONValue, TileSource } from "@mapatlas/core";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -166,6 +166,35 @@ describe("vector sources carry the consumer's own layers", () => {
     const before = structuredClone(VECTOR.styleLayers);
     buildTileSource(VECTOR, 1);
     expect(VECTOR.styleLayers).toEqual(before);
+  });
+
+  it("deep-copies nested values, so the built layers are a snapshot and not a view", () => {
+    // The other direction, which a shallow spread leaves open: `paint`, `layout`, `filter`
+    // and every expression array would stay aliased to the caller's objects, so mutating one
+    // afterwards would change what the map installs — and could turn an already-accepted
+    // stack into one MapLibre rejects.
+    const stops: JSONValue[] = [10, 1];
+    // Nested two deep on both sides — an object inside an object, and an array inside an
+    // array. A copy that stops at one level protects neither, and MapLibre style layers are
+    // full of both: paint ramps and filter expressions nest arbitrarily.
+    const paint: Record<string, JSONValue> = { "line-width": ["interpolate", ["linear"], stops] };
+    const inner: JSONValue[] = ["get", "kind"];
+    const filter: JSONValue[] = ["==", inner, "index"];
+    const source: TileSource = {
+      ...VECTOR,
+      styleLayers: [{ id: "lines", type: "line", "source-layer": "contour", paint, filter }],
+    };
+
+    const built = buildTileSource(source, 1);
+    stops[1] = 20;
+    inner[1] = "mutated";
+    paint["line-color"] = "#f00";
+
+    expect(built.layers[0]).toMatchObject({
+      paint: { "line-width": ["interpolate", ["linear"], [10, 1]] },
+      filter: ["==", ["get", "kind"], "index"],
+    });
+    expect(built.layers[0]).not.toHaveProperty("paint.line-color");
   });
 
   it("rejects a style layer that is not an object or has no type", () => {

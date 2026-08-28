@@ -91,6 +91,8 @@ describe("it records faithfully", () => {
     expect(map.calls.map((call) => call.op)).toEqual(["addSource", "addLayer", "addSource"]);
     expect(map.sourceIds).toEqual(["osm", "seamarks"]);
     expect(map.layerIds).toEqual(["osm__raster"]);
+    // The whole definition, not just the id: tests assert on what MapLibre actually received.
+    expect(map.layerSpecs).toEqual([layer("osm__raster", "osm")]);
   });
 
   it("fires load to every listener, and forgets one that was taken off", () => {

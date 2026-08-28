@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { TileSource } from "@mapatlas/core";
+import type { JSONValue, TileSource } from "@mapatlas/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MapConstructorOptions, MapEnvironment } from "./environment.js";
@@ -131,6 +131,32 @@ describe("installation waits for the style to load", () => {
 
     // The rejected stack never became the desired one.
     expect(rig.map.sourceIds).toEqual(["osm"]);
+  });
+
+  it("installs the state it was handed, not what the caller mutated afterwards", () => {
+    // The scenario: a nested `paint` handed to setSources, mutated before the style loads.
+    // With the layers aliased the map would receive 20, so "validated at the call" would be
+    // a claim about the top level only — a caller could still mutate a nested value into
+    // something MapLibre rejects and put the load-time failure back.
+    const paint: Record<string, JSONValue> = { "line-width": 1 };
+    const vector: TileSource = {
+      id: "contours",
+      kind: "vector",
+      transport: "tilejson",
+      url: "https://tiles.invalid/contours.json",
+      attribution: "© Contour data",
+      styleLayers: [{ id: "lines", type: "line", "source-layer": "contour", paint }],
+    };
+    const { controller, harness: rig } = mount({ sources: [] });
+
+    controller.setSources([vector]);
+    paint["line-width"] = 20;
+    rig.map.fireLoad();
+
+    expect(rig.map.layerSpecs[0]).toMatchObject({
+      id: "contours__lines",
+      paint: { "line-width": 1 },
+    });
   });
 
   it("refuses to construct at all when the initial stack is invalid", () => {

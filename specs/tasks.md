@@ -330,17 +330,17 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   _AC:_ each `kind` maps to the right MapLibre source type and each `transport` to the right url
   shape, with **nothing inferred** (ADR-0023) — in particular the builder adds MapLibre's
   `pmtiles://` scheme exactly once for all three kinds, never appending `/{z}/{x}/{y}`, and
-  rejects a `TileSource` that already carries the scheme, since it is the renderer's to add and
-  no other renderer can read it; `styleLayers` pass through
-  verbatim with only `source` and a namespaced `id` filled in, since the engine has no opinion
-  about how contours or bathymetry look, and **every** supplied layer id is namespaced so two
-  sources each carrying `labels` yield `a__labels` and `b__labels`; empty attribution is
-  rejected, being a licence obligation; a WMS url without a bbox placeholder is rejected, since
-  it renders one extent everywhere and reports nothing, as is a WMS source of non-`raster` kind
-  and a transport that disagrees with its own url scheme; duplicate source ids are rejected;
-  order is preserved and the first source defaults to `base`; geometry prefers `simplifiedSegments[n]` and falls back to slicing raw points; a
-  singleton segment emits **no line feature** while keeping its endpoint mark; and no empty or
-  single-position `LineString` is ever emitted, asserted across every fixture.
+  rejects a url already carrying the scheme, since it is the renderer's to add and no other
+  renderer can read it; `styleLayers` pass through verbatim with only `source` and a namespaced
+  `id` filled in, since the engine has no opinion about how contours or bathymetry look, and
+  **every** supplied layer id is namespaced so two sources each carrying `labels` yield
+  `a__labels` and `b__labels`; empty attribution is rejected, being a licence obligation; a WMS
+  url without a bbox placeholder is rejected, since it renders one extent everywhere and reports
+  nothing, as is a WMS source of non-`raster` kind; duplicate source ids are rejected; order is
+  preserved and the first source defaults to `base`; geometry prefers `simplifiedSegments[n]` and
+  falls back to slicing raw points; a singleton segment emits **no line feature** while keeping
+  its endpoint mark; and no empty or single-position `LineString` is ever emitted, asserted
+  across every fixture.
 - **T4.1b PMTiles protocol bootstrap.** `ensurePmtilesProtocol`, module-level and lazy.
   `addProtocol` installs a handler on the MapLibre **runtime**, not on a map, so this is
   package-lifecycle state rather than controller state — and `destroy()` deliberately does **not**

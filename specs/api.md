@@ -686,7 +686,7 @@ export interface TileSource {
   id: string;
   kind: TileSourceKind;
   transport: TileSourceTransport;
-  url: string;                 // tile template, WMS request, TileJSON url, or pmtiles:// archive
+  url: string;                 // tile template, WMS request, TileJSON url, or .pmtiles location
   attribution: string;         // rendered verbatim (license compliance)
   role?: TileSourceRole;       // default "overlay" (the first source defaults to "base")
   opacity?: number;

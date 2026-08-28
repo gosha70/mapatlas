@@ -19,6 +19,14 @@ declare global {
       createWebTrackRecorder: typeof createWebTrackRecorder;
       createIdbStorageAdapter: typeof createIdbStorageAdapter;
       recoverInterruptedTrack: typeof recoverInterruptedTrack;
+      /**
+       * Signals a test can wait on instead of sleeping.
+       *
+       * A fixed delay asserts nothing about what the browser has actually done: on a slow
+       * runner the test proceeds before the first fix arrives, and the scenario then waits
+       * for something that will never happen. These let a test wait for the event itself.
+       */
+      signals: Record<string, boolean>;
       /** Set by a running scenario, read by the test. */
       result?: unknown;
       lastTrack?: Track;
@@ -30,4 +38,5 @@ window.mapatlas = {
   createWebTrackRecorder,
   createIdbStorageAdapter,
   recoverInterruptedTrack,
+  signals: {},
 };

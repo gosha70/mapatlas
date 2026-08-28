@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { StorageAdapter, Track, TrackRecorderError } from "@mapatlas/core";
-import { recoverInterruptedTrack } from "@mapatlas/core";
+import {
+  TrackCoverageError,
+  TrackSegmentRangeError,
+  TrackTemporalOrderError,
+  recoverInterruptedTrack,
+} from "@mapatlas/core";
 import { createFakeSensorSource, createMemoryStorageAdapter } from "@mapatlas/core/testing";
 import { describe, expect, it } from "vitest";
 
@@ -749,7 +754,7 @@ describe("recovery and resumption", () => {
     ).toThrow(RecorderResumeError);
   });
 
-  it("rejects a restored track whose timestamps run backwards across a pause", async () => {
+  it("rejects a restored track whose timestamps run backwards across a pause", () => {
     // Stricter than assertValidTrackGeometry, which checks chronology within a segment
     // only: the recorder's own rule spans pauses, so a track like this would validate and
     // then reject every subsequent fix as stale.
@@ -774,18 +779,109 @@ describe("recovery and resumption", () => {
     );
   });
 
-  it("rejects a restored track with malformed geometry", async () => {
+  /** Every way a stored track can be unresumable, and the reason each must report. */
+  const resumeFailures: [
+    name: string,
+    track: Track,
+    reason: RecorderResumeError["reason"],
+    cause: new (...args: never[]) => Error,
+  ][] = [
+    [
+      "a range outside the point array",
+      {
+        id: "r",
+        startedAt: T0,
+        status: "recording",
+        origin: "recorded",
+        points: [{ lat: 59.33, lng: 18.06, t: T0 }],
+        segments: [{ id: "a", startIndex: 0, endIndex: 9, startedAt: T0 }],
+      },
+      "geometry",
+      TrackSegmentRangeError,
+    ],
+    [
+      "a point no segment covers",
+      {
+        id: "r",
+        startedAt: T0,
+        status: "recording",
+        origin: "recorded",
+        points: [
+          { lat: 59.33, lng: 18.06, t: T0 },
+          { lat: 59.34, lng: 18.07, t: T0 + 1000 },
+        ],
+        segments: [{ id: "a", startIndex: 0, endIndex: 0, startedAt: T0 }],
+      },
+      "geometry",
+      TrackCoverageError,
+    ],
+    [
+      "time running backwards inside one segment",
+      {
+        id: "r",
+        startedAt: T0,
+        status: "recording",
+        origin: "recorded",
+        points: [
+          { lat: 59.33, lng: 18.06, t: T0 + 5000 },
+          { lat: 59.34, lng: 18.07, t: T0 },
+        ],
+        segments: [{ id: "a", startIndex: 0, endIndex: 1, startedAt: T0 + 5000 }],
+      },
+      "temporal-order",
+      TrackTemporalOrderError,
+    ],
+  ];
+
+  it.each(resumeFailures)(
+    "reports %s with the right reason and cause",
+    (_name, track, reason, cause) => {
+      // Regression: every failure from assertValidTrackGeometry was labelled "geometry",
+      // so a backwards timestamp *inside* a segment told a caller the shape was wrong when
+      // the clock was. The same fault across a boundary already said temporal-order, so
+      // one consumer-visible problem had two different answers depending on where it fell.
+      const env = createTestEnvironment();
+
+      let thrown: RecorderResumeError | undefined;
+      try {
+        createWebTrackRecorderInternal({ resumeFrom: track }, env.environment);
+      } catch (error) {
+        thrown = error as RecorderResumeError;
+      }
+
+      expect(thrown).toBeInstanceOf(RecorderResumeError);
+      expect(thrown?.reason).toBe(reason);
+      expect(thrown?.cause).toBeInstanceOf(cause);
+    },
+  );
+
+  it("reports a backwards timestamp across a boundary the same way", () => {
+    // Caught by assertRestorableOrder rather than by core, since a gap between segments is
+    // legitimate there. Same fault to a consumer, so it must report the same reason.
+    const env = createTestEnvironment();
     const stored: Track = {
-      id: "resumed",
+      id: "r",
       startedAt: T0,
-      status: "recording",
+      status: "paused",
       origin: "recorded",
-      points: [{ lat: 59.33, lng: 18.06, t: T0 }],
-      segments: [{ id: "a", startIndex: 0, endIndex: 9, startedAt: T0 }],
+      points: [
+        { lat: 59.33, lng: 18.06, t: T0 + 5000 },
+        { lat: 59.34, lng: 18.07, t: T0 },
+      ],
+      segments: [
+        { id: "a", startIndex: 0, endIndex: 0, startedAt: T0 + 5000 },
+        { id: "b", startIndex: 1, endIndex: 1, startedAt: T0 },
+      ],
     };
 
-    const env = createTestEnvironment();
-    expect(() => createWebTrackRecorderInternal({ resumeFrom: stored }, env.environment)).toThrow();
+    let thrown: RecorderResumeError | undefined;
+    try {
+      createWebTrackRecorderInternal({ resumeFrom: stored }, env.environment);
+    } catch (error) {
+      thrown = error as RecorderResumeError;
+    }
+
+    expect(thrown?.reason).toBe("temporal-order");
   });
 
   it("does not mutate the snapshot it resumed from", async () => {

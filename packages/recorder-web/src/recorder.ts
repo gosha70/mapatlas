@@ -18,6 +18,7 @@ import type {
   TrackStatus,
 } from "@mapatlas/core";
 import {
+  TrackTemporalOrderError,
   assertValidTrackGeometry,
   finalizeTrack,
   mergeSensorSamples,
@@ -102,8 +103,8 @@ export class ChannelConflictError extends Error {
 export class RecorderResumeError extends Error {
   readonly reason: "temporal-order" | "channel-conflict" | "geometry" | "not-interrupted";
 
-  constructor(reason: RecorderResumeError["reason"], detail: string) {
-    super(`cannot resume this track: ${detail}`);
+  constructor(reason: RecorderResumeError["reason"], detail: string, options?: ErrorOptions) {
+    super(`cannot resume this track: ${detail}`, options);
     this.name = "RecorderResumeError";
     this.reason = reason;
   }
@@ -265,7 +266,26 @@ export function createWebTrackRecorderInternal(
         `its origin is "${resumed.origin}"; a recorder continues only what a recorder produced`,
       );
     }
-    assertValidTrackGeometry(resumed);
+    // Wrapped so every way of failing to resume raises one family. Unwrapped, a caller
+    // handling RecorderResumeError would still be surprised by a core geometry error
+    // depending on which invariant the stored track happened to violate; the original is
+    // kept as `cause` so nothing is lost.
+    //
+    // The reason is discriminated rather than assumed. `assertValidTrackGeometry` validates
+    // ranges, coverage *and* chronology within each segment, so a backwards timestamp
+    // inside one segment surfaces here — and reporting that as "geometry" would tell a
+    // caller the shape was wrong when the clock was. A regression across a boundary is
+    // caught by `assertRestorableOrder` below; both are the same fault to a consumer, and
+    // both must say so.
+    try {
+      assertValidTrackGeometry(resumed);
+    } catch (error) {
+      throw new RecorderResumeError(
+        error instanceof TrackTemporalOrderError ? "temporal-order" : "geometry",
+        error instanceof Error ? error.message : String(error),
+        { cause: error },
+      );
+    }
     assertRestorableOrder(resumed.points);
   }
 

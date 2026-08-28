@@ -331,8 +331,16 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   source; `styleLayers` passthrough for contour/bathymetry layers. _AC:_ a fixture stack of
   DEM + hillshade + contours renders; `setTerrain(null)` fully removes terrain.
 - **T4.3 Track & events render.** Live position, **one polyline per segment**, start/finish/lap
-  marks, event marks, `fitTrack`, `fitBounds`, `recenter`. _AC:_ renders from fixtures; a
-  two-segment fixture renders two lines with no connecting geometry across the pause.
+  marks, event marks, `fitTrack`, `fitBounds`, `recenter`.
+  Geometry comes from `simplifiedSegments[n]` when present, falling back to slicing the raw
+  points for `segments[n]` — the cache is disposable (ADR-0018), so a track that arrives without
+  it must still draw rather than render nothing.
+  A **singleton segment** gets no line feature at all: a GeoJSON `LineString` needs at least two
+  positions, so one point cannot be a line. Its endpoint and marker rendering stay, since a
+  single kept fix is still a place the user was. _AC:_ renders from fixtures; a two-segment
+  fixture renders two lines with no connecting geometry across the pause; a track with
+  `simplifiedSegments` deleted renders identically in shape; a one-point segment produces marks
+  but no line, and no empty or single-position `LineString` is ever emitted.
 - **T4.4 Presentation seam.** `EventPresentation` for event/start/finish/lap marks and
   per-segment line style; neutral built-in defaults when absent. _AC:_ two events of different
   `category` render with different consumer-supplied marks and their `ariaLabel`s; with no

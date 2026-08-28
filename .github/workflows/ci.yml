@@ -13,6 +13,7 @@ jobs:
   gates:
     name: build · typecheck · lint · test · scans
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -52,6 +53,9 @@ jobs:
     # bump and precisely what a module mock would hide.
     name: browser · real Chromium
     runs-on: ubuntu-latest
+    # Bounded on purpose: a stuck browser download or a wedged WebGL process should cost a
+    # known amount of runner time rather than the platform default of six hours.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -73,6 +77,7 @@ jobs:
 
       - name: Browser tests
         run: npm run test:browser
+        timeout-minutes: 10
 
       - name: Upload traces and screenshots
         if: failure()
@@ -87,6 +92,7 @@ jobs:
   dco:
     name: DCO sign-off
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7

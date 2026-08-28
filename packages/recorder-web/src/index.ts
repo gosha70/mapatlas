@@ -17,5 +17,18 @@
  */
 export { createWebTrackRecorder } from "./recorder.js";
 
+/**
+ * The failures `createWebTrackRecorder` can raise, exported so a consumer can handle them
+ * by type rather than by matching a message.
+ *
+ * `ChannelConflictError` means the sensors as configured disagree about a channel, and
+ * carries the `channelKey`. `RecorderResumeError` means the track offered to `resumeFrom`
+ * cannot be continued, and carries a `reason` — `not-interrupted`, `temporal-order`,
+ * `channel-conflict` or `geometry` — with the underlying fault as `cause` where one exists.
+ * A bad `autosaveMs` is an ordinary `RangeError`.
+ */
+export { ChannelConflictError, RecorderResumeError } from "./recorder.js";
+export { DEFAULT_AUTOSAVE_MS } from "./recorder.js";
+
 /** Package identity, so a consumer can report which engine build it embeds. */
 export const PACKAGE_NAME = "@mapatlas/recorder-web";

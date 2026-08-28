@@ -22,14 +22,18 @@ test("records from the real geolocation API", async ({ page, context }) => {
   const started = page.evaluate(async () => {
     const recorder = window.mapatlas.createWebTrackRecorder({ sampling: { minDistanceM: 1 } });
     const seen: number[] = [];
-    recorder.onPoint((point) => seen.push(point.lat));
+    recorder.onPoint((point) => {
+      seen.push(point.lat);
+      // Tells the test the browser has actually delivered a fix, so it can move the device
+      // rather than guessing how long that takes.
+      window.mapatlas.signals["firstPoint"] = true;
+    });
     await recorder.start();
 
-    // Resolve once the browser has delivered two real fixes.
     await new Promise<void>((resolve) => {
       const check = (): void => {
         if (seen.length >= 2) resolve();
-        else setTimeout(check, 50);
+        else setTimeout(check, 20);
       };
       check();
     });
@@ -45,8 +49,10 @@ test("records from the real geolocation API", async ({ page, context }) => {
     };
   });
 
-  // Move the device: a second real fix, from the platform rather than from the test's hand.
-  await page.waitForTimeout(200);
+  // Move only once the first fix has genuinely arrived. A fixed delay lets a slow runner
+  // move first, so both callbacks report the new location and the page waits forever for a
+  // second distinct point.
+  await page.waitForFunction(() => window.mapatlas.signals["firstPoint"] === true);
   await context.setGeolocation({ latitude: 59.34, longitude: 18.07, accuracy: 5 });
 
   const result = await started;
@@ -63,50 +69,139 @@ test("surfaces a denied geolocation permission as a recorder error", async ({ pa
   await context.clearPermissions();
   await page.goto("/");
 
-  const kinds = await page.evaluate(async () => {
+  await page.evaluate(async () => {
     const recorder = window.mapatlas.createWebTrackRecorder();
     const seen: string[] = [];
-    recorder.onError((error) => seen.push(error.kind));
+    window.mapatlas.result = seen;
+    recorder.onError((error) => {
+      seen.push(error.kind);
+      window.mapatlas.signals["error"] = true;
+    });
     await recorder.start();
-
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    return seen;
   });
 
+  // Wait for the browser to refuse, rather than for a duration that might not be enough.
+  await page.waitForFunction(() => window.mapatlas.signals["error"] === true);
+
+  const kinds = await page.evaluate(() => window.mapatlas.result as string[]);
   expect(kinds).toContain("permission-denied");
 });
 
-test("autosaves to real IndexedDB and recovers what a crash would have left", async ({ page }) => {
+test("recovers an interrupted recording across a real page reload", async ({ page }) => {
   await page.goto("/");
 
-  const recovered = await page.evaluate(async () => {
-    const store = window.mapatlas.createIdbStorageAdapter({
-      databaseName: `e2e-${String(Date.now())}`,
-    });
+  // A name the second document can find. The point of this test is that recovery works
+  // through storage rather than through anything the first page left in memory.
+  const databaseName = `e2e-crash-${String(Date.now())}`;
+
+  await page.evaluate(async (name) => {
+    const inner = window.mapatlas.createIdbStorageAdapter({ databaseName: name });
+    // Signal the write itself. Polling IndexedDB from waitForFunction opens a fresh
+    // connection every frame, which competes with the very write it is waiting for.
+    const store = {
+      ...inner,
+      saveTrack: async (track: Parameters<typeof inner.saveTrack>[0]) => {
+        await inner.saveTrack(track);
+        window.mapatlas.signals["saved"] = true;
+      },
+    };
+
     const recorder = window.mapatlas.createWebTrackRecorder({
       store,
       autosaveMs: 50,
       sampling: { minDistanceM: 1 },
     });
-
     await recorder.start();
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    // No stop(): the tab "dies" here, exactly as a crash would leave it.
+  }, databaseName);
 
+  // Wait for a snapshot to be genuinely on disk, not for an interval to have plausibly fired.
+  await page.waitForFunction(() => window.mapatlas.signals["saved"] === true);
+
+  // The tab dies. No stop(), no close(), no handover — the recorder, its autosave timer and
+  // its adapter all go with the document, which is what a crash actually does and what
+  // recovering through the same live objects never proved.
+  await page.reload();
+
+  const recovered = await page.evaluate(async (name) => {
+    const store = window.mapatlas.createIdbStorageAdapter({ databaseName: name });
     const snapshot = await window.mapatlas.recoverInterruptedTrack(store);
     return {
       found: snapshot !== undefined,
       status: snapshot?.status ?? null,
+      origin: snapshot?.origin ?? null,
+      points: snapshot?.points.length ?? 0,
       // Derived data is deliberately absent from a snapshot.
       hasStats: snapshot?.stats !== undefined,
       hasSimplified: snapshot?.simplifiedSegments !== undefined,
     };
-  });
+  }, databaseName);
 
   expect(recovered.found).toBe(true);
   expect(recovered.status).toBe("recording");
+  expect(recovered.origin).toBe("recorded");
+  expect(recovered.points).toBeGreaterThan(0);
   expect(recovered.hasStats).toBe(false);
   expect(recovered.hasSimplified).toBe(false);
+});
+
+test("continues a recovered recording under its original id, in a new document", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const databaseName = `e2e-resume-${String(Date.now())}`;
+
+  await page.evaluate(async (name) => {
+    const inner = window.mapatlas.createIdbStorageAdapter({ databaseName: name });
+    const store = {
+      ...inner,
+      saveTrack: async (track: Parameters<typeof inner.saveTrack>[0]) => {
+        await inner.saveTrack(track);
+        window.mapatlas.signals["saved"] = true;
+      },
+    };
+
+    const recorder = window.mapatlas.createWebTrackRecorder({
+      store,
+      autosaveMs: 50,
+      sampling: { minDistanceM: 1 },
+    });
+    await recorder.start();
+  }, databaseName);
+
+  await page.waitForFunction(() => window.mapatlas.signals["saved"] === true);
+
+  await page.reload();
+
+  const result = await page.evaluate(async (name) => {
+    const store = window.mapatlas.createIdbStorageAdapter({ databaseName: name });
+    const snapshot = await window.mapatlas.recoverInterruptedTrack(store);
+    if (snapshot === undefined) return { resumed: false };
+
+    const recorder = window.mapatlas.createWebTrackRecorder({
+      store,
+      resumeFrom: snapshot,
+      sampling: { minDistanceM: 1 },
+    });
+    await recorder.start();
+    const track = await recorder.stop();
+
+    return {
+      resumed: true,
+      sameId: track.id === snapshot.id,
+      sameStart: track.startedAt === snapshot.startedAt,
+      // The crash interval is an unobserved gap: resumption always opens a new segment.
+      segments: track.segments.length,
+      stored: (await store.listTrackSummaries()).length,
+      status: track.status,
+    };
+  }, databaseName);
+
+  expect(result.resumed).toBe(true);
+  expect(result.sameId).toBe(true);
+  expect(result.sameStart).toBe(true);
+  expect(result.status).toBe("finalized");
+  // One record, overwritten — not a second trip.
+  expect(result.stored).toBe(1);
 });
 
 test("uses the real Screen Wake Lock API, and copes when it refuses", async ({ page }) => {

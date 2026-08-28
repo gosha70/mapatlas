@@ -176,6 +176,12 @@ describe("the package barrel", () => {
     // T3.1 and api.md keep it off the public contract; exporting it here would make its
     // shape package API to maintain forever.
     const barrel: Record<string, unknown> = await import("./index.js");
-    expect(Object.keys(barrel).sort()).toEqual(["PACKAGE_NAME", "createWebTrackRecorder"]);
+    expect(Object.keys(barrel).sort()).toEqual([
+      "ChannelConflictError",
+      "DEFAULT_AUTOSAVE_MS",
+      "PACKAGE_NAME",
+      "RecorderResumeError",
+      "createWebTrackRecorder",
+    ]);
   });
 });

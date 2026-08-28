@@ -244,7 +244,11 @@ export interface TrackRecorderOptions {
 }
 
 /** Web (foreground) recorder: watchPosition + Screen Wake Lock. Ships in v1
- *  as `@mapatlas/recorder-web` — it touches the DOM, so it is not part of `core`. */
+ *  as `@mapatlas/recorder-web` — it touches the DOM, so it is not part of `core`.
+ *
+ *  The browser it talks to is injected internally for determinism and deliberately kept off
+ *  this contract: a geolocation watch, a wake lock and a timer are implementation machinery,
+ *  and naming them here would mean owning their shapes forever. */
 export declare function createWebTrackRecorder(o?: TrackRecorderOptions): TrackRecorder;
 
 /** A track left in `recording`/`paused` state by a previous session, so the consumer can

@@ -210,11 +210,31 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
 
 ## Phase 3 — `@mapatlas/recorder-web`
 - **T3.1 `createWebTrackRecorder`.** `watchPosition` + sampling (T1.2) + Wake Lock + error map.
-  _AC:_ with a mocked geolocation, emits only accuracy-passing points; `stop()` returns a
-  finalized `Track` with `stats`; Wake Lock acquired on start, released on stop/pause.
+  A private `WebRecorderEnvironment` — `now`, `watchPosition`/`clearWatch`, `requestWakeLock`
+  returning a releasable lease, `setInterval`/`clearInterval` — is injected into an internal
+  factory exported from its source module only. It stays **off** the public contract: the
+  factory keeps the `TrackRecorderOptions` signature `api.md` publishes.
+  _AC:_ with a driven environment, emits only accuracy-passing points; `stop()` returns a
+  finalized `Track` with `stats`; Wake Lock acquired on start, released on stop **and** pause,
+  and a lease resolving *after* the session ends is released rather than held; a geolocation
+  callback queued before the watch was torn down is ignored, across both pause and stop, via a
+  generation token; error codes map to their kinds and a transient failure does not end the
+  recording; `start()` is idempotent and refuses to restart after producing a track; and one
+  **public-factory smoke test** proves the real browser wiring — `navigator.geolocation` and
+  `navigator.wakeLock` — which an injected environment can never demonstrate.
+  _AC — ADR-0020:_ a candidate strictly older than the last kept point is **dropped, never
+  reordered**, even when far enough that `sample()` would otherwise accept it: it is neither
+  stored nor emitted, and `stop()` still finalizes. The comparison is `candidate.t <
+  lastKept.t` — equal timestamps stay valid — and is made against the last kept point
+  **globally, including across pause and resume**, separately from the generation token that
+  rejects obsolete callbacks. `sample()` is unchanged.
 - **T3.2 Segments + laps.** `pause`/`resume` close and open segments; `markLap` splits.
-  _AC:_ a mocked record→pause→resume→stop run yields two segments whose index ranges do not
-  overlap and cover every point; `markLap` twice yields two laps with per-lap stats.
+  _AC:_ a driven record→pause→resume→stop run yields two segments whose index ranges do not
+  overlap and cover every point, with distance and moving time excluding the gap; a pause that
+  caught no fixes creates **no empty segment**, since an inverted range would fail the coverage
+  invariant; the watch and the wake lock are both released on pause and retaken on resume, so a
+  pause costs no battery; `markLap` twice yields two laps with per-lap stats, marking with
+  nothing recorded since the last one is ignored, and laps are absent entirely unless marked.
 - **T3.3 Sensor merge.** Accept `sensors: SensorSource[]`; merge per T1.8 into kept points and
   union descriptors into `Track.channels`. _AC:_ with a fake HR-like source, every kept point
   carries the channel and `stats.channels` reports its avg/min/max.

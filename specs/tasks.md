@@ -474,6 +474,12 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   **empty feature collections** and remove the corresponding DOM markers rather than removing
   sources and layers.
 
+  The renderer's stylesheet is the **consumer's** to load, and `api.md` says so: a package
+  that injects global CSS decides something about the host document that belongs to the
+  application. Without it markers lay out in normal flow rather than absolutely against the
+  map, so the browser lane loads it and asserts marks land **inside the map container** —
+  bounds alone pass while a mark sits hundreds of pixels below it.
+
   **Marks are DOM markers**, since `MarkerStyle.html` is inserted verbatim and must be
   keyboard-reachable. Marker construction belongs to `MapEnvironment`, not `MapLike`: the
   environment owns the renderer's constructors, the map instance owns map operations. A marker

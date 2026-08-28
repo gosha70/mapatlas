@@ -105,6 +105,27 @@ export class MapTerrainError extends Error {
   }
 }
 
+/**
+ * A reserved id already in the style, put there by something other than this controller.
+ *
+ * Only reachable from a base style **URL**: a style document is checked at the call, and a
+ * consumer `TileSource` is rejected during preparation. The renderer fetches a URL itself,
+ * so this is the one collision that cannot be caught before the style loads.
+ */
+export class MapNamespaceCollisionError extends Error {
+  readonly id: string;
+
+  constructor(id: string) {
+    super(
+      `map controller: "${id}" is reserved for the engine but the base style already ` +
+        `declares it; rename it in the style, or supply a style that leaves ` +
+        `"${ENGINE_ID_PREFIX}" alone`,
+    );
+    this.name = "MapNamespaceCollisionError";
+    this.id = id;
+  }
+}
+
 export class MapControllerDestroyedError extends Error {
   constructor(operation: string) {
     super(`map controller: ${operation} was called after destroy()`);
@@ -498,18 +519,35 @@ export function createMapControllerInternal(
    */
   function installEngineState(): void {
     for (const [id, source] of ENGINE_SOURCES) {
-      if (!installedSources.has(id)) {
-        map.addSource(id, source);
-        installedSources.add(id);
-      }
+      if (installedSources.has(id)) continue;
+      // A style that brought this id makes the renderer throw a duplicate-source error here,
+      // which is the right outcome: loud, and attributable.
+      map.addSource(id, source);
+      installedSources.add(id);
     }
     for (const layer of ENGINE_LAYERS) {
-      if (map.getLayer(layer.id) === undefined) map.addLayer(layer);
+      if (installedLayers.has(layer.id)) continue;
+      if (map.getLayer(layer.id) !== undefined) {
+        // Present, but not ours. Skipping would *adopt* it: the reserved id would count as
+        // installed while the layer behind it draws something else entirely, and the engine
+        // would write track geometry to a source nothing renders — a blank map, reported by
+        // nobody. A collision the controller cannot prevent is one it must not hide.
+        throw new MapNamespaceCollisionError(layer.id);
+      }
+      map.addLayer(layer);
+      installedLayers.add(layer.id);
     }
   }
 
-  /** Engine sources this controller added, since the map cannot be asked about a source. */
+  /**
+   * What this controller installed.
+   *
+   * Ownership is tracked rather than inferred from presence. `getLayer` answers "is there a
+   * layer with this id", which is not the same question as "is this layer mine", and reading
+   * one as the other is what let a remote style's layer be adopted.
+   */
   const installedSources = new Set<string>();
+  const installedLayers = new Set<string>();
 
   /** Push prepared geometry into the persistent sources, and reconcile the marker set. */
   function applyRender(): void {

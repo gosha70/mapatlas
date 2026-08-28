@@ -13,6 +13,7 @@ import type { MapControllerOptions } from "./controller.js";
 import {
   EMPTY_STYLE,
   MapControllerDestroyedError,
+  MapNamespaceCollisionError,
   MapTerrainError,
   createMapControllerInternal,
 } from "./controller.js";
@@ -1381,10 +1382,12 @@ describe("the engine does not assume it owns a map because one id is present", (
     ).toThrow(/reserved for the engine/);
   });
 
-  it("installs the rest when a style URL already brought one reserved layer", () => {
+  it("refuses to adopt a reserved layer a style URL brought", () => {
     // The case a style *document* check cannot reach: the renderer fetches a URL, so nothing
-    // can inspect it beforehand. Reading "the anchor exists" as "the engine owns this map"
-    // would then skip every source and every other layer, leaving no track and no error.
+    // can inspect it beforehand. Skipping installation because the id is present would adopt
+    // it — the reserved id would count as installed while the layer behind it draws
+    // something else, and track geometry would go to a source nothing renders. A blank map,
+    // reported by nobody. Ownership is tracked, not inferred from presence.
     const anchorFromStyle = {
       id: ENGINE_LAYER.trackLine,
       type: "background",
@@ -1394,12 +1397,9 @@ describe("the engine does not assume it owns a map because one id is present", (
       { layers: [anchorFromStyle] },
     );
 
-    rig.map.fireLoad();
-
-    expect(rig.map.sourceIds).toContain(ENGINE_SOURCE.track);
-    expect(rig.map.sourceIds).toContain(ENGINE_SOURCE.draft);
-    expect(rig.map.layerIds).toContain(ENGINE_LAYER.draftLine);
-    expect(rig.map.layerIds).toContain(ENGINE_LAYER.draftVertex);
+    expect(() => {
+      rig.map.fireLoad();
+    }).toThrow(MapNamespaceCollisionError);
   });
 
   it("installs every engine layer, not just the ones after a missing anchor", () => {

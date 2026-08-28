@@ -552,19 +552,35 @@ test("places real, accessible marks in the page", async ({ page }) => {
   // its name rather than twice by its name and its contents.
   await expect(marks.first().locator("[aria-hidden='true']")).toHaveCount(1);
 
-  // Laid out with real dimensions. A wrapper with no size and no content is positioned
-  // correctly, sits in the accessibility tree, and draws nothing — a failure no error
-  // reports, because nothing is wrong. Only a real layout engine can settle this.
-  const boxes = await marks.evaluateAll((nodes) =>
-    nodes.map((node) => {
-      const rect = node.getBoundingClientRect();
-      return { width: rect.width, height: rect.height };
-    }),
-  );
-  expect(boxes).toHaveLength(2);
-  for (const box of boxes) {
-    expect(box.width).toBeGreaterThan(0);
-    expect(box.height).toBeGreaterThan(0);
+  // Laid out with real dimensions, *and inside the map*. Size alone is not enough: a mark
+  // that lost its absolute positioning has perfectly good dimensions and sits hundreds of
+  // pixels down the document, outside the container it belongs to. Only a real layout engine
+  // with the renderer's stylesheet loaded can settle either question.
+  const layout = await page.evaluate(() => {
+    const container = document.querySelector(".maplibregl-map")?.getBoundingClientRect();
+    return {
+      container: container === undefined ? null : { ...container.toJSON() },
+      marks: [...document.querySelectorAll(".mapatlas-marker")].map((node) => ({
+        ...node.getBoundingClientRect().toJSON(),
+        // The wrapper *is* the marker element — MapLibre takes it via the `element` option
+        // and puts its own class and positioning on it directly.
+        position: getComputedStyle(node).position,
+      })),
+    };
+  });
+
+  expect(layout.container).not.toBeNull();
+  expect(layout.marks).toHaveLength(2);
+  for (const mark of layout.marks) {
+    expect(mark.width).toBeGreaterThan(0);
+    expect(mark.height).toBeGreaterThan(0);
+    // MapLibre positions its markers absolutely; normal flow means the stylesheet is absent
+    // or its class was clobbered.
+    expect(mark.position).toBe("absolute");
+    expect(mark.top).toBeGreaterThanOrEqual(layout.container!.top);
+    expect(mark.bottom).toBeLessThanOrEqual(layout.container!.bottom);
+    expect(mark.left).toBeGreaterThanOrEqual(layout.container!.left);
+    expect(mark.right).toBeLessThanOrEqual(layout.container!.right);
   }
 
   // And anchored at the tip, not the middle: the anchor has to reach MapLibre's constructor,
@@ -655,4 +671,60 @@ test("keeps its own layers when the consumer stack is replaced", async ({ page }
   // should disturb where the user's track began and ended.
   await expect(page.locator(".mapatlas-marker")).toHaveCount(2);
   expect(errors).toEqual([]);
+});
+
+test("a mark keeps the renderer's own classes across a re-render", async ({ page }) => {
+  // Refreshing a mark's style must not assign `className`: MapLibre adds its own classes
+  // after construction — `maplibregl-marker`, the anchor class, terrain visibility state —
+  // and assigning wipes them. Losing `maplibregl-marker` costs the mark its absolute
+  // positioning, so it drops into normal flow and lands outside the map. A live position
+  // re-renders on every fix, which makes it the fastest way to reach the bug.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.showLivePosition({ lat: 59.33, lng: 18.06, t: 1 });
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION] as const,
+  );
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(1);
+
+  // Three more fixes, each one a refresh of the same element.
+  await page.evaluate(() => {
+    for (const lat of [59.34, 59.35, 59.36]) {
+      window.mapatlas.probe?.controller.showLivePosition({ lat, lng: 18.06, t: 2 });
+    }
+  });
+
+  const mark = page.locator(".mapatlas-marker");
+  await expect(mark).toHaveCount(1);
+  await expect(mark).toHaveClass(/maplibregl-marker/);
+  await expect(mark).toHaveClass(/maplibregl-marker-anchor-center/);
+  await expect(mark).toHaveClass(/mapatlas-mark--live/);
+
+  const stillPlaced = await page.evaluate(() => {
+    const node = document.querySelector(".mapatlas-marker");
+    const container = document.querySelector(".maplibregl-map");
+    if (node === null || container === null) return null;
+    const mark = node.getBoundingClientRect();
+    const box = container.getBoundingClientRect();
+    return {
+      position: getComputedStyle(node).position,
+      inside: mark.top >= box.top && mark.bottom <= box.bottom,
+    };
+  });
+  expect(stillPlaced).toEqual({ position: "absolute", inside: true });
 });

@@ -12,6 +12,11 @@ import { recoverInterruptedTrack } from "@mapatlas/core";
 import type { Track } from "@mapatlas/core";
 import { createIdbStorageAdapter } from "@mapatlas/storage-idb";
 import { createWebTrackRecorder } from "@mapatlas/recorder-web";
+// The renderer's stylesheet is the **consumer's** to load, and this harness is a consumer.
+// Without it markers lay out in normal flow rather than absolutely against the map, so a
+// mark sits wherever the document happens to put it — generally outside the map entirely.
+import "maplibre-gl/dist/maplibre-gl.css";
+
 import { createBrowserMapEnvironment, createMapController } from "@mapatlas/maplibre/controller";
 import { createMapControllerInternal } from "@mapatlas/maplibre/controller-internal";
 import type {

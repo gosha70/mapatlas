@@ -838,6 +838,14 @@ export interface MapController {
 export declare function createMapController(o: MapControllerOptions): MapController;
 ```
 
+**Consumers load the renderer's stylesheet.** `@mapatlas/maplibre` does not import
+`maplibre-gl/dist/maplibre-gl.css` on the consumer's behalf: a package that injects global CSS
+takes a decision about the host document that belongs to the application, and it breaks any
+consumer bundling CSS themselves. Without it MapLibre's own controls are unstyled and — the
+part that looks like an engine bug rather than a missing import — **markers lay out in normal
+document flow instead of absolutely against the map**, so marks appear outside it. Consumers
+import it once, alongside the engine.
+
 **Delivery:** `createMapController` is built across Phase 4 and is **not yet on the package
 barrel**. T4.1 delivers construction plus `setSources`/`destroy`; T4.2 adds `setTerrain`; T4.3
 adds `renderTrack`, `renderEvents`, `renderDraft`, `showLivePosition` and the camera methods;

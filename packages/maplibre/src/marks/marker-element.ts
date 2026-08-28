@@ -31,6 +31,14 @@ export const MARK_WRAPPER_CLASS = "mapatlas-marker";
 const CONTENT_CLASS = "mapatlas-marker__content";
 
 /**
+ * Which classes this module put on the element last time.
+ *
+ * The renderer adds its own after construction, so a refresh cannot simply reassign
+ * `className` — it has to remove exactly what it added and leave everything else alone.
+ */
+const OWNED_CLASSES_ATTRIBUTE = "data-mapatlas-classes";
+
+/**
  * Build the wrapper for one mark.
  *
  * A mark with an `onActivate` is a control: it gets `role="button"`, joins the tab order, and
@@ -45,26 +53,22 @@ export function createMarkerElement(
   const wrapper = documentLike.createElement("div");
   const interactive = onActivate !== undefined;
 
-  wrapper.className =
-    style.className === undefined ? MARK_WRAPPER_CLASS : `${MARK_WRAPPER_CLASS} ${style.className}`;
   wrapper.setAttribute("role", interactive ? "button" : "img");
-  wrapper.setAttribute("aria-label", style.ariaLabel);
   // -1 keeps a non-interactive mark out of the tab order while leaving it focusable
   // programmatically, so a consumer can still move focus to one it has just added.
   wrapper.tabIndex = interactive ? 0 : -1;
 
-  if (style.sizePx !== undefined) {
-    const [width, height] = style.sizePx;
-    wrapper.style.width = `${String(width)}px`;
-    wrapper.style.height = `${String(height)}px`;
-  }
-  if (style.color !== undefined) wrapper.style.color = style.color;
-
-  // The consumer's markup goes *inside*, never in place of, the wrapper.
+  // The consumer's markup goes *inside*, never in place of, the wrapper — and is marked, so
+  // a later refresh can find it. Without the class `applyMarkerStyle` looks for a node that
+  // is not there and quietly refreshes nothing.
   const content = documentLike.createElement("span");
+  content.className = CONTENT_CLASS;
   content.setAttribute("aria-hidden", "true");
-  if (style.html !== undefined) content.innerHTML = style.html;
   wrapper.append(content);
+
+  // One code path for styling, used at creation and at every refresh. Two would drift, and
+  // the half that drifted would be the one only a re-render exercises.
+  applyMarkerStyle(wrapper, style);
 
   if (interactive) {
     wrapper.addEventListener("click", () => {
@@ -84,19 +88,33 @@ export function createMarkerElement(
 }
 
 /**
- * Bring an existing wrapper up to date with a style.
+ * Bring a wrapper up to date with a style, at creation and on every re-render.
  *
  * A mark that survives a re-render keeps its element, so a keyboard user does not lose focus
  * mid-update — but keeping the element must not mean keeping what it *says*. A lap renamed
  * between renders would otherwise announce its old name indefinitely, which is worse than
  * rebuilding: the mark looks maintained and is lying.
  *
- * `anchor` is absent here on purpose. It is fixed when the renderer's marker is constructed
- * and cannot be changed after, so a mark whose anchor changes is rebuilt rather than updated.
+ * Classes are **added and removed, never assigned**. The renderer puts its own classes on
+ * this element after construction — `maplibregl-marker`, the anchor class, terrain
+ * visibility state — and assigning `className` deletes them. Losing `maplibregl-marker`
+ * costs the mark its absolute positioning, so it lands wherever normal flow puts it, which
+ * is generally outside the map. Only the classes this function itself last applied are
+ * removed, recorded on the element so the next call knows what it owns.
+ *
+ * `anchor` is not applied here: the renderer fixes it when the marker is constructed and it
+ * cannot be changed after.
  */
 export function applyMarkerStyle(wrapper: HTMLElement, style: MarkerStyle): void {
-  wrapper.className =
-    style.className === undefined ? MARK_WRAPPER_CLASS : `${MARK_WRAPPER_CLASS} ${style.className}`;
+  const owned = [MARK_WRAPPER_CLASS, ...(style.className?.split(/\s+/).filter(Boolean) ?? [])];
+  const previous = wrapper.getAttribute(OWNED_CLASSES_ATTRIBUTE)?.split(" ").filter(Boolean) ?? [];
+
+  for (const className of previous) {
+    if (!owned.includes(className)) wrapper.classList.remove(className);
+  }
+  for (const className of owned) wrapper.classList.add(className);
+  wrapper.setAttribute(OWNED_CLASSES_ATTRIBUTE, owned.join(" "));
+
   wrapper.setAttribute("aria-label", style.ariaLabel);
 
   if (style.sizePx === undefined) {

@@ -237,7 +237,7 @@ describe("map construction", () => {
 
   it("never inherits MapLibre's default attribution control", () => {
     // The default control ships MapLibre's own attribution. ADR-0008 says the engine does
-    // not put a library's branding in a consumer's product, so the option is always given.
+    // not put a library's branding in a consumer's app, so the option is always given.
     const { harness: rig } = mount();
     expect(rig.map.options.attributionControl).toEqual({ customAttribution: [] });
   });

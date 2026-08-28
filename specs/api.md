@@ -845,7 +845,7 @@ With no `style`, the controller supplies an **explicit empty v8 document** rathe
 MapLibre start style-less, which would require `setStyle()` before the map rendered at all. The
 attribution control is **always** constructed explicitly with `customAttribution`, never
 inherited: MapLibre's default control carries MapLibre's own attribution, and the engine does not
-put a library's branding in a consumer's product (ADR-0008). Each `TileSource.attribution` is
+put a library's branding in a consumer's app (ADR-0008). Each `TileSource.attribution` is
 still rendered — that is a licence obligation, not a preference.
 
 `ensurePmtilesProtocol` runs only when a source declares `transport: "pmtiles"`, and only before

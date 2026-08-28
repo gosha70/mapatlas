@@ -43,7 +43,7 @@ export interface MapLike {
  * optional, because leaving either to the library is a decision the engine has already
  * made differently: a map with no style needs `setStyle()` before it renders anything, and
  * the default attribution control ships MapLibre's own attribution, which ADR-0008 says the
- * engine does not put in a consumer's product.
+ * engine does not put in a consumer's app.
  */
 export interface MapConstructorOptions {
   container: HTMLElement;

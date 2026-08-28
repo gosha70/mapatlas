@@ -41,7 +41,7 @@ export const EMPTY_STYLE: JSONValue = Object.freeze({
  *
  * Explicitly none, rather than absent. MapLibre's default attribution control carries
  * MapLibre's own attribution, and ADR-0008 says the engine does not put a library's
- * branding in a consumer's product. Each `TileSource` still contributes its own
+ * branding in a consumer's app. Each `TileSource` still contributes its own
  * `attribution` — that is a licence obligation and is rendered regardless.
  */
 const NO_CUSTOM_ATTRIBUTION: readonly string[] = Object.freeze([]);

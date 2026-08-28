@@ -82,7 +82,7 @@ test("renders with no consumer style, rather than needing setStyle first", async
 
 test("does not ship MapLibre's default attribution", async ({ page }) => {
   // The library's current default attribution control carries its own attribution. The
-  // engine overrides the control explicitly, so a consumer's product shows the tile
+  // engine overrides the control explicitly, so a consumer's app shows the tile
   // sources' licences and nothing the engine chose on their behalf. (ADR-0008)
   await page.goto("/");
 

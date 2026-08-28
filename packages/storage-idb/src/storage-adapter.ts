@@ -40,7 +40,7 @@ async function recountOwners(
     // A track that does not exist has no summary to correct — an event may legitimately
     // reference one that was never stored, or was deleted.
     if (summary === undefined) continue;
-    const count = (await events.index(INDEX.eventsByTrackId).getAll(trackId)).length;
+    const count = await events.index(INDEX.eventsByTrackId).count(trackId);
     await summaries.put({ ...summary, eventCount: count });
   }
 }
@@ -81,9 +81,14 @@ export function createIdbStorageAdapter(options: IdbStorageAdapterOptions = {}):
       // commit between the count and the write, and the summary then reports a number that
       // was already wrong when it was written.
       const tx = database.transaction([STORE.tracks, STORE.summaries, STORE.events], "readwrite");
-      const eventCount = (
-        await tx.objectStore(STORE.events).index(INDEX.eventsByTrackId).getAll(track.id)
-      ).length;
+      // `count` rather than `getAll(...).length`: the same transactionally consistent
+      // number without structured-cloning every matching event to read a scalar. Autosave
+      // (T3.4) calls saveTrack on an interval, so this cost would otherwise grow with the
+      // event log and repeat for the life of a recording.
+      const eventCount = await tx
+        .objectStore(STORE.events)
+        .index(INDEX.eventsByTrackId)
+        .count(track.id);
 
       await Promise.all([
         tx.objectStore(STORE.tracks).put(track),

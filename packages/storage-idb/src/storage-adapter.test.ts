@@ -166,9 +166,19 @@ describe("reads that inform a write happen inside its transaction", () => {
    * contract permits an event whose `trackId` names nothing. What must never happen is an
    * outcome matching neither ordering.
    */
-  async function assertConsistent(store: IdbStorageAdapter): Promise<void> {
+  async function assertConsistent(
+    store: IdbStorageAdapter,
+    expectedTrackIds: readonly string[],
+  ): Promise<void> {
     const summaries = await store.listTrackSummaries();
     const events = await store.listEvents();
+
+    // Both directions. Checking only summary -> track passes vacuously when an
+    // implementation loses every summary, which is exactly the failure the second store
+    // exists to make possible.
+    expect([...summaries.map((summary) => summary.id)].sort()).toEqual(
+      [...expectedTrackIds].sort(),
+    );
 
     for (const summary of summaries) {
       const actual = events.filter((event) => event.trackId === summary.id).length;
@@ -191,7 +201,7 @@ describe("reads that inform a write happen inside its transaction", () => {
         store.saveEvent(makeEvent({ trackId: track.id })),
       ]);
 
-      await assertConsistent(store);
+      await assertConsistent(store, [track.id]);
     }
   });
 
@@ -204,14 +214,29 @@ describe("reads that inform a write happen inside its transaction", () => {
       const track = makeTrack();
       await store.saveTrack(track);
 
-      const operations = [
-        store.deleteTrack(track.id),
-        store.saveEvent(makeEvent({ trackId: track.id })),
-      ];
-      await Promise.all(attempt % 2 === 0 ? operations : operations.reverse());
+      // Thunks, not promises. An array literal of two calls has already started both by
+      // the time `reverse()` runs, so reversing it only reorders work that is underway —
+      // every attempt would invoke deleteTrack first, and save-first would never be tried.
+      const deleteFirst = attempt % 2 === 0;
+      const operations = deleteFirst
+        ? [
+            () => store.deleteTrack(track.id),
+            () => store.saveEvent(makeEvent({ trackId: track.id })),
+          ]
+        : [
+            () => store.saveEvent(makeEvent({ trackId: track.id })),
+            () => store.deleteTrack(track.id),
+          ];
 
-      await assertConsistent(store);
+      await Promise.all(operations.map((run) => run()));
+
+      // The track is gone either way; whether its event survives depends on the ordering,
+      // and both answers are legitimate serializations.
+      await assertConsistent(store, []);
       expect(await store.getTrack(track.id)).toBeUndefined();
+
+      const survivors = (await store.listEvents()).filter((e) => e.trackId === track.id);
+      expect(survivors).toHaveLength(deleteFirst ? 1 : 0);
     }
   });
 
@@ -228,8 +253,14 @@ describe("reads that inform a write happen inside its transaction", () => {
       ]),
     );
 
-    await assertConsistent(store);
-    for (const summary of await store.listTrackSummaries()) {
+    await assertConsistent(
+      store,
+      tracks.map((track) => track.id),
+    );
+
+    const summaries = await store.listTrackSummaries();
+    expect(summaries).toHaveLength(tracks.length); // not vacuous if summaries were lost
+    for (const summary of summaries) {
       expect(summary.eventCount).toBe(2);
     }
   });

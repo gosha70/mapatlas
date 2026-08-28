@@ -6,7 +6,13 @@ import type { StorageAdapter } from "./storage.js";
 import type { Track, TrackPoint, TrackStatus } from "./track.js";
 
 export type TrackRecorderErrorKind =
-  "permission-denied" | "position-unavailable" | "timeout" | "unsupported" | "sensor";
+  | "permission-denied"
+  | "position-unavailable"
+  | "timeout"
+  | "unsupported"
+  | "sensor"
+  /** An autosave failed. The recording continues; only the durability of it is affected. */
+  | "storage";
 
 export interface TrackRecorderError {
   kind: TrackRecorderErrorKind;
@@ -54,4 +60,14 @@ export interface TrackRecorderOptions {
    * interval rather than a whole trip. Requires `store`. `0` disables. (ADR-0015)
    */
   autosaveMs?: number;
+  /**
+   * Continue a track a previous session left unfinished — what
+   * `recoverInterruptedTrack` returns.
+   *
+   * Its id, points, laps, channel descriptors and original `startedAt` carry over, so the
+   * resumed recording overwrites the same record rather than starting a second trip. A
+   * **new segment always opens**: the crash interval is a gap of unknown length that
+   * nothing observed, and bridging it would invent geometry.
+   */
+  resumeFrom?: Track;
 }

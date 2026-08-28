@@ -258,9 +258,34 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   track; the previous behaviour left `started` false, so a later `start()` succeeded while every
   subsequent `stop()` returned the cached empty track before any cleanup, leaving a live watch and
   status `recording`.
-- **T3.4 Autosave + recovery.** Persist the in-progress track every `autosaveMs`.
-  _AC:_ simulating a crash mid-recording, `recoverInterruptedTrack` returns a track containing
-  all points written before the last autosave.
+- **T3.4 Autosave + recovery.** Persist the in-progress track every `autosaveMs`, and continue
+  one via `TrackRecorderOptions.resumeFrom`.
+  _AC — the snapshot:_ raw and **unfinalized** — one canonical `startedAt` shared by every
+  snapshot and the final write (never the first point's timestamp, which a snapshot taken before
+  any fix does not have), `status` recording/paused, `origin: "recorded"`, deep-cloned points,
+  closed segments plus the open one under its **stable id** and current `endIndex`, declared
+  channel descriptors, and completed laps with `index` and timing derived but **no lap
+  statistics**. No track statistics, no simplification, no `endedAt` — all derived (ADR-0022) and
+  all a full pass over every point that nobody reads until the trip ends.
+  _AC — ordering:_ pause sets status, closes the segment, tears down watch/lock/sensors, then
+  **flushes immediately** rather than waiting for a tick, because a pause is often the last thing
+  before an app is backgrounded and killed; the timer stays alive while paused, since a paused
+  track is still recoverable. At most one write is in flight and only the newest pending snapshot
+  is kept, so two writes cannot land out of order and leave an older picture on disk. `stop()`
+  clears the timer, drains the queue, then saves the finalized track **last** under the same id;
+  the `stopPromise` is memoized, not just the result, so concurrent stops await one drain and
+  produce exactly one final save.
+  _AC — failures:_ a rejected autosave surfaces as a `storage` error, does not poison the queue,
+  does not become an unhandled rejection, and does not end the recording; a failed **final** save
+  rejects `stop()` and can be retried, since the finalized track is already memoized.
+  _AC — resumption:_ `resumeFrom` preserves id, points, laps, channels and the original
+  `startedAt`; **always opens a new segment**, the crash interval being an unobserved gap; and
+  restores `lastKept` so the first post-recovery fix still faces ADR-0020 — a fix older than the
+  last restored point but far enough for `sample()` to accept is **dropped**, while one sharing
+  its timestamp is kept. Restored points are validated as **globally** non-decreasing, stricter
+  than `assertValidTrackGeometry`, which checks chronology within a segment only; and recovered
+  channel descriptors are merged with newly declared ones, appending new keys but **rejecting a
+  conflicting definition** for an existing one rather than reinterpreting stored values.
 
 ## Phase 4 — `@mapatlas/maplibre`
 - **T4.1 MapController + layers.** Mount a MapLibre GL map, optional base `style`, ordered

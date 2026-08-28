@@ -13,10 +13,12 @@ import type {
   TrackRecorder,
   TrackRecorderError,
   TrackRecorderOptions,
+  TrackLap,
   TrackSegment,
   TrackStatus,
 } from "@mapatlas/core";
 import {
+  assertValidTrackGeometry,
   finalizeTrack,
   mergeSensorSamples,
   newId,
@@ -78,6 +80,71 @@ function toRecorderError(failure: PositionFailure): TrackRecorderError {
   }
 }
 
+/** A track offered to `resumeFrom` that cannot be continued. */
+export class RecorderResumeError extends Error {
+  readonly reason: "temporal-order" | "channel-conflict" | "geometry";
+
+  constructor(reason: RecorderResumeError["reason"], detail: string) {
+    super(`cannot resume this track: ${detail}`);
+    this.name = "RecorderResumeError";
+    this.reason = reason;
+  }
+}
+
+/**
+ * Timestamps across the whole restored track must be non-decreasing.
+ *
+ * Stricter than `assertValidTrackGeometry`, deliberately: that checks chronology *within*
+ * each segment, because a pause is a legitimate gap. The recorder holds the stronger rule —
+ * `lastKept` spans pauses — so a track whose second segment starts before the first ended
+ * would pass validation and then reject every subsequent fix as stale.
+ */
+function assertRestorableOrder(points: readonly TrackPoint[]): void {
+  for (let i = 1; i < points.length; i += 1) {
+    const previous = points[i - 1];
+    const current = points[i];
+    if (previous === undefined || current === undefined) continue;
+    if (current.t < previous.t) {
+      throw new RecorderResumeError(
+        "temporal-order",
+        `points[${i}].t (${current.t}) precedes points[${i - 1}].t (${previous.t})`,
+      );
+    }
+  }
+}
+
+/**
+ * Historical descriptors are preserved and new keys appended.
+ *
+ * A key defined two ways is rejected rather than reconciled: the stored values were
+ * recorded under the old definition, and silently adopting a new unit or label would
+ * reinterpret data already on disk.
+ */
+function mergeChannelDescriptors(
+  restored: readonly ChannelDescriptor[],
+  declared: readonly ChannelDescriptor[],
+): ChannelDescriptor[] {
+  const merged = new Map<string, ChannelDescriptor>();
+  for (const descriptor of restored) merged.set(descriptor.key, { ...descriptor });
+
+  for (const descriptor of declared) {
+    const existing = merged.get(descriptor.key);
+    if (existing === undefined) {
+      merged.set(descriptor.key, { ...descriptor });
+      continue;
+    }
+    if (existing.label !== descriptor.label || existing.unit !== descriptor.unit) {
+      throw new RecorderResumeError(
+        "channel-conflict",
+        `channel "${descriptor.key}" was recorded as ${existing.label} (${existing.unit}) ` +
+          `and is now declared as ${descriptor.label} (${descriptor.unit})`,
+      );
+    }
+  }
+
+  return [...merged.values()];
+}
+
 /** Exported for tests only — not re-exported from the package barrel. */
 export function createWebTrackRecorderInternal(
   options: TrackRecorderOptions,
@@ -97,13 +164,24 @@ export function createWebTrackRecorderInternal(
    * recording disagree about what a channel is called. What a track declares is fixed when
    * the recorder is built.
    */
-  const declaredChannels: ChannelDescriptor[] = (() => {
+  const sensorChannels: ChannelDescriptor[] = (() => {
     const byKey = new Map<string, ChannelDescriptor>();
     for (const sensor of sensors) {
       for (const descriptor of sensor.channels) byKey.set(descriptor.key, { ...descriptor });
     }
     return [...byKey.values()];
   })();
+
+  const resumed = options.resumeFrom;
+  if (resumed !== undefined) {
+    assertValidTrackGeometry(resumed);
+    assertRestorableOrder(resumed.points);
+  }
+
+  const declaredChannels: ChannelDescriptor[] =
+    resumed === undefined
+      ? sensorChannels
+      : mergeChannelDescriptors(resumed.channels ?? [], sensorChannels);
 
   /**
    * Samples gathered since the previous **kept** point.
@@ -117,12 +195,22 @@ export function createWebTrackRecorderInternal(
   /** Whether sensors are wanted running right now — consulted by a late `start()`. */
   let sensorsDesired = false;
 
+  let writeInFlight: Promise<void> | undefined;
+  let pendingSnapshot: Track | undefined;
+  let autosaveHandle: unknown;
+  let stopPromise: Promise<Track> | undefined;
+
   let status: TrackStatus = "finalized";
   let started = false;
 
-  const points: TrackPoint[] = [];
-  const segments: TrackSegment[] = [];
-  const laps: LapInput[] = [];
+  const points: TrackPoint[] = (resumed?.points ?? []).map(clonePoint);
+  const segments: TrackSegment[] = (resumed?.segments ?? []).map((segment) => ({ ...segment }));
+  const laps: LapInput[] = (resumed?.laps ?? []).map((lap) => ({
+    id: lap.id,
+    startIndex: lap.startIndex,
+    endIndex: lap.endIndex,
+    ...(lap.label === undefined ? {} : { label: lap.label }),
+  }));
 
   /** Index where the open segment begins, or undefined when none is open. */
   let segmentStart: number | undefined;
@@ -131,7 +219,7 @@ export function createWebTrackRecorderInternal(
    *  segment names the same one the finalized track will. */
   let segmentId: Id | undefined;
   /** Index where the current lap begins. Laps exist only once `markLap` is called. */
-  let lapStart = 0;
+  let lapStart = laps.length === 0 ? 0 : (laps[laps.length - 1]?.endIndex ?? -1) + 1;
 
   /**
    * Minted once, when recording begins, and used by every projection of this recording.
@@ -140,8 +228,16 @@ export function createWebTrackRecorderInternal(
    * points, and T3.4's autosaves would each address a different record instead of
    * overwriting one.
    */
-  let trackId: Id | undefined;
-  let startedAt = 0;
+  let trackId: Id | undefined = resumed?.id;
+  /**
+   * Canonical for this recording: every snapshot and the final track carry the same value.
+   *
+   * Not the first point's timestamp. A snapshot written before any fix arrives has no first
+   * point, so deriving it there would let successive projections of one recording disagree
+   * about when it began — and a resumed track must keep the moment the *original* session
+   * started, not when recovery happened.
+   */
+  let startedAt = resumed?.startedAt ?? 0;
   let watchId: number | undefined;
   let wakeLock: WakeLockLease | undefined;
 
@@ -164,13 +260,107 @@ export function createWebTrackRecorderInternal(
    * Reordering live observations is the alternative, and it would entangle `onPoint`,
    * sensor merge, laps, segments and autosave for no gain. (ADR-0020)
    */
-  let lastKept: TrackPoint | undefined;
+  let lastKept: TrackPoint | undefined = points[points.length - 1];
 
   const pointListeners = new Set<(p: TrackPoint) => void>();
   const errorListeners = new Set<(e: TrackRecorderError) => void>();
 
   const emitError = (error: TrackRecorderError): void => {
     for (const listener of errorListeners) listener(error);
+  };
+
+  /**
+   * An immutable picture of the recording as it stands, cheap enough to write on a timer.
+   *
+   * Deliberately **not** finalized. Statistics and simplification are derived (ADR-0022) and
+   * would cost a full pass over every point on each autosave, for a value nobody reads until
+   * the trip ends. `status` stays `recording` or `paused`, which is exactly what
+   * `recoverInterruptedTrack` looks for — a finalized snapshot would be invisible to it.
+   *
+   * Lap `index` and timing are derived because `TrackLap` requires them and both are one
+   * lookup; lap statistics are not, for the same reason the track's are not.
+   */
+  const buildSnapshot = (): Track => {
+    const snapshotSegments = segments.map((segment) => ({ ...segment }));
+
+    // The segment still open, if it has caught anything. Its id was minted when it opened,
+    // so successive snapshots name the same segment rather than inventing a new one.
+    if (segmentStart !== undefined && points.length - 1 >= segmentStart) {
+      const first = points[segmentStart];
+      const last = points[points.length - 1];
+      snapshotSegments.push({
+        id: segmentId ?? newId(),
+        startIndex: segmentStart,
+        endIndex: points.length - 1,
+        startedAt: first?.t ?? segmentStartedAt,
+        ...(last === undefined ? {} : { endedAt: last.t }),
+      });
+    }
+
+    const snapshotLaps: TrackLap[] = laps.map((lap, index) => {
+      const first = points[lap.startIndex];
+      const last = points[lap.endIndex];
+      return {
+        id: lap.id,
+        index,
+        startIndex: lap.startIndex,
+        endIndex: lap.endIndex,
+        startedAt: first?.t ?? startedAt,
+        ...(last === undefined ? {} : { endedAt: last.t }),
+        ...(lap.label === undefined ? {} : { label: lap.label }),
+      };
+    });
+
+    return {
+      id: trackId ?? newId(),
+      startedAt,
+      status: status === "paused" ? "paused" : "recording",
+      origin: "recorded",
+      points: points.map(clonePoint),
+      segments: snapshotSegments,
+      ...(snapshotLaps.length === 0 ? {} : { laps: snapshotLaps }),
+      ...(declaredChannels.length === 0
+        ? {}
+        : { channels: declaredChannels.map((descriptor) => ({ ...descriptor })) }),
+    };
+  };
+
+  /**
+   * At most one write in flight, and only the newest pending snapshot is kept.
+   *
+   * Two writes racing could land out of order and leave an older picture on disk, still
+   * recoverable and wrong. Queueing keeps the sequence; discarding superseded snapshots
+   * keeps a slow store from accumulating a backlog of pictures nobody will ever want.
+   */
+  const enqueueSave = (snapshot: Track): void => {
+    const store = options.store;
+    if (store === undefined) return;
+
+    pendingSnapshot = snapshot;
+    if (writeInFlight !== undefined) return;
+
+    writeInFlight = (async () => {
+      while (pendingSnapshot !== undefined) {
+        const next = pendingSnapshot;
+        pendingSnapshot = undefined;
+        try {
+          await store.saveTrack(next);
+        } catch (error) {
+          // A failed autosave costs durability, not the recording. It must not poison the
+          // queue, and it must not surface as an unhandled rejection.
+          emitError({
+            kind: "storage",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      writeInFlight = undefined;
+    })();
+  };
+
+  /** Wait for the queue to drain, so the final write is genuinely last. */
+  const drainWrites = async (): Promise<void> => {
+    while (writeInFlight !== undefined) await writeInFlight;
   };
 
   const openSegment = (): void => {
@@ -361,22 +551,38 @@ export function createWebTrackRecorderInternal(
 
       started = true;
       status = "recording";
-      startedAt = environment.now();
+      // A resumed recording keeps the moment its original session began.
+      if (resumed === undefined) startedAt = environment.now();
       trackId ??= newId();
       Object.assign(samplingPolicy, resolveSamplingPolicy({ ...options.sampling, ...overrides }));
 
       openSegment();
       beginWatching();
+
+      const autosaveMs = options.autosaveMs;
+      if (options.store !== undefined && autosaveMs !== undefined && autosaveMs > 0) {
+        autosaveHandle = environment.setInterval(() => {
+          enqueueSave(buildSnapshot());
+        }, autosaveMs);
+      }
+
       return Promise.resolve();
     },
 
     pause: () => {
       if (status !== "recording") return;
+
       status = "paused";
       closeSegment();
       // The watch goes too. Holding it while discarding every fix would drain the battery
       // for nothing, and a pause is usually taken precisely to stop that.
       stopWatching();
+
+      // Flushed now rather than waiting for the next tick: a pause is often the last thing
+      // that happens before an app is backgrounded and killed, which is exactly when the
+      // interval is least likely to fire again. The timer keeps running — a paused track is
+      // still recoverable — it simply has less to write.
+      enqueueSave(buildSnapshot());
     },
 
     resume: () => {
@@ -403,7 +609,18 @@ export function createWebTrackRecorderInternal(
     stop: () => {
       // Idempotent, and identical: a second call returns the same track rather than a new
       // one with a fresh id over the same points.
-      if (finalized !== undefined) return Promise.resolve(finalized);
+      if (stopPromise !== undefined) return stopPromise;
+      if (finalized !== undefined) {
+        // Finalized already, but its save failed and was not retried by a live promise.
+        const store = options.store;
+        if (store === undefined) return Promise.resolve(finalized);
+        const track = finalized;
+        stopPromise = store.saveTrack(track).then(() => track);
+        return stopPromise.catch((error: unknown) => {
+          stopPromise = undefined;
+          throw error;
+        });
+      }
 
       // Stopping something never started used to memoize an empty track while leaving
       // `started` false, so a subsequent `start()` succeeded and every later `stop()`
@@ -416,6 +633,11 @@ export function createWebTrackRecorderInternal(
       closeSegment();
       stopWatching();
       status = "finalized";
+
+      if (autosaveHandle !== undefined) {
+        environment.clearInterval(autosaveHandle);
+        autosaveHandle = undefined;
+      }
 
       // A final lap only exists if laps were marked at all.
       if (laps.length > 0 && points.length > lapStart) {
@@ -433,14 +655,34 @@ export function createWebTrackRecorderInternal(
         points,
         segments,
         id: trackId ?? newId(),
-        startedAt: points[0]?.t ?? startedAt,
+        startedAt,
         endedAt,
         origin: "recorded",
         ...(laps.length === 0 ? {} : { laps }),
         ...(descriptors.length === 0 ? {} : { channels: descriptors }),
       });
 
-      return Promise.resolve(finalized);
+      const track = finalized;
+      const store = options.store;
+      if (store === undefined) return Promise.resolve(track);
+
+      // Memoizing the *promise*, not just the result: two concurrent stops must await the
+      // same drain and produce exactly one final save, rather than racing each other.
+      stopPromise = (async () => {
+        // Queued snapshots first, so an older picture cannot land after the finished track
+        // and leave it falsely recoverable.
+        await drainWrites();
+        await store.saveTrack(track);
+        return track;
+      })().catch((error: unknown) => {
+        // A failed final save is worth surfacing, and worth retrying: the finalized track
+        // is already memoized, so a second stop() re-attempts the write rather than
+        // rebuilding or losing it.
+        stopPromise = undefined;
+        throw error;
+      });
+
+      return stopPromise;
     },
 
     onPoint: (cb) => {

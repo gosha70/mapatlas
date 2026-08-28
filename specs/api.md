@@ -230,7 +230,8 @@ export interface TrackRecorder {
 }
 
 export type TrackRecorderErrorKind =
-  | "permission-denied" | "position-unavailable" | "timeout" | "unsupported" | "sensor";
+  | "permission-denied" | "position-unavailable" | "timeout" | "unsupported" | "sensor"
+  | "storage";   // an autosave failed; the recording continues
 export interface TrackRecorderError { kind: TrackRecorderErrorKind; message: string; sourceId?: string; }
 
 export interface TrackRecorderOptions {
@@ -241,6 +242,10 @@ export interface TrackRecorderOptions {
   /** Persist the in-progress track this often so a crash/tab-kill loses at most one interval.
    *  Requires `store`. Default ~10000; 0 disables. */
   autosaveMs?: number;
+  /** Continue a track a previous session left unfinished (what `recoverInterruptedTrack`
+   *  returns). Its id, points, laps, channels and original `startedAt` carry over; a **new
+   *  segment always opens**, because the crash interval is an unobserved gap. */
+  resumeFrom?: Track;
 }
 
 /** Web (foreground) recorder: watchPosition + Screen Wake Lock. Ships in v1

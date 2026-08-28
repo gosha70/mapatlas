@@ -193,8 +193,16 @@ test("continues a recovered recording across a reload, and records into it", asy
 
     const before = snapshot.points.length;
     window.mapatlas.result = { snapshot, recorder, before };
-    recorder.onPoint(() => {
-      window.mapatlas.signals["postReloadPoint"] = true;
+
+    // Signal only the point we actually moved to. Any accepted point would do on a fast
+    // runner, but a slow one can exceed the default maxIntervalMs between the pre-crash
+    // point and resumption, letting Chromium's initial same-location callback in via
+    // interval-elapsed. The later assertion catches that, so it would be a false failure
+    // rather than a false pass — but waiting on the exact condition removes it entirely.
+    recorder.onPoint((point) => {
+      if (Math.abs(point.lat - 59.4) < 0.001) {
+        window.mapatlas.signals["postReloadPoint"] = true;
+      }
     });
     await recorder.start();
   }, databaseName);

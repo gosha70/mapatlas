@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { LayerSpecification, SourceSpecification } from "maplibre-gl";
+import type { LayerSpecification, SourceSpecification, TerrainSpecification } from "maplibre-gl";
 
 import type { MapConstructorOptions, MapLike } from "./environment.js";
 
@@ -22,6 +22,7 @@ export type MapCall =
   | { readonly op: "removeSource"; readonly id: string }
   | { readonly op: "addLayer"; readonly id: string; readonly source: string }
   | { readonly op: "removeLayer"; readonly id: string }
+  | { readonly op: "setTerrain"; readonly source: string | null }
   | { readonly op: "remove" };
 
 export class FakeMapError extends Error {}
@@ -35,6 +36,8 @@ export interface FakeMap extends MapLike {
   /** The layer definitions as installed, so a test can assert on what MapLibre received. */
   readonly layerSpecs: readonly LayerSpecification[];
   /** How the controller constructed this map. */
+  /** The terrain currently applied, which is what MapLibre's own `getTerrain()` reports. */
+  readonly terrain: TerrainSpecification | null;
   readonly options: MapConstructorOptions;
   readonly loadListenerCount: number;
   fireLoad(): void;
@@ -45,6 +48,7 @@ export function createFakeMap(options: MapConstructorOptions): FakeMap {
   const sources = new Map<string, SourceSpecification>();
   const layers = new Map<string, LayerSpecification>();
   let loadListeners: (() => void)[] = [];
+  let terrain: TerrainSpecification | null = null;
   let removed = false;
 
   function assertLive(operation: string): void {
@@ -64,6 +68,9 @@ export function createFakeMap(options: MapConstructorOptions): FakeMap {
     },
     get layerSpecs() {
       return [...layers.values()];
+    },
+    get terrain() {
+      return terrain;
     },
     get loadListenerCount() {
       return loadListeners.length;
@@ -95,6 +102,9 @@ export function createFakeMap(options: MapConstructorOptions): FakeMap {
       if (dependent !== undefined) {
         throw new FakeMapError(`source "${id}" is still used by layer "${dependent[0]}"`);
       }
+      if (terrain !== null && terrain.source === id) {
+        throw new FakeMapError(`source "${id}" is still used by terrain`);
+      }
       sources.delete(id);
       calls.push({ op: "removeSource", id });
     },
@@ -115,6 +125,16 @@ export function createFakeMap(options: MapConstructorOptions): FakeMap {
       if (!layers.has(id)) throw new FakeMapError(`no layer "${id}"`);
       layers.delete(id);
       calls.push({ op: "removeLayer", id });
+    },
+
+    setTerrain(next: TerrainSpecification | null): void {
+      assertLive("setTerrain");
+      if (next !== null && !sources.has(next.source)) {
+        // MapLibre rejects terrain naming a source the style does not hold.
+        throw new FakeMapError(`terrain names no installed source "${next.source}"`);
+      }
+      terrain = next;
+      calls.push({ op: "setTerrain", source: next === null ? null : next.source });
     },
 
     remove(): void {

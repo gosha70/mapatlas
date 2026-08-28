@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { JSONValue } from "@mapatlas/core";
-import type { LayerSpecification, SourceSpecification } from "maplibre-gl";
+import type { LayerSpecification, SourceSpecification, TerrainSpecification } from "maplibre-gl";
 
 import type { ProtocolRegistrar } from "../protocols/pmtiles.js";
 
@@ -33,6 +33,12 @@ export interface MapLike {
   /** Draw order is add order, which is why the controller installs in declared order. */
   addLayer(layer: LayerSpecification): void;
   removeLayer(id: string): void;
+  /**
+   * Terrain is another consumer of the source stack, exactly as layers are, so it appears
+   * on the same seam. `null` disables it — and must be sent before the DEM source it names
+   * is removed, or MapLibre refuses the removal.
+   */
+  setTerrain(terrain: TerrainSpecification | null): void;
   remove(): void;
 }
 

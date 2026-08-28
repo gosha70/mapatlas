@@ -871,6 +871,19 @@ still rendered — that is a licence obligation, not a preference.
 that source is added. `destroy()` removes the map and deliberately leaves the protocol
 registered: it is realm infrastructure other controllers depend on.
 
+**Terrain is prepared desired state over the source stack**, and a stack replacement is atomic
+with respect to it. `setTerrain` validates against *desired* sources, not the installed map:
+the named source must exist and be `kind: "raster-dem"` (`role` is not checked — `kind` states
+capability), and `exaggeration` must be finite and `>= 0`, zero included. Neither is something
+MapLibre reports in time to help; terrain over a raster source simply renders flat.
+
+Desired and applied terrain are distinct. Setting terrain before the style loads makes no
+MapLibre call; load makes exactly one, after the sources it names. Reconciliation releases
+terrain before removing any source that it might reference, and restores it only once the new
+stack is installed — terrain is a consumer of the source stack exactly as layers are.
+`setSources` re-validates standing terrain against the prospective stack and assigns nothing
+until both pass, so a stack that would orphan terrain throws and leaves desired state as it was.
+
 **Contract:** `MarkerStyle.html` is inserted into the DOM verbatim — it is **consumer-authored
 markup and must never be built from untrusted input** (see `SECURITY.md`). Every mark carries an
 `ariaLabel`; the engine supplies none, because only the consumer knows what a mark means. With no

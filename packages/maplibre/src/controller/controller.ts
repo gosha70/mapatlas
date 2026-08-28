@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { JSONValue, LatLng, TileSource } from "@mapatlas/core";
+import type { JSONValue, LatLng, TerrainOptions, TileSource, TileSourceKind } from "@mapatlas/core";
 
 import type { BuiltTileSource } from "../builders/tile-source.js";
 import { buildTileSources, usesPmtiles } from "../builders/tile-source.js";
@@ -8,9 +8,9 @@ import { ensurePmtilesProtocol } from "../protocols/pmtiles.js";
 import type { MapEnvironment, MapLike } from "./environment.js";
 
 /**
- * The map controller's source-stack half (T4.1).
+ * The map controller's source stack and terrain (T4.1, T4.2).
  *
- * Two ideas carry the whole file.
+ * Three ideas carry the whole file.
  *
  * **The controller models desired state, not a command log.** `setSources` records what the
  * map should show and reconciles if it can; it never queues work. Calling it three times
@@ -27,6 +27,12 @@ import type { MapEnvironment, MapLike } from "./environment.js";
  * **Installation waits for `load`.** MapLibre rejects `addSource` and `addLayer` until the
  * style is ready, so construction is synchronous for the consumer while the install path
  * hangs off that event.
+ *
+ * Terrain is not an exception to any of that; it is another **consumer of the source stack**,
+ * exactly as layers are. So a stack replacement is atomic with respect to it: compatibility
+ * is checked before anything is mutated, applied terrain is released before any old source
+ * goes, and it is restored only once the new sources and layers are in. When T4.3 adds track
+ * and event sources, they join the same ordering rather than becoming a second exception.
  */
 
 /**
@@ -53,6 +59,19 @@ export const EMPTY_STYLE: JSONValue = Object.freeze({
  */
 const NO_CUSTOM_ATTRIBUTION: readonly string[] = Object.freeze([]);
 
+/**
+ * Terrain that the controller will not install, refused at the call.
+ *
+ * MapLibre cannot report most of these usefully: terrain pointed at a raster source renders
+ * a silently flat map, which is indistinguishable from a DEM that failed to load.
+ */
+export class MapTerrainError extends Error {
+  constructor(detail: string) {
+    super(`map terrain: ${detail}`);
+    this.name = "MapTerrainError";
+  }
+}
+
 export class MapControllerDestroyedError extends Error {
   constructor(operation: string) {
     super(`map controller: ${operation} was called after destroy()`);
@@ -64,21 +83,77 @@ export class MapControllerDestroyedError extends Error {
  * A stack that has already been translated and validated, so installing it cannot fail on
  * anything the engine is able to check.
  *
- * `needsPmtiles` is captured here rather than recomputed at install time because it is a
- * property of the sources, and the sources are no longer around by then.
+ * `needsPmtiles` and `kinds` are captured here rather than recomputed at install time
+ * because they are properties of the sources, and the sources are no longer around by then.
+ * `kinds` is a snapshot of what terrain needs to know, so terrain is validated against
+ * *desired* state rather than against whatever the map currently holds — which is the
+ * difference that matters before `load`, when the map holds nothing at all.
  */
 interface PreparedSources {
   readonly built: BuiltTileSource[];
   readonly needsPmtiles: boolean;
+  readonly kinds: ReadonlyMap<string, TileSourceKind>;
 }
 
-function prepare(sources: readonly TileSource[]): PreparedSources {
-  return { built: buildTileSources(sources), needsPmtiles: sources.some(usesPmtiles) };
+function prepareSources(sources: readonly TileSource[]): PreparedSources {
+  return {
+    built: buildTileSources(sources),
+    needsPmtiles: sources.some(usesPmtiles),
+    kinds: new Map(sources.map((source) => [source.id, source.kind])),
+  };
 }
 
-/** The part of `MapController` T4.1 delivers. Widened by T4.2 (terrain) and T4.3 (track). */
-export interface MapSourceController {
+/** Terrain the controller has accepted. `null` is prepared state meaning "no terrain". */
+interface PreparedTerrain {
+  readonly source: string;
+  readonly exaggeration: number;
+}
+
+/** MapLibre's default, and the style spec's. */
+const DEFAULT_EXAGGERATION = 1;
+
+/**
+ * Check terrain against a source stack and normalise it, or throw.
+ *
+ * Both rules are ones MapLibre will not enforce in time to help. A missing source is
+ * rejected by `setTerrain`, but only once the style has loaded — long after the call that
+ * introduced it. A source of the wrong kind is not rejected at all: it renders flat.
+ *
+ * `role` is deliberately not checked. `kind` states what a source *is* — an elevation
+ * raster — while `role` states how it participates in the stack, and a DEM can legitimately
+ * drive terrain while also carrying a hillshade layer.
+ */
+function prepareTerrain(
+  terrain: TerrainOptions | null,
+  sources: PreparedSources,
+): PreparedTerrain | null {
+  if (terrain === null) return null;
+
+  const kind = sources.kinds.get(terrain.sourceId);
+  if (kind === undefined) {
+    throw new MapTerrainError(`no source "${terrain.sourceId}" in the stack`);
+  }
+  if (kind !== "raster-dem") {
+    throw new MapTerrainError(
+      `source "${terrain.sourceId}" is kind "${kind}", not "raster-dem" — terrain over a ` +
+        `non-elevation source renders flat, with nothing to say why`,
+    );
+  }
+
+  const exaggeration = terrain.exaggeration ?? DEFAULT_EXAGGERATION;
+  if (!Number.isFinite(exaggeration) || exaggeration < 0) {
+    // The style spec defines exaggeration as >= 0. Zero is legitimate — flat terrain that is
+    // still terrain — so it is accepted; NaN and Infinity are not.
+    throw new MapTerrainError(`exaggeration must be a finite number >= 0, got ${exaggeration}`);
+  }
+
+  return { source: terrain.sourceId, exaggeration };
+}
+
+/** The part of `MapController` delivered so far. Widened by T4.3 (track and events). */
+export interface MapControllerCore {
   setSources(sources: TileSource[]): void;
+  setTerrain(terrain: TerrainOptions | null): void;
   destroy(): void;
 }
 
@@ -87,6 +162,7 @@ export interface MapControllerOptions {
   /** Ordered base → overlays. Draw order is this order. */
   sources: TileSource[];
   style?: string | JSONValue;
+  terrain?: TerrainOptions | null;
   center?: LatLng;
   zoom?: number;
   /** Engine-owned and neutral; never a library default. (ADR-0008) */
@@ -96,10 +172,11 @@ export interface MapControllerOptions {
 export function createMapControllerInternal(
   options: MapControllerOptions,
   environment: MapEnvironment,
-): MapSourceController {
+): MapControllerCore {
   // Before the map exists. A stack that cannot be translated is rejected without leaving a
   // WebGL context behind for a controller the caller never receives.
-  let prepared = prepare(options.sources);
+  let preparedSources = prepareSources(options.sources);
+  let desiredTerrain = prepareTerrain(options.terrain ?? null, preparedSources);
 
   const map: MapLike = environment.createMap({
     container: options.container,
@@ -118,40 +195,74 @@ export function createMapControllerInternal(
 
   /** What the map does show, so teardown removes exactly what was added. */
   let installed: BuiltTileSource[] = [];
+  /**
+   * Whether terrain has actually reached MapLibre.
+   *
+   * Distinct from `desiredTerrain` on purpose. Before `load` a consumer may set terrain,
+   * clear it and set it again; none of that should reach the map, and at load exactly the
+   * last one should. Tracking only the desire would lose the difference between "nothing
+   * applied yet" and "applied and needing release before the DEM source is removed".
+   */
+  let appliedTerrain: PreparedTerrain | null = null;
   let loaded = false;
   let destroyed = false;
 
-  function install(): void {
-    // Nothing here can fail on the sources: they were translated and validated when the
+  function reconcile(): void {
+    // Nothing here can fail on the sources or the terrain: both were validated when the
     // caller handed them over. This function only applies what was already prepared.
-    const { built, needsPmtiles } = prepared;
+    const { built, needsPmtiles } = preparedSources;
 
     // Before adding, and only when something actually needs it: a consumer with no PMTiles
     // source never constructs a Protocol and never touches the MapLibre global.
     if (needsPmtiles) ensurePmtilesProtocol(environment.protocolRegistrar);
 
-    // Layers before sources, in that order. MapLibre refuses to remove a source that a
-    // layer still references, and the reverse order would leave the map with layers
-    // pointing at nothing.
+    // 1. Release terrain first. It references a DEM source that is about to be removed, and
+    //    MapLibre refuses to remove a source anything still holds — terrain included.
+    if (appliedTerrain !== null) {
+      map.setTerrain(null);
+      appliedTerrain = null;
+    }
+
+    // 2. Layers before sources, for the same reason one step down. The reverse order would
+    //    leave the map with layers pointing at nothing.
     for (const entry of installed) for (const layer of entry.layers) map.removeLayer(layer.id);
     for (const entry of installed) map.removeSource(entry.id);
     installed = [];
 
-    // Declared order, because MapLibre draws layers in the order they are added: the stack
-    // a consumer describes is the stack they get.
+    // 3. Declared order, because MapLibre draws layers in the order they are added: the
+    //    stack a consumer describes is the stack they get.
     for (const entry of built) {
       map.addSource(entry.id, entry.source);
       for (const layer of entry.layers) map.addLayer(layer);
       installed.push(entry);
     }
+
+    // 4. Terrain last, once the DEM it names is back in the style.
+    applyTerrain();
+  }
+
+  function applyTerrain(): void {
+    if (desiredTerrain === null) {
+      // Only if something is actually applied: `setTerrain(null)` on a map with no terrain
+      // is a call that says nothing, and it would show up in every operation log.
+      if (appliedTerrain !== null) {
+        map.setTerrain(null);
+        appliedTerrain = null;
+      }
+      return;
+    }
+    // Replacing terrain needs no `null` between: MapLibre takes a new definition directly.
+    // The explicit release in `reconcile` exists for the other case — the DEM disappearing.
+    map.setTerrain({ source: desiredTerrain.source, exaggeration: desiredTerrain.exaggeration });
+    appliedTerrain = desiredTerrain;
   }
 
   function onLoad(): void {
-    // Once. `prepared` is read here rather than captured anywhere earlier, so whatever the
-    // consumer last asked for is what gets installed.
+    // Once. `preparedSources` and `desiredTerrain` are read here rather than captured
+    // anywhere earlier, so whatever the consumer last asked for is what gets installed.
     if (loaded || destroyed) return;
     loaded = true;
-    install();
+    reconcile();
   }
 
   map.on("load", onLoad);
@@ -159,10 +270,29 @@ export function createMapControllerInternal(
   return {
     setSources(sources: TileSource[]): void {
       if (destroyed) throw new MapControllerDestroyedError("setSources");
-      // Translate before storing, so an invalid stack throws to this caller and leaves the
-      // previous desired state — and the visible map — exactly as it was.
-      prepared = prepare(sources);
-      if (loaded) install();
+      // Translate *and* re-check the standing terrain against the prospective stack before
+      // storing either. A stack that would orphan terrain is rejected here rather than
+      // silently dropping it, so "either throws or is guaranteed installable" stays true of
+      // the pair, not just of the sources. Nothing is assigned until both pass.
+      const nextSources = prepareSources(sources);
+      const nextTerrain = prepareTerrain(
+        desiredTerrain === null
+          ? null
+          : { sourceId: desiredTerrain.source, exaggeration: desiredTerrain.exaggeration },
+        nextSources,
+      );
+
+      preparedSources = nextSources;
+      desiredTerrain = nextTerrain;
+      if (loaded) reconcile();
+    },
+
+    setTerrain(terrain: TerrainOptions | null): void {
+      if (destroyed) throw new MapControllerDestroyedError("setTerrain");
+      // Validated against desired sources, not against what the map currently holds — which
+      // before `load` is nothing at all.
+      desiredTerrain = prepareTerrain(terrain, preparedSources);
+      if (loaded) applyTerrain();
     },
 
     destroy(): void {

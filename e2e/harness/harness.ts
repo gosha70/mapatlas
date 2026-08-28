@@ -12,7 +12,12 @@ import { recoverInterruptedTrack } from "@mapatlas/core";
 import type { Track } from "@mapatlas/core";
 import { createIdbStorageAdapter } from "@mapatlas/storage-idb";
 import { createWebTrackRecorder } from "@mapatlas/recorder-web";
-import { createMapController } from "@mapatlas/maplibre/controller";
+import { createBrowserMapEnvironment, createMapController } from "@mapatlas/maplibre/controller";
+import { createMapControllerInternal } from "@mapatlas/maplibre/controller-internal";
+import type {
+  MapControllerCore,
+  MapControllerOptions,
+} from "@mapatlas/maplibre/controller-internal";
 import { isPmtilesProtocolRegistered } from "@mapatlas/maplibre/protocols";
 
 declare global {
@@ -20,6 +25,17 @@ declare global {
     mapatlas: {
       createWebTrackRecorder: typeof createWebTrackRecorder;
       createMapController: typeof createMapController;
+      /**
+       * A controller plus a window onto the real map's terrain.
+       *
+       * `MapController` deliberately exposes no getter — a consumer sets terrain, it does
+       * not interrogate it — but a browser test has to check what MapLibre actually did, and
+       * `getTerrain()` is the library's own answer to that question.
+       */
+      mountWithTerrainProbe(options: MapControllerOptions): {
+        controller: MapControllerCore;
+        getTerrain(): unknown;
+      };
       /**
        * Whether the realm's PMTiles handler has been registered.
        *
@@ -40,6 +56,8 @@ declare global {
        * for something that will never happen. These let a test wait for the event itself.
        */
       signals: Record<string, boolean>;
+      /** Set by a terrain scenario, so later `page.evaluate` calls can drive and read it. */
+      terrainProbe?: { controller: MapControllerCore; getTerrain(): unknown };
       /** The controller under test, so a later `page.evaluate` can drive it. */
       controller?: ReturnType<typeof createMapController>;
       /** Set by a running scenario, read by the test. */
@@ -57,9 +75,32 @@ function mapContainer(): HTMLElement {
   return element;
 }
 
+/** The one method of MapLibre's `Map` the terrain probe needs beyond the controller seam. */
+interface TerrainReadable {
+  getTerrain(): unknown;
+}
+
+function mountWithTerrainProbe(options: MapControllerOptions): {
+  controller: MapControllerCore;
+  getTerrain(): unknown;
+} {
+  const environment = createBrowserMapEnvironment();
+  let map: TerrainReadable | undefined;
+  const controller = createMapControllerInternal(options, {
+    ...environment,
+    createMap: (mapOptions: Parameters<typeof environment.createMap>[0]) => {
+      const created = environment.createMap(mapOptions);
+      map = created as unknown as TerrainReadable;
+      return created;
+    },
+  });
+  return { controller, getTerrain: () => map?.getTerrain() ?? null };
+}
+
 window.mapatlas = {
   createWebTrackRecorder,
   createMapController,
+  mountWithTerrainProbe,
   isPmtilesProtocolRegistered,
   mapContainer,
   createIdbStorageAdapter,

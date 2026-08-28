@@ -10,6 +10,7 @@ import type { MapControllerOptions } from "./controller.js";
 import {
   EMPTY_STYLE,
   MapControllerDestroyedError,
+  MapTerrainError,
   createMapControllerInternal,
 } from "./controller.js";
 
@@ -22,6 +23,15 @@ const OSM: TileSource = {
 };
 
 const SEAMARKS: TileSource = { ...OSM, id: "seamarks" };
+
+const DEM: TileSource = {
+  id: "dem",
+  kind: "raster-dem",
+  transport: "tilejson",
+  url: "https://tiles.invalid/dem.json",
+  attribution: "Elevation data",
+  role: "terrain",
+};
 
 const ARCHIVE: TileSource = {
   id: "offline",
@@ -114,7 +124,7 @@ describe("installation waits for the style to load", () => {
     expect(rig.map.calls.filter((call) => call.op === "addSource")).toHaveLength(1);
     // Not "added then removed": A was never installed at all.
     expect(rig.map.calls.some((call) => call.op === "removeSource")).toBe(false);
-    expect(rig.map.calls.some((call) => call.op !== "remove" && call.id === "osm")).toBe(false);
+    expect(rig.map.calls.some((call) => "id" in call && call.id === "osm")).toBe(false);
   });
 
   it("rejects an invalid stack at the call, not from inside the load callback", () => {
@@ -424,5 +434,248 @@ describe("the PMTiles protocol is realm infrastructure", () => {
     const third = mountIn([{ ...ARCHIVE, id: "third-archive" }]);
     expect(third.createProtocol).not.toHaveBeenCalled();
     expect(third.addProtocol).not.toHaveBeenCalled();
+  });
+});
+
+describe("terrain is prepared desired state over the source stack", () => {
+  /** Terrain operations only, so an assertion reads as a sequence rather than a filter. */
+  function terrainCalls(map: FakeMap): (string | null)[] {
+    return map.calls.filter((call) => call.op === "setTerrain").map((call) => call.source);
+  }
+
+  it("reaches MapLibre only at load, and only after the sources it names", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM, DEM] });
+
+    controller.setTerrain({ sourceId: "dem" });
+    expect(terrainCalls(rig.map)).toEqual([]);
+
+    rig.map.fireLoad();
+
+    const ops = rig.map.calls.map((call) => call.op);
+    expect(ops.indexOf("setTerrain")).toBeGreaterThan(ops.lastIndexOf("addSource"));
+    expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 1 });
+  });
+
+  it("applies only the last terrain asked for before load", () => {
+    // The terrain half of the desired-state rule: three calls, none of which reach a map
+    // that cannot accept them, and exactly one that does.
+    const second: TileSource = { ...DEM, id: "dem2" };
+    const { controller, harness: rig } = mount({ sources: [OSM, DEM, second] });
+
+    controller.setTerrain({ sourceId: "dem" });
+    controller.setTerrain(null);
+    controller.setTerrain({ sourceId: "dem2", exaggeration: 2 });
+    expect(terrainCalls(rig.map)).toEqual([]);
+
+    rig.map.fireLoad();
+
+    expect(terrainCalls(rig.map)).toEqual(["dem2"]);
+    expect(rig.map.terrain).toEqual({ source: "dem2", exaggeration: 2 });
+  });
+
+  it("takes terrain from the constructor as well", () => {
+    const { harness: rig } = mount({ sources: [OSM, DEM], terrain: { sourceId: "dem" } });
+    rig.map.fireLoad();
+    expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 1 });
+  });
+
+  it("replaces terrain directly after load, with no null between", () => {
+    // MapLibre takes a new definition straight. A `null` here would drop the render-to-
+    // texture state and rebuild it for nothing.
+    const second: TileSource = { ...DEM, id: "dem2" };
+    const { controller, harness: rig } = mount({ sources: [OSM, DEM, second] });
+    rig.map.fireLoad();
+
+    controller.setTerrain({ sourceId: "dem" });
+    controller.setTerrain({ sourceId: "dem2" });
+
+    expect(terrainCalls(rig.map)).toEqual(["dem", "dem2"]);
+  });
+
+  it("disables terrain, and does not resurrect it on a later stack change", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM, DEM] });
+    rig.map.fireLoad();
+    controller.setTerrain({ sourceId: "dem" });
+
+    controller.setTerrain(null);
+    expect(rig.map.terrain).toBeNull();
+
+    controller.setSources([OSM, DEM]);
+    expect(rig.map.terrain).toBeNull();
+    expect(terrainCalls(rig.map)).toEqual(["dem", null]);
+  });
+
+  it("says nothing to MapLibre when clearing terrain that was never applied", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM, DEM] });
+    rig.map.fireLoad();
+
+    controller.setTerrain(null);
+
+    expect(terrainCalls(rig.map)).toEqual([]);
+  });
+});
+
+describe("terrain is validated at the call", () => {
+  it("rejects a source that is not in the desired stack", () => {
+    // Against *desired* sources, not what the map holds — before load it holds nothing, so
+    // validating against the map would accept everything and fail later.
+    const { controller } = mount({ sources: [OSM] });
+    expect(() => {
+      controller.setTerrain({ sourceId: "dem" });
+    }).toThrow(/no source "dem" in the stack/);
+  });
+
+  it("rejects a source that is not an elevation raster", () => {
+    // MapLibre does not reject this: terrain over a raster source renders flat, which is
+    // indistinguishable from a DEM that failed to load.
+    const { controller } = mount({ sources: [OSM] });
+    expect(() => {
+      controller.setTerrain({ sourceId: "osm" });
+    }).toThrow(/is kind "raster", not "raster-dem"/);
+  });
+
+  it("accepts a DEM whatever role it plays, since kind states the capability", () => {
+    const hillshade: TileSource = { ...DEM, role: "hillshade" };
+    const { controller, harness: rig } = mount({ sources: [OSM, hillshade] });
+    rig.map.fireLoad();
+
+    expect(() => {
+      controller.setTerrain({ sourceId: "dem" });
+    }).not.toThrow();
+  });
+
+  it("rejects an exaggeration the style spec does not allow, but accepts zero", () => {
+    const { controller } = mount({ sources: [OSM, DEM] });
+
+    for (const exaggeration of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => {
+        controller.setTerrain({ sourceId: "dem", exaggeration });
+      }).toThrow(MapTerrainError);
+    }
+    // Flat terrain is still terrain, and the spec allows it.
+    expect(() => {
+      controller.setTerrain({ sourceId: "dem", exaggeration: 0 });
+    }).not.toThrow();
+  });
+
+  it("leaves the previous terrain in place when a new one is rejected", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM, DEM] });
+    rig.map.fireLoad();
+    controller.setTerrain({ sourceId: "dem", exaggeration: 3 });
+
+    expect(() => {
+      controller.setTerrain({ sourceId: "osm" });
+    }).toThrow(MapTerrainError);
+
+    expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 3 });
+  });
+
+  it("rejects a controller constructed with terrain the stack cannot support", () => {
+    const rig = harness();
+    expect(() =>
+      createMapControllerInternal(
+        { container: CONTAINER, sources: [OSM], terrain: { sourceId: "dem" } },
+        rig.environment,
+      ),
+    ).toThrow(MapTerrainError);
+    expect(() => rig.map).toThrow(/no map was constructed/);
+  });
+});
+
+describe("a stack replacement is atomic with respect to terrain", () => {
+  it("releases terrain, tears down, rebuilds, then restores it — in that order", () => {
+    // The fake refuses to remove a source terrain still holds, so this order is a
+    // behavioural requirement rather than an assertion about a log.
+    const { controller, harness: rig } = mount({ sources: [OSM, DEM] });
+    rig.map.fireLoad();
+    controller.setTerrain({ sourceId: "dem", exaggeration: 2 });
+    const from = rig.map.calls.length;
+
+    controller.setSources([SEAMARKS, DEM]);
+
+    // One layer each way, not two: the DEM is `role: "terrain"`, so it draws nothing itself.
+    expect(rig.map.calls.slice(from).map((call) => call.op)).toEqual([
+      "setTerrain",
+      "removeLayer",
+      "removeSource",
+      "removeSource",
+      "addSource",
+      "addLayer",
+      "addSource",
+      "setTerrain",
+    ]);
+    expect(rig.map.calls.slice(from).filter((call) => call.op === "setTerrain")).toEqual([
+      { op: "setTerrain", source: null },
+      { op: "setTerrain", source: "dem" },
+    ]);
+    expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 2 });
+    expect(rig.map.sourceIds).toEqual(["seamarks", "dem"]);
+  });
+
+  it("rejects a stack that would orphan terrain, touching nothing", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM, DEM] });
+    rig.map.fireLoad();
+    controller.setTerrain({ sourceId: "dem" });
+    const before = [...rig.map.calls];
+
+    expect(() => {
+      controller.setSources([OSM]);
+    }).toThrow(/no source "dem" in the stack/);
+
+    expect(rig.map.calls).toEqual(before);
+    expect(rig.map.sourceIds).toEqual(["osm", "dem"]);
+    expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 1 });
+  });
+
+  it("does not adopt a stack it rejected, even before anything is installed", () => {
+    // The map-untouched assertions above cannot see this one: before load there is nothing
+    // to touch. Assigning the prospective sources and *then* checking terrain would leave
+    // the rejected stack as desired state, and load would install it — a call that threw
+    // having changed what the map ends up showing. Hence: nothing is assigned until both
+    // the sources and the standing terrain pass.
+    const { controller, harness: rig } = mount({ sources: [OSM, DEM] });
+    controller.setTerrain({ sourceId: "dem" });
+
+    expect(() => {
+      controller.setSources([SEAMARKS]);
+    }).toThrow(/no source "dem" in the stack/);
+
+    rig.map.fireLoad();
+
+    expect(rig.map.sourceIds).toEqual(["osm", "dem"]);
+    expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 1 });
+  });
+
+  it("rejects a stack that keeps the id but changes the source's kind", () => {
+    // The subtler orphaning: the id resolves, so a presence check would pass, but the
+    // source is no longer an elevation raster and terrain over it would render flat.
+    const { controller, harness: rig } = mount({ sources: [OSM, DEM] });
+    rig.map.fireLoad();
+    controller.setTerrain({ sourceId: "dem" });
+
+    const flattened: TileSource = { ...OSM, id: "dem" };
+    expect(() => {
+      controller.setSources([OSM, flattened]);
+    }).toThrow(/is kind "raster", not "raster-dem"/);
+
+    expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 1 });
+  });
+
+  it("carries the exaggeration through a replacement unchanged", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM, DEM] });
+    rig.map.fireLoad();
+    controller.setTerrain({ sourceId: "dem", exaggeration: 0 });
+
+    controller.setSources([DEM]);
+
+    expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 0 });
+  });
+
+  it("rejects setTerrain after destroy", () => {
+    const { controller } = mount({ sources: [OSM, DEM] });
+    controller.destroy();
+    expect(() => {
+      controller.setTerrain({ sourceId: "dem" });
+    }).toThrow(MapControllerDestroyedError);
   });
 });

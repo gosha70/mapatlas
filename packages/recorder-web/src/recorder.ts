@@ -80,9 +80,16 @@ function toRecorderError(failure: PositionFailure): TrackRecorderError {
   }
 }
 
+/**
+ * How often an in-progress track is persisted when a store is supplied and no interval is
+ * given. Ten seconds is what `api.md` documents: enough that a long recording is not
+ * writing constantly, short enough that a crash costs a few points rather than a trip.
+ */
+export const DEFAULT_AUTOSAVE_MS = 10_000;
+
 /** A track offered to `resumeFrom` that cannot be continued. */
 export class RecorderResumeError extends Error {
-  readonly reason: "temporal-order" | "channel-conflict" | "geometry";
+  readonly reason: "temporal-order" | "channel-conflict" | "geometry" | "not-interrupted";
 
   constructor(reason: RecorderResumeError["reason"], detail: string) {
     super(`cannot resume this track: ${detail}`);
@@ -114,11 +121,68 @@ function assertRestorableOrder(points: readonly TrackPoint[]): void {
 }
 
 /**
+ * Two descriptors describe the same channel only if they agree on **everything**.
+ *
+ * `aggregate` matters as much as `unit`: it decides whether `computeStats` sums a channel
+ * or averages it, so a definition that changes it changes what every stored value means.
+ * `min`, `max` and `precision` are display bounds, but a silent change there still leaves a
+ * track whose descriptor does not describe its own data.
+ *
+ * An omitted `aggregate` is normalised to "avg", which is the documented default — the two
+ * spellings mean the same thing and should not read as a conflict.
+ */
+function describeChannel(descriptor: ChannelDescriptor): string {
+  return JSON.stringify({
+    key: descriptor.key,
+    label: descriptor.label,
+    unit: descriptor.unit,
+    aggregate: descriptor.aggregate ?? "avg",
+    min: descriptor.min ?? null,
+    max: descriptor.max ?? null,
+    precision: descriptor.precision ?? null,
+  });
+}
+
+function assertSameChannel(
+  existing: ChannelDescriptor,
+  incoming: ChannelDescriptor,
+  context: string,
+): void {
+  if (describeChannel(existing) === describeChannel(incoming)) return;
+  throw new RecorderResumeError(
+    "channel-conflict",
+    `channel "${incoming.key}" ${context}: ${describeChannel(existing)} ` +
+      `does not match ${describeChannel(incoming)}`,
+  );
+}
+
+/**
+ * Collect what the configured sensors declare, rejecting two definitions of one key.
+ *
+ * A `Map` alone lets the last source win silently, so two sensors reporting depth in metres
+ * and feet would produce a track labelled one way holding values measured the other.
+ */
+function collectSensorChannels(sensors: readonly SensorSource[]): ChannelDescriptor[] {
+  const byKey = new Map<string, ChannelDescriptor>();
+  for (const sensor of sensors) {
+    for (const descriptor of sensor.channels) {
+      const existing = byKey.get(descriptor.key);
+      if (existing === undefined) {
+        byKey.set(descriptor.key, { ...descriptor });
+        continue;
+      }
+      assertSameChannel(existing, descriptor, `is declared twice by the configured sensors`);
+    }
+  }
+  return [...byKey.values()];
+}
+
+/**
  * Historical descriptors are preserved and new keys appended.
  *
  * A key defined two ways is rejected rather than reconciled: the stored values were
- * recorded under the old definition, and silently adopting a new unit or label would
- * reinterpret data already on disk.
+ * recorded under the old definition, and silently adopting a new one would reinterpret data
+ * already on disk.
  */
 function mergeChannelDescriptors(
   restored: readonly ChannelDescriptor[],
@@ -133,13 +197,7 @@ function mergeChannelDescriptors(
       merged.set(descriptor.key, { ...descriptor });
       continue;
     }
-    if (existing.label !== descriptor.label || existing.unit !== descriptor.unit) {
-      throw new RecorderResumeError(
-        "channel-conflict",
-        `channel "${descriptor.key}" was recorded as ${existing.label} (${existing.unit}) ` +
-          `and is now declared as ${descriptor.label} (${descriptor.unit})`,
-      );
-    }
+    assertSameChannel(existing, descriptor, "was recorded under a different definition");
   }
 
   return [...merged.values()];
@@ -164,16 +222,25 @@ export function createWebTrackRecorderInternal(
    * recording disagree about what a channel is called. What a track declares is fixed when
    * the recorder is built.
    */
-  const sensorChannels: ChannelDescriptor[] = (() => {
-    const byKey = new Map<string, ChannelDescriptor>();
-    for (const sensor of sensors) {
-      for (const descriptor of sensor.channels) byKey.set(descriptor.key, { ...descriptor });
-    }
-    return [...byKey.values()];
-  })();
+  const sensorChannels: ChannelDescriptor[] = collectSensorChannels(sensors);
 
   const resumed = options.resumeFrom;
   if (resumed !== undefined) {
+    // Only a recording a previous session left unfinished. A finalized track is a durable
+    // trip, and resuming one would let this recorder overwrite it under its own id —
+    // silently replacing a finished trip with a partial one.
+    if (resumed.status !== "recording" && resumed.status !== "paused") {
+      throw new RecorderResumeError(
+        "not-interrupted",
+        `its status is "${resumed.status}"; only an interrupted recording can be continued`,
+      );
+    }
+    if (resumed.origin !== "recorded") {
+      throw new RecorderResumeError(
+        "not-interrupted",
+        `its origin is "${resumed.origin}"; a recorder continues only what a recorder produced`,
+      );
+    }
     assertValidTrackGeometry(resumed);
     assertRestorableOrder(resumed.points);
   }
@@ -194,6 +261,17 @@ export function createWebTrackRecorderInternal(
   let sensorUnsubscribes: (() => void)[] = [];
   /** Whether sensors are wanted running right now — consulted by a late `start()`. */
   let sensorsDesired = false;
+
+  /**
+   * Autosave is on when a store exists and the interval is positive — resolved once, so the
+   * periodic write and the pause flush can never disagree.
+   *
+   * Previously they did, in both directions: omitting `autosaveMs` created no timer despite
+   * the documented default, and setting it to `0` disabled the timer while `pause()` went
+   * on writing snapshots the consumer had asked not to have.
+   */
+  const autosaveMs = options.autosaveMs ?? DEFAULT_AUTOSAVE_MS;
+  const autosaveEnabled = options.store !== undefined && autosaveMs > 0;
 
   let writeInFlight: Promise<void> | undefined;
   let pendingSnapshot: Track | undefined;
@@ -334,7 +412,7 @@ export function createWebTrackRecorderInternal(
    */
   const enqueueSave = (snapshot: Track): void => {
     const store = options.store;
-    if (store === undefined) return;
+    if (store === undefined || !autosaveEnabled) return;
 
     pendingSnapshot = snapshot;
     if (writeInFlight !== undefined) return;
@@ -559,8 +637,7 @@ export function createWebTrackRecorderInternal(
       openSegment();
       beginWatching();
 
-      const autosaveMs = options.autosaveMs;
-      if (options.store !== undefined && autosaveMs !== undefined && autosaveMs > 0) {
+      if (autosaveEnabled) {
         autosaveHandle = environment.setInterval(() => {
           enqueueSave(buildSnapshot());
         }, autosaveMs);

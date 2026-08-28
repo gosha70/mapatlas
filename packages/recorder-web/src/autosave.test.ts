@@ -66,30 +66,44 @@ function createTestEnvironment(startAt = T0) {
   };
 }
 
-/** A store that records what it was asked to save, and can be made slow or broken. */
+/**
+ * A store that records what it was asked to save, and can genuinely be held or broken.
+ *
+ * `block()` makes the next writes wait on a real deferred promise, so a test can hold one
+ * in flight while more snapshots are enqueued behind it — which is the only way to observe
+ * that writes are serialised at all. `maxConcurrent` records how many were ever running at
+ * once; anything above 1 means they are not.
+ */
 function instrumentedStore() {
   const inner = createMemoryStorageAdapter();
   const saves: Track[] = [];
-  let gate: (() => void) | undefined;
+  const gates: (() => void)[] = [];
+
+  let blocking = false;
   let failNext = 0;
+  let active = 0;
+  let maxConcurrent = 0;
 
   const store: StorageAdapter = {
     ...inner,
     saveTrack: async (track) => {
-      if (failNext > 0) {
-        failNext -= 1;
-        throw new Error("quota exceeded");
+      active += 1;
+      maxConcurrent = Math.max(maxConcurrent, active);
+      try {
+        if (failNext > 0) {
+          failNext -= 1;
+          throw new Error("quota exceeded");
+        }
+        if (blocking) {
+          await new Promise<void>((resolve) => {
+            gates.push(resolve);
+          });
+        }
+        saves.push(structuredClone(track));
+        await inner.saveTrack(track);
+      } finally {
+        active -= 1;
       }
-      if (gate !== undefined) {
-        const release = gate;
-        gate = undefined;
-        await new Promise<void>((resolve) => {
-          release();
-          resolve();
-        });
-      }
-      saves.push(structuredClone(track));
-      await inner.saveTrack(track);
     },
   };
 
@@ -99,6 +113,23 @@ function instrumentedStore() {
     inner,
     breakNext: (count = 1) => {
       failNext = count;
+    },
+    /** Hold every subsequent write until `release()` is called. */
+    block: () => {
+      blocking = true;
+    },
+    unblock: () => {
+      blocking = false;
+    },
+    /** Let the oldest held write through. */
+    release: () => {
+      gates.shift()?.();
+    },
+    get held() {
+      return gates.length;
+    },
+    get maxConcurrent() {
+      return maxConcurrent;
     },
   };
 }
@@ -301,6 +332,112 @@ describe("writes are serialized", () => {
     expect(saves.at(-1)?.status).toBe("finalized");
     expect(saves.at(-1)?.id).toBe(track.id);
     expect(saves.filter((s) => s.status === "finalized")).toHaveLength(1);
+  });
+
+  it("runs one write at a time, holding the rest behind it", async () => {
+    // Regression: the harness never actually blocked, so nothing proved writes were
+    // serialised. Here the first save is genuinely held while three more are enqueued.
+    const env = createTestEnvironment();
+    const instrumented = instrumentedStore();
+    const recorder = createWebTrackRecorderInternal(
+      { store: instrumented.store, autosaveMs: 10_000 },
+      env.environment,
+    );
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    instrumented.block();
+
+    env.tick(); // this one blocks
+    await flush();
+    expect(instrumented.held).toBe(1);
+
+    env.deliver(fix(500, T0 + 60_000));
+    env.tick();
+    env.deliver(fix(1000, T0 + 120_000));
+    env.tick();
+    await flush();
+
+    // Still exactly one in flight: the later ticks queued rather than racing.
+    expect(instrumented.held).toBe(1);
+    expect(instrumented.maxConcurrent).toBe(1);
+
+    instrumented.unblock();
+    instrumented.release();
+    await flush();
+
+    expect(instrumented.maxConcurrent).toBe(1);
+  });
+
+  it("coalesces superseded snapshots rather than writing every one", async () => {
+    // A slow store must not accumulate a backlog of pictures nobody will ever want.
+    const env = createTestEnvironment();
+    const instrumented = instrumentedStore();
+    const recorder = createWebTrackRecorderInternal(
+      { store: instrumented.store, autosaveMs: 10_000 },
+      env.environment,
+    );
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    instrumented.block();
+    env.tick();
+    await flush();
+
+    // Three more snapshots while the first write is held; only the newest survives.
+    for (const [i, offset] of [60_000, 120_000, 180_000].entries()) {
+      env.deliver(fix((i + 1) * 500, T0 + offset));
+      env.tick();
+    }
+    await flush();
+
+    instrumented.unblock();
+    instrumented.release();
+    await flush();
+
+    // The blocked write, then one coalesced snapshot — not four.
+    expect(instrumented.saves).toHaveLength(2);
+    expect(instrumented.saves.at(-1)?.points).toHaveLength(4);
+  });
+
+  it("makes the final write wait for a held autosave, and land last", async () => {
+    const env = createTestEnvironment();
+    const instrumented = instrumentedStore();
+    const recorder = createWebTrackRecorderInternal(
+      { store: instrumented.store, autosaveMs: 10_000 },
+      env.environment,
+    );
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    instrumented.block();
+    env.tick();
+    await flush();
+    expect(instrumented.held).toBe(1);
+
+    let settled = false;
+    const stopping = recorder.stop().then((track) => {
+      settled = true;
+      return track;
+    });
+    await flush();
+
+    // Still waiting on the held autosave: the finished track must not overtake it.
+    expect(settled).toBe(false);
+    expect(instrumented.saves.filter((save) => save.status === "finalized")).toHaveLength(0);
+
+    instrumented.unblock();
+    instrumented.release();
+    const track = await stopping;
+    await flush();
+
+    expect(settled).toBe(true);
+    expect(instrumented.maxConcurrent).toBe(1);
+    expect(instrumented.saves.at(-1)?.status).toBe("finalized");
+    expect(instrumented.saves.at(-1)?.id).toBe(track.id);
+
+    const stored = await instrumented.store.getTrack(track.id);
+    expect(stored?.status).toBe("finalized");
   });
 
   it("never leaves an older snapshot on top of the finished track", async () => {
@@ -661,5 +798,219 @@ describe("recovery and resumption", () => {
     await recorder.stop();
 
     expect(snapshot).toEqual(before);
+  });
+});
+
+describe("one rule decides whether autosave is on", () => {
+  it("uses the documented default when autosaveMs is omitted", async () => {
+    // Regression: a store with no interval created no timer at all, contradicting the
+    // ~10 s default api.md publishes.
+    const env = createTestEnvironment();
+    const { store, saves } = instrumentedStore();
+    const recorder = createWebTrackRecorderInternal({ store }, env.environment);
+
+    await recorder.start();
+    expect(env.liveTimers).toBe(1);
+
+    env.deliver(fix(0, T0));
+    env.tick();
+    await flush();
+    expect(saves).toHaveLength(1);
+  });
+
+  it("writes nothing at all when autosaveMs is 0", async () => {
+    // Regression the other way: the timer was disabled but pause() went on writing
+    // snapshots the consumer had explicitly asked not to have.
+    const env = createTestEnvironment();
+    const { store, saves } = instrumentedStore();
+    const recorder = createWebTrackRecorderInternal({ store, autosaveMs: 0 }, env.environment);
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    recorder.pause();
+    await flush();
+
+    expect(env.liveTimers).toBe(0);
+    expect(saves).toEqual([]);
+    expect(await store.listTrackSummaries()).toEqual([]);
+  });
+
+  it("still writes the finished track when autosave is off", async () => {
+    // Disabling autosave asks for no *periodic* writes, not for the trip to be discarded.
+    const env = createTestEnvironment();
+    const { store, saves } = instrumentedStore();
+    const recorder = createWebTrackRecorderInternal({ store, autosaveMs: 0 }, env.environment);
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    const track = await recorder.stop();
+    await flush();
+
+    expect(saves).toHaveLength(1);
+    expect(saves[0]?.status).toBe("finalized");
+    expect(await store.getTrack(track.id)).toBeDefined();
+  });
+
+  it("writes nothing without a store, whatever the interval", async () => {
+    const env = createTestEnvironment();
+    const recorder = createWebTrackRecorderInternal({ autosaveMs: 1000 }, env.environment);
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    recorder.pause();
+    await flush();
+
+    expect(env.liveTimers).toBe(0);
+  });
+});
+
+describe("only an interrupted recording may be resumed", () => {
+  const base: Track = {
+    id: "candidate",
+    startedAt: T0,
+    status: "recording",
+    origin: "recorded",
+    points: [{ lat: 59.33, lng: 18.06, t: T0 }],
+    segments: [{ id: "s", startIndex: 0, endIndex: 0, startedAt: T0 }],
+  };
+
+  it("accepts a recording or paused track", () => {
+    const env = createTestEnvironment();
+    for (const status of ["recording", "paused"] as const) {
+      expect(() =>
+        createWebTrackRecorderInternal({ resumeFrom: { ...base, status } }, env.environment),
+      ).not.toThrow();
+    }
+  });
+
+  it("rejects a finalized track", () => {
+    // Regression: a finished trip could be resumed and then overwritten under its own id
+    // by a partial recording.
+    const env = createTestEnvironment();
+    let thrown: RecorderResumeError | undefined;
+    try {
+      createWebTrackRecorderInternal(
+        { resumeFrom: { ...base, status: "finalized", endedAt: T0 + 1000 } },
+        env.environment,
+      );
+    } catch (error) {
+      thrown = error as RecorderResumeError;
+    }
+
+    expect(thrown).toBeInstanceOf(RecorderResumeError);
+    expect(thrown?.reason).toBe("not-interrupted");
+  });
+
+  it("rejects an authored or imported track", () => {
+    const env = createTestEnvironment();
+    for (const origin of ["authored", "imported"] as const) {
+      expect(() =>
+        createWebTrackRecorderInternal({ resumeFrom: { ...base, origin } }, env.environment),
+      ).toThrow(RecorderResumeError);
+    }
+  });
+});
+
+describe("a channel definition must match in full", () => {
+  const stored = (channel: Record<string, unknown>): Track => ({
+    id: "resumed",
+    startedAt: T0,
+    status: "recording",
+    origin: "recorded",
+    points: [{ lat: 59.33, lng: 18.06, t: T0 }],
+    segments: [{ id: "s", startIndex: 0, endIndex: 0, startedAt: T0 }],
+    channels: [channel as never],
+  });
+
+  const conflicts: [string, Record<string, unknown>, Record<string, unknown>][] = [
+    [
+      "aggregate",
+      { key: "depthM", label: "Depth", unit: "m", aggregate: "avg" },
+      { key: "depthM", label: "Depth", unit: "m", aggregate: "sum" },
+    ],
+    [
+      "unit",
+      { key: "depthM", label: "Depth", unit: "m" },
+      { key: "depthM", label: "Depth", unit: "ft" },
+    ],
+    [
+      "label",
+      { key: "depthM", label: "Depth", unit: "m" },
+      { key: "depthM", label: "Water depth", unit: "m" },
+    ],
+    [
+      "precision",
+      { key: "depthM", label: "Depth", unit: "m", precision: 1 },
+      { key: "depthM", label: "Depth", unit: "m", precision: 2 },
+    ],
+    [
+      "bounds",
+      { key: "depthM", label: "Depth", unit: "m", max: 100 },
+      { key: "depthM", label: "Depth", unit: "m", max: 200 },
+    ],
+  ];
+
+  it.each(conflicts)("rejects a change of %s on a recovered channel", (_name, was, now) => {
+    // `aggregate` above all: it decides whether computeStats sums or averages, so changing
+    // it changes what every value already stored means.
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "d", channels: [now as never] });
+
+    expect(() =>
+      createWebTrackRecorderInternal(
+        { resumeFrom: stored(was), sensors: [sensor] },
+        env.environment,
+      ),
+    ).toThrow(RecorderResumeError);
+  });
+
+  it("treats an omitted aggregate as the documented default", () => {
+    // "avg" and absent mean the same thing; that is not a conflict.
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({
+      id: "d",
+      channels: [{ key: "depthM", label: "Depth", unit: "m", aggregate: "avg" }],
+    });
+
+    expect(() =>
+      createWebTrackRecorderInternal(
+        { resumeFrom: stored({ key: "depthM", label: "Depth", unit: "m" }), sensors: [sensor] },
+        env.environment,
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects two configured sensors declaring one key differently", () => {
+    // Regression: a Map alone let the last source win, so two depth sensors reporting
+    // metres and feet produced a track labelled one way holding values measured the other.
+    const env = createTestEnvironment();
+    const metres = createFakeSensorSource({
+      id: "a",
+      channels: [{ key: "depthM", label: "Depth", unit: "m" }],
+    });
+    const feet = createFakeSensorSource({
+      id: "b",
+      channels: [{ key: "depthM", label: "Depth", unit: "ft" }],
+    });
+
+    expect(() =>
+      createWebTrackRecorderInternal({ sensors: [metres, feet] }, env.environment),
+    ).toThrow(/declared twice/);
+  });
+
+  it("accepts two sensors declaring the same key identically", () => {
+    const env = createTestEnvironment();
+    const channel = { key: "depthM", label: "Depth", unit: "m" };
+    const recorder = createWebTrackRecorderInternal(
+      {
+        sensors: [
+          createFakeSensorSource({ id: "a", channels: [channel] }),
+          createFakeSensorSource({ id: "b", channels: [{ ...channel }] }),
+        ],
+      },
+      env.environment,
+    );
+
+    expect(recorder.status).toBe("finalized");
   });
 });

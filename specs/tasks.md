@@ -271,10 +271,27 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   **flushes immediately** rather than waiting for a tick, because a pause is often the last thing
   before an app is backgrounded and killed; the timer stays alive while paused, since a paused
   track is still recoverable. At most one write is in flight and only the newest pending snapshot
-  is kept, so two writes cannot land out of order and leave an older picture on disk. `stop()`
+  is kept, so two writes cannot land out of order and leave an older picture on disk — proven by
+  **genuinely holding a write in flight** while more snapshots are enqueued, asserting maximum
+  concurrency of one, that superseded snapshots coalesce rather than accumulating a backlog, and
+  that `stop()` waits for the held write before landing last. `stop()`
   clears the timer, drains the queue, then saves the finalized track **last** under the same id;
   the `stopPromise` is memoized, not just the result, so concurrent stops await one drain and
   produce exactly one final save.
+  _AC — one enablement rule:_ autosave is on when a store exists **and** the interval is
+  positive, resolved once so the periodic write and the pause flush cannot disagree. Omitting
+  `autosaveMs` uses the documented default; `0` writes nothing at all, pause included, while
+  `stop()` still saves the finished track — disabling autosave asks for no *periodic* writes, not
+  for the trip to be discarded.
+  _AC — what may be resumed:_ `status` must be `recording` or `paused` and `origin` must be
+  `recorded`. A finalized track is a durable trip, and resuming one would let a partial recording
+  overwrite it under its own id.
+  _AC — channel conflicts:_ the **whole normalised definition** is compared — label, unit,
+  aggregate, bounds and precision — not just label and unit. `aggregate` decides whether
+  `computeStats` sums or averages, so a change to it changes what every stored value means; an
+  omitted one normalises to the documented `"avg"`. The same check applies **between configured
+  sensors**, where a bare `Map` would let the last source win and produce a track labelled one way
+  holding values measured another.
   _AC — failures:_ a rejected autosave surfaces as a `storage` error, does not poison the queue,
   does not become an unhandled rejection, and does not end the recording; a failed **final** save
   rejects `stop()` and can be retried, since the finalized track is already memoized.

@@ -118,6 +118,8 @@ segment and never bridge a pause. Elevation gain is hysteresis-filtered so GPS a
 not inflate it. `distanceM` moves into `stats`.
 
 ## ADR-0011 — `TileSource` describes raster, vector, and elevation sources
+**Status.** The transport/content portion is superseded by ADR-0023 (`kind` and `transport` are
+separate axes). `role`, `encoding`, `TerrainOptions` and the `styleLayers` passthrough stand.
 **Context.** ADR-0008 chose MapLibre GL *for* vector styling — bathymetry, and by the same
 mechanism topographic contours, hillshade, and 3D terrain. But `TileSource` was still the
 raster-era shape inherited from the Leaflet design (`xyz | wms | pmtiles`, no style concept), so
@@ -376,3 +378,63 @@ removes both at once — no defensive copying to remember, no invalidation to ge
 having to compute them. Undo becomes simpler, since a snapshot holds no derived values that could
 disagree with the geometry it sits beside. The cost is recomputation on every `finalizeTrack`,
 which is the same pass that already simplifies and computes track statistics.
+
+## ADR-0023 — `TileSource` separates content kind from transport
+**Context.** `TileSourceKind` was `"xyz" | "wms" | "pmtiles" | "vector" | "raster-dem"` — a single
+axis mixing two independent questions. `xyz` and `wms` name *how tiles are fetched*; `vector` and
+`raster-dem` name *what the tiles contain*; `pmtiles` names a transport and says nothing about
+content. Since a `.pmtiles` archive holds either raster or vector tiles, the renderer had no
+stated way to know which, and T4.1a shipped an inference: presence of `styleLayers` decided it,
+on the reasoning that vector tiles are unrenderable without layers and raster tiles need none.
+
+The inference is wrong in both directions. A raster archive whose consumer adds a hillshade layer
+is built as a vector source and draws nothing; a vector archive whose layers arrive later — or
+come from a base `style` document — is built as raster and draws nothing. Both fail silently:
+MapLibre reports no error for a source of the wrong type, so the map is simply blank.
+
+Compounding it, the raster branch appended `/{z}/{x}/{y}` to the archive url. PMTiles is read
+through a registered protocol handler that resolves the archive itself; MapLibre's own PMTiles
+example passes `url: "pmtiles://…"` for raster, vector and `raster-dem` alike. The appended path
+does not exist.
+
+**Decision.** Three fields with three separate jobs:
+
+    kind       describes content.
+    transport  describes how the source is obtained.
+    url        is the transport's underlying location or template.
+
+`kind: "raster" | "vector" | "raster-dem"` maps directly to MapLibre's source `type`.
+`transport: "template" | "wms" | "tilejson" | "pmtiles"` decides only the url's shape —
+`tiles: [url]` for `template` and `wms`, `url` for `tilejson` and `pmtiles`. The builders infer
+nothing.
+
+**Renderer adapters may translate a transport into renderer-specific mechanisms; for MapLibre,
+PMTiles becomes the registered `pmtiles://` protocol.** That pseudo-scheme is MapLibre's, not the
+engine's: Leaflet's PMTiles integration constructs `PMTiles(url)` from the plain archive
+location, and OpenLayers has its own source abstraction — neither knows what `pmtiles://` means.
+So `TileSource.url` is always `https://cdn.example/map.pmtiles`, and `@mapatlas/maplibre` alone
+prefixes it on the way into a style. A url arriving with the scheme already on it is **rejected
+under every transport**: `transport: "pmtiles"` states the fact once, and a second representation
+of it would mean deciding whether to prefix again.
+
+What cannot be expressed is likewise rejected rather than rendered wrong: `wms` with a
+non-`raster` kind, since GetMap returns an image, and a `wms` url with no bbox placeholder.
+
+This **supersedes the transport/content portion of ADR-0011**. Everything else ADR-0011 decided
+stands: `role`, `encoding`, `TerrainOptions`, and `styleLayers` as an opaque JSON passthrough
+that keeps renderer style types out of `core`.
+
+**Consequences.** A breaking change to a public type, taken now because nothing outside the
+renderer builders constructs a `TileSource` yet — once Phase 6 and the demo do, it costs far
+more. Migration is mechanical: `xyz` → `raster`/`template`, `wms` → `raster`/`wms`, `vector` →
+`vector`/`tilejson`, `raster-dem` → `raster-dem`/`tilejson`, and a PMTiles source states its
+content kind explicitly and drops the `pmtiles://` prefix from its url.
+
+Phase 6 gets the better end of this. `OfflineRegionStore` can reason from `transport: "pmtiles"`
+while `url` stays the archive location it must fetch bytes from — it never has to strip a
+renderer's pseudo-scheme to do its own job.
+
+The general rule, and the one worth carrying forward: **when a value answers two questions, it
+answers neither — split the axes rather than infer one from the other.** The corollary this
+correction added: a renderer-specific encoding of a value is the renderer's to apply, not
+something the neutral contract carries on its behalf.

@@ -669,17 +669,24 @@ acts on label *meaning* — it stores and displays the result; the consumer inte
 ## 7. Basemap, terrain & offline tiles
 
 A `TileSource` is any layer the renderer composites: raster, vector, or an elevation raster
-driving hillshade and 3D terrain. `styleLayers` is an opaque JSON passthrough so `core` can
-describe a vector layer without depending on a renderer's style types.
+driving hillshade and 3D terrain. `kind` and `transport` are **independent axes** — `kind` says
+what the tiles contain, `transport` says how to fetch them — so PMTiles-of-vector and
+PMTiles-of-raster are both expressible and neither has to be inferred (ADR-0023). `styleLayers`
+is an opaque JSON passthrough so `core` can describe a vector layer without depending on a
+renderer's style types.
 
 ```ts
-export type TileSourceKind = "xyz" | "wms" | "pmtiles" | "vector" | "raster-dem";
+/** What the tiles contain. */
+export type TileSourceKind = "raster" | "vector" | "raster-dem";
+/** How to fetch them. */
+export type TileSourceTransport = "template" | "wms" | "tilejson" | "pmtiles";
 export type TileSourceRole = "base" | "overlay" | "terrain" | "hillshade";
 
 export interface TileSource {
   id: string;
   kind: TileSourceKind;
-  url: string;                 // template, WMS endpoint, style URL, or .pmtiles location
+  transport: TileSourceTransport;
+  url: string;                 // tile template, WMS request, TileJSON url, or .pmtiles location
   attribution: string;         // rendered verbatim (license compliance)
   role?: TileSourceRole;       // default "overlay" (the first source defaults to "base")
   opacity?: number;
@@ -730,8 +737,27 @@ export interface MapAssetStore {
 export declare function createPMTilesRegionStore(o: { sources: TileSource[]; assets: MapAssetStore }): OfflineRegionStore;
 ```
 
-**Contract:** `download()` **copies bytes into the `MapAssetStore`** and resolves the region from
-local storage thereafter. A `.pmtiles` URL served by range requests is *remote* PMTiles, not an
+**Contract (`TileSource`):** `kind` describes content, `transport` describes how the source is
+obtained, and `url` is the transport's underlying location or template. A renderer combines the
+three and **guesses nothing**. `template` and `wms` name individual tiles (`tiles: [url]`);
+`tilejson` and `pmtiles` name a document or archive describing the whole set (`url`).
+
+A renderer adapter may translate a transport into a renderer-specific mechanism — for MapLibre,
+PMTiles becomes the `pmtiles://` protocol it registers, so `@mapatlas/maplibre` prefixes the
+archive location itself. That scheme never appears in a `TileSource`: Leaflet's PMTiles
+integration constructs `PMTiles(url)` from the plain location and OpenLayers has its own source
+abstraction, so a url carrying it would be unreadable to every renderer but one. Write
+`url: "https://cdn.example/map.pmtiles"` with `transport: "pmtiles"`.
+
+Rejected as unrenderable rather than rendered wrong: `wms` with a non-`raster` kind (GetMap
+returns an image), a `wms` url with no bbox placeholder, and a url already carrying `pmtiles://`
+under any transport.
+
+Style layer ids are namespaced `<sourceId>__<layerId>`, so two sources each carrying a layer
+called `labels` yield `a__labels` and `b__labels` instead of one silently replacing the other.
+
+**Contract (`OfflineRegionStore`):** `download()` **copies bytes into the `MapAssetStore`** and
+resolves the region from local storage thereafter. A `.pmtiles` URL served by range requests is *remote* PMTiles, not an
 offline region — a region that still needs the network to draw has not been downloaded. The
 implementation must also honor the tile source's terms: see the licensing rule in
 `architecture.md §8`, which forbids region download against community tile services.

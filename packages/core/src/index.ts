@@ -53,6 +53,7 @@ export type {
   TileSource,
   TileSourceKind,
   TileSourceRole,
+  TileSourceTransport,
 } from "./tiles.js";
 export type {
   SensorMergePolicy,

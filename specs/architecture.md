@@ -117,8 +117,10 @@ and never learns what they measure.
 - **`MediaAnalyzer`** — `analyze(input) => Promise<MediaAnalysis>`. Optional; absent → no
   analysis UI. Implementations may run on-device (ONNX/TF.js/Core ML via a native bridge) or
   call a remote vision model. **This is an egress boundary** — see `SECURITY.md`.
-- **`TileSource`** — any layer the renderer composites: raster (`xyz`/`wms`/`pmtiles`), a
-  `vector` source, or a `raster-dem` elevation source, plus a `role` (`base`/`overlay`/
+- **`TileSource`** — any layer the renderer composites, described on two independent axes: a
+  `kind` (`raster`/`vector`/`raster-dem`) saying what the tiles contain and a `transport`
+  (`template`/`wms`/`tilejson`/`pmtiles`) saying how to fetch them, so a PMTiles archive states
+  its own content instead of the renderer guessing (ADR-0023). Plus a `role` (`base`/`overlay`/
   `terrain`/`hillshade`) and attribution. `styleLayers` carries renderer style layers as opaque
   JSON, so `core` can describe contours, hillshade, or bathymetry **without importing a
   renderer's types**. This is what makes topographic and depth basemaps expressible

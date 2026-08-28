@@ -62,6 +62,54 @@ describe("it enforces what MapLibre enforces", () => {
     }).not.toThrow();
   });
 
+  it("rejects terrain naming a source that is not installed", () => {
+    const map = createFakeMap(OPTIONS);
+    expect(() => {
+      map.setTerrain({ source: "dem", exaggeration: 1 });
+    }).toThrow(/names no installed source/);
+  });
+
+  it("rejects removing a source terrain still references", () => {
+    // Deliberately stronger than MapLibre 6.6, which checks only layer references here.
+    // MAP-ATLAS treats terrain as a source dependency like any other, and encoding that
+    // makes the controller's release-terrain-first ordering a behavioural requirement rather
+    // than an assertion about a call log.
+    const map = createFakeMap(OPTIONS);
+    map.addSource("dem", RASTER);
+    map.setTerrain({ source: "dem", exaggeration: 1 });
+
+    expect(() => {
+      map.removeSource("dem");
+    }).toThrow(/still used by terrain/);
+
+    map.setTerrain(null);
+    expect(() => {
+      map.removeSource("dem");
+    }).not.toThrow();
+  });
+
+  it("starts from terrain the style declared, as MapLibre does", () => {
+    // The case a controller's own "what I applied" bookkeeping gets wrong.
+    const map = createFakeMap({
+      ...OPTIONS,
+      style: { version: 8, sources: {}, layers: [], terrain: { source: "style-dem" } },
+    });
+    expect(map.getTerrain()).toEqual({ source: "style-dem" });
+  });
+
+  it("reports the terrain currently applied, as MapLibre's getTerrain does", () => {
+    const map = createFakeMap(OPTIONS);
+    expect(map.terrain).toBeNull();
+
+    map.addSource("dem", RASTER);
+    map.setTerrain({ source: "dem", exaggeration: 2 });
+    expect(map.terrain).toEqual({ source: "dem", exaggeration: 2 });
+
+    map.setTerrain(null);
+    expect(map.terrain).toBeNull();
+    expect(map.getTerrain()).toBeNull();
+  });
+
   it("rejects removing what was never added", () => {
     const map = createFakeMap(OPTIONS);
     expect(() => {
@@ -77,6 +125,9 @@ describe("it enforces what MapLibre enforces", () => {
     map.remove();
     expect(() => {
       map.addSource("osm", RASTER);
+    }).toThrow(/after remove/);
+    expect(() => {
+      map.setTerrain(null);
     }).toThrow(/after remove/);
   });
 });

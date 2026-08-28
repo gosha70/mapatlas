@@ -5,7 +5,7 @@ import type { StyleSpecification } from "maplibre-gl";
 import { Protocol } from "pmtiles";
 
 import type { MapConstructorOptions, MapEnvironment, MapLike } from "./environment.js";
-import type { MapControllerOptions, MapSourceController } from "./controller.js";
+import type { MapControllerCore, MapControllerOptions } from "./controller.js";
 import { createMapControllerInternal } from "./controller.js";
 
 /**
@@ -39,6 +39,6 @@ export function createBrowserMapEnvironment(): MapEnvironment {
 }
 
 /** Mount a MapLibre GL map over the real runtime. */
-export function createMapController(options: MapControllerOptions): MapSourceController {
+export function createMapController(options: MapControllerOptions): MapControllerCore {
   return createMapControllerInternal(options, createBrowserMapEnvironment());
 }

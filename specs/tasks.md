@@ -388,8 +388,66 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   The browser lane is **typechecked**: `e2e/**` is in `tsconfig.tests.json`, whose `paths` mirror
   the harness's vite aliases and must move with them.
 - **T4.2 Terrain & topography.** `TerrainOptions` → 3D terrain + hillshade from a `raster-dem`
-  source; `styleLayers` passthrough for contour/bathymetry layers. _AC:_ a fixture stack of
-  DEM + hillshade + contours renders; `setTerrain(null)` fully removes terrain.
+  source; `styleLayers` passthrough for contour/bathymetry layers.
+
+  The governing rule: **terrain is prepared desired state over the source stack.** A
+  source-stack replacement is *atomic* with respect to terrain — compatibility is validated
+  before any mutation; when applied terrain exists it is cleared before any old source is
+  removed, and restored only after the replacement sources and layers are installed. Terrain is
+  a consumer of the source stack exactly as layers are, not an exception to it, so when T4.3
+  adds track and event sources they join the same ordering rather than becoming a second
+  special case.
+
+  _AC:_ a fixture stack of DEM + hillshade + contours renders, proven by asking MapLibre whether
+  the generated layer ids `dem__shade` and `contours__lines` are in the style — the library can
+  report a layer-validation error and return **without adding the layer** rather than throwing,
+  so "no exception" and "the source's attribution appeared" both go green on a stack whose
+  layers were silently dropped; `setTerrain(null)` fully removes terrain, proven by the
+  library's own `getTerrain()` going null.
+
+  `setTerrain` is validated **against desired sources, not the installed map** — before load
+  the map holds nothing, so validating against it would accept everything and fail later. The
+  named source must exist and have `kind === "raster-dem"`; `role` is deliberately not checked,
+  since `kind` states capability while `role` states stack behaviour and a DEM may drive terrain
+  while also carrying a hillshade layer. `exaggeration` must be finite and `>= 0` per the style
+  spec — zero accepted, negative and non-finite rejected.
+
+  Two of those are checks MapLibre 6.6 also makes: it validates a `TerrainSpecification` and
+  rejects a source the style does not hold. The value here is **when** — synchronously, at this
+  package's own public boundary, rather than from inside a `load` callback no caller can catch.
+  The source *kind* cross-check is the one MapLibre makes at no point: terrain over ordinary
+  imagery renders flat, indistinguishable from a DEM whose tiles failed.
+
+  Desired terrain is stored separately from renderer-applied terrain; applied state is **read
+  from the renderer, never mirrored**. `setTerrain(dem); setTerrain(null);
+  setTerrain(dem2)` before load makes **zero** MapLibre calls, and load makes exactly one, after
+  the sources. After load, replacing terrain needs no `null` between — MapLibre takes a new
+  definition directly; the explicit release exists only for the case where the DEM is about to
+  be removed. Reconciliation order is: release terrain → remove layers → remove sources → add
+  sources → add layers → apply terrain.
+
+  `setSources` re-validates the standing terrain against the prospective stack and assigns
+  **nothing** until both pass, so a stack that would orphan terrain — by dropping the DEM, or by
+  keeping its id while changing its kind — throws and leaves desired state untouched. The
+  map-untouched assertion cannot see this before load, where there is nothing to touch: the
+  falsifying case is that a rejected call must not change what a later `load` installs.
+
+  The fake refuses `removeSource` while terrain references it, which makes the four-phase order
+  a behavioural requirement rather than an assertion about a call log. That rule is
+  **deliberately stronger than MapLibre 6.6**, which checks only layer references there:
+  MAP-ATLAS treats terrain as a dependency of the sources it names, like any other consumer of
+  the stack.
+
+  Applied terrain is **read from the map, never mirrored in a flag**. A base `style` may declare
+  its own `terrain`, which MapLibre applies as the style loads — before the controller has done
+  anything. A remembered "what I applied" flag starts at `null` in that case and stays wrong,
+  leaving style terrain running under a controller reporting none. The controller is
+  authoritative: desired terrain of `null` clears whatever the map actually has. Pinned in the
+  browser as a pair, since one test alone cannot distinguish clearing from absence — the first
+  proves MapLibre applies a style's terrain unaided, the second proves the controller then
+  clears it.
+
+  Twelve terrain mutations each fail at least one test, four of them in the browser.
 - **T4.3 Track & events render.** Live position, **one polyline per segment**, start/finish/lap
   marks, event marks, `fitTrack`, `fitBounds`, `recenter`.
   Geometry comes from `simplifiedSegments[n]` when present, falling back to slicing the raw

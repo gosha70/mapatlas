@@ -12,7 +12,12 @@ import { recoverInterruptedTrack } from "@mapatlas/core";
 import type { Track } from "@mapatlas/core";
 import { createIdbStorageAdapter } from "@mapatlas/storage-idb";
 import { createWebTrackRecorder } from "@mapatlas/recorder-web";
-import { createMapController } from "@mapatlas/maplibre/controller";
+import { createBrowserMapEnvironment, createMapController } from "@mapatlas/maplibre/controller";
+import { createMapControllerInternal } from "@mapatlas/maplibre/controller-internal";
+import type {
+  MapControllerCore,
+  MapControllerOptions,
+} from "@mapatlas/maplibre/controller-internal";
 import { isPmtilesProtocolRegistered } from "@mapatlas/maplibre/protocols";
 
 declare global {
@@ -20,6 +25,21 @@ declare global {
     mapatlas: {
       createWebTrackRecorder: typeof createWebTrackRecorder;
       createMapController: typeof createMapController;
+      /**
+       * A controller plus a window onto what the real map actually holds.
+       *
+       * `MapController` deliberately exposes no getters — a consumer sets state, it does not
+       * interrogate it — but a browser test has to check what MapLibre did rather than what
+       * the controller believes. `getTerrain()` and `getLayer()` are the library's own
+       * answers, and `getLayer` matters because MapLibre can report a layer-validation error
+       * and return *without adding the layer*, rather than throwing.
+       */
+      mountWithProbe(options: MapControllerOptions): MountedProbe;
+      /**
+       * A bare MapLibre map with no controller, so a test can establish what the library
+       * does on its own before asserting what the controller does about it.
+       */
+      mountRawMap(style: unknown): { getTerrain(): unknown };
       /**
        * Whether the realm's PMTiles handler has been registered.
        *
@@ -40,6 +60,10 @@ declare global {
        * for something that will never happen. These let a test wait for the event itself.
        */
       signals: Record<string, boolean>;
+      /** Set by a map scenario, so later `page.evaluate` calls can drive and read it. */
+      probe?: MountedProbe;
+      /** Set by the bare-MapLibre scenario. */
+      rawMap?: { getTerrain(): unknown };
       /** The controller under test, so a later `page.evaluate` can drive it. */
       controller?: ReturnType<typeof createMapController>;
       /** Set by a running scenario, read by the test. */
@@ -57,9 +81,51 @@ function mapContainer(): HTMLElement {
   return element;
 }
 
+/** What the probe needs from MapLibre's `Map` beyond the controller seam. */
+interface MapProbe {
+  getTerrain(): unknown;
+  getLayer(id: string): unknown;
+}
+
+interface MountedProbe {
+  controller: MapControllerCore;
+  getTerrain(): unknown;
+  hasLayer(id: string): boolean;
+}
+
+function mountWithProbe(options: MapControllerOptions): MountedProbe {
+  const environment = createBrowserMapEnvironment();
+  let map: MapProbe | undefined;
+  const controller = createMapControllerInternal(options, {
+    ...environment,
+    createMap: (mapOptions: Parameters<typeof environment.createMap>[0]) => {
+      const created = environment.createMap(mapOptions);
+      map = created as unknown as MapProbe;
+      return created;
+    },
+  });
+  return {
+    controller,
+    getTerrain: () => map?.getTerrain() ?? null,
+    hasLayer: (id: string) => map?.getLayer(id) !== undefined,
+  };
+}
+
+function mountRawMap(style: unknown): { getTerrain(): unknown } {
+  const environment = createBrowserMapEnvironment();
+  const map = environment.createMap({
+    container: mapContainer(),
+    style: style as MapControllerOptions["style"] & {},
+    attributionControl: { customAttribution: [] },
+  });
+  return { getTerrain: () => map.getTerrain() };
+}
+
 window.mapatlas = {
   createWebTrackRecorder,
   createMapController,
+  mountWithProbe,
+  mountRawMap,
   isPmtilesProtocolRegistered,
   mapContainer,
   createIdbStorageAdapter,

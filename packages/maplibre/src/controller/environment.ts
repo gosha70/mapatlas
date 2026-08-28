@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { JSONValue } from "@mapatlas/core";
-import type { LayerSpecification, SourceSpecification } from "maplibre-gl";
+import type { LayerSpecification, SourceSpecification, TerrainSpecification } from "maplibre-gl";
 
 import type { ProtocolRegistrar } from "../protocols/pmtiles.js";
 
@@ -33,6 +33,20 @@ export interface MapLike {
   /** Draw order is add order, which is why the controller installs in declared order. */
   addLayer(layer: LayerSpecification): void;
   removeLayer(id: string): void;
+  /**
+   * Terrain is another consumer of the source stack, exactly as layers are, so it appears
+   * on the same seam. `null` disables it — and must be sent before the DEM source it names
+   * is removed, since MAP-ATLAS treats terrain as a source dependency.
+   */
+  setTerrain(terrain: TerrainSpecification | null): void;
+  /**
+   * What terrain the map *actually* has, which is not always what this controller applied.
+   *
+   * A base `style` may carry its own `terrain`, and MapLibre honours it as the style loads —
+   * before the controller has done anything. Mirroring applied state in a variable would
+   * start wrong in exactly that case and stay wrong, so the map is asked instead.
+   */
+  getTerrain(): TerrainSpecification | null;
   remove(): void;
 }
 

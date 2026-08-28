@@ -13,6 +13,9 @@
     // vite resolves them to `dist`, this resolves them to the sources that produce it.
     "paths": {
       "@mapatlas/maplibre/controller": ["./packages/maplibre/src/controller/browser.ts"],
+      "@mapatlas/maplibre/controller-internal": [
+        "./packages/maplibre/src/controller/controller.ts"
+      ],
       "@mapatlas/maplibre/protocols": ["./packages/maplibre/src/protocols/pmtiles.ts"]
     }
   },

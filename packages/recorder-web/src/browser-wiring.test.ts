@@ -170,3 +170,12 @@ describe("createWebTrackRecorder wires itself to the browser", () => {
     expect(ticks).toBe(settled);
   });
 });
+
+describe("the package barrel", () => {
+  it("does not export the injected environment", async () => {
+    // T3.1 and api.md keep it off the public contract; exporting it here would make its
+    // shape package API to maintain forever.
+    const barrel: Record<string, unknown> = await import("./index.js");
+    expect(Object.keys(barrel).sort()).toEqual(["PACKAGE_NAME", "createWebTrackRecorder"]);
+  });
+});

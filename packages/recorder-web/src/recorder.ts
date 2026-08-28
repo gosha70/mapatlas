@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type {
+  ChannelDescriptor,
+  Id,
   LapInput,
   SamplingPolicy,
+  SensorMergePolicy,
+  SensorSample,
+  SensorSource,
   Track,
   TrackPoint,
   TrackRecorder,
@@ -11,7 +16,14 @@ import type {
   TrackSegment,
   TrackStatus,
 } from "@mapatlas/core";
-import { finalizeTrack, newId, resolveSamplingPolicy, sample } from "@mapatlas/core";
+import {
+  finalizeTrack,
+  mergeSensorSamples,
+  newId,
+  resolveSamplingPolicy,
+  resolveSensorMergePolicy,
+  sample,
+} from "@mapatlas/core";
 
 import type {
   PositionFailure,
@@ -45,6 +57,13 @@ function toTrackPoint(fix: PositionFix): TrackPoint {
   };
 }
 
+/** A point carries a nested `channels` record once T3.3 lands, so a spread is not enough. */
+function clonePoint(point: TrackPoint): TrackPoint {
+  return point.channels === undefined
+    ? { ...point }
+    : { ...point, channels: { ...point.channels } };
+}
+
 function toRecorderError(failure: PositionFailure): TrackRecorderError {
   const message = failure.message ?? "geolocation failed";
   switch (failure.code) {
@@ -65,6 +84,18 @@ export function createWebTrackRecorderInternal(
   environment: WebRecorderEnvironment,
 ): TrackRecorder {
   const samplingPolicy: SamplingPolicy = resolveSamplingPolicy(options.sampling);
+  const mergePolicy: SensorMergePolicy = resolveSensorMergePolicy(options.sensorMerge);
+  const sensors: readonly SensorSource[] = options.sensors ?? [];
+
+  /**
+   * Samples gathered since the previous **kept** point.
+   *
+   * Cleared each time a point is kept, so a channel value is attributed to the point it was
+   * observed near rather than accumulating across a whole recording. `mergeSensorSamples`
+   * decides which of these are eligible and how to reduce them.
+   */
+  let pendingSamples: SensorSample[] = [];
+  let sensorUnsubscribes: (() => void)[] = [];
 
   let status: TrackStatus = "finalized";
   let started = false;
@@ -76,12 +107,26 @@ export function createWebTrackRecorderInternal(
   /** Index where the open segment begins, or undefined when none is open. */
   let segmentStart: number | undefined;
   let segmentStartedAt = 0;
+  /** Minted when the segment opens, not when it closes, so a snapshot of an in-progress
+   *  segment names the same one the finalized track will. */
+  let segmentId: Id | undefined;
   /** Index where the current lap begins. Laps exist only once `markLap` is called. */
   let lapStart = 0;
 
+  /**
+   * Minted once, when recording begins, and used by every projection of this recording.
+   *
+   * Without it `stop()` called twice produces two tracks with different ids over the same
+   * points, and T3.4's autosaves would each address a different record instead of
+   * overwriting one.
+   */
+  let trackId: Id | undefined;
   let startedAt = 0;
   let watchId: number | undefined;
   let wakeLock: WakeLockLease | undefined;
+
+  /** The finalized result, so `stop()` is idempotent rather than newly minting each time. */
+  let finalized: Track | undefined;
 
   /**
    * Bumped whenever the watch is torn down. A geolocation callback already queued when
@@ -111,6 +156,7 @@ export function createWebTrackRecorderInternal(
   const openSegment = (): void => {
     segmentStart = points.length;
     segmentStartedAt = environment.now();
+    segmentId = newId();
   };
 
   /** Close the open segment, unless it never received a point — an empty span is not one. */
@@ -121,7 +167,7 @@ export function createWebTrackRecorderInternal(
       const first = points[segmentStart];
       const last = points[endIndex];
       segments.push({
-        id: newId(),
+        id: segmentId ?? newId(),
         startIndex: segmentStart,
         endIndex,
         startedAt: first?.t ?? segmentStartedAt,
@@ -129,6 +175,7 @@ export function createWebTrackRecorderInternal(
       });
     }
     segmentStart = undefined;
+    segmentId = undefined;
   };
 
   const handleFix = (fix: PositionFix, forGeneration: number): void => {
@@ -144,9 +191,20 @@ export function createWebTrackRecorderInternal(
 
     if (!sample(lastKept, candidate, samplingPolicy).keep) return;
 
+    // Merged only into points that survive sampling: a dropped fix is not a moment anyone
+    // will ever look at, and attaching telemetry to it would only carry it into the past.
+    const channels = mergeSensorSamples(pendingSamples, candidate.t, mergePolicy);
+    if (Object.keys(channels).length > 0) candidate.channels = channels;
+    pendingSamples = [];
+
     points.push(candidate);
     lastKept = candidate;
-    for (const listener of pointListeners) listener(candidate);
+
+    // Each listener gets its own copy. Handing out the object the recorder stores lets a
+    // consumer rewrite `t` from a render callback and corrupt sampling and finalization —
+    // mutating the second emitted timestamp reproduced a TrackTemporalOrderError on stop —
+    // and lets one listener change what the next one sees.
+    for (const listener of pointListeners) listener(clonePoint(candidate));
   };
 
   const handleFailure = (failure: PositionFailure, forGeneration: number): void => {
@@ -173,6 +231,55 @@ export function createWebTrackRecorderInternal(
     if (lease !== undefined) void lease.release().catch(() => undefined);
   };
 
+  /**
+   * Subscribe to every sensor and start it.
+   *
+   * A sensor that fails to start, or fails later, raises `onError` and is otherwise
+   * ignored: losing a heart-rate strap must not lose the trip. (ADR-0009)
+   */
+  const startSensors = (forGeneration: number): void => {
+    for (const sensor of sensors) {
+      sensorUnsubscribes.push(
+        sensor.onSample((sensorSample) => {
+          if (forGeneration !== generation || status !== "recording") return;
+          pendingSamples.push(sensorSample);
+        }),
+        sensor.onError((error) => {
+          if (forGeneration !== generation) return;
+          emitError({ kind: "sensor", message: error.message, sourceId: sensor.id });
+        }),
+      );
+
+      void sensor.start().catch((error: unknown) => {
+        if (forGeneration !== generation) return;
+        emitError({
+          kind: "sensor",
+          message: error instanceof Error ? error.message : String(error),
+          sourceId: sensor.id,
+        });
+      });
+    }
+  };
+
+  const stopSensors = (): void => {
+    for (const unsubscribe of sensorUnsubscribes) unsubscribe();
+    sensorUnsubscribes = [];
+    for (const sensor of sensors) {
+      // A sensor refusing to stop is not worth failing a finished recording over.
+      void sensor.stop().catch(() => undefined);
+    }
+    pendingSamples = [];
+  };
+
+  /** Every descriptor the configured sensors declare, de-duplicated by key. */
+  const channelDescriptors = (): ChannelDescriptor[] => {
+    const byKey = new Map<string, ChannelDescriptor>();
+    for (const sensor of sensors) {
+      for (const descriptor of sensor.channels) byKey.set(descriptor.key, descriptor);
+    }
+    return [...byKey.values()];
+  };
+
   const beginWatching = (): void => {
     const forGeneration = generation;
     try {
@@ -191,6 +298,7 @@ export function createWebTrackRecorderInternal(
       });
     }
     void acquireWakeLock(forGeneration);
+    startSensors(forGeneration);
   };
 
   const stopWatching = (): void => {
@@ -201,6 +309,7 @@ export function createWebTrackRecorderInternal(
       watchId = undefined;
     }
     releaseWakeLock();
+    stopSensors();
   };
 
   return {
@@ -222,6 +331,7 @@ export function createWebTrackRecorderInternal(
       started = true;
       status = "recording";
       startedAt = environment.now();
+      trackId ??= newId();
       Object.assign(samplingPolicy, resolveSamplingPolicy({ ...options.sampling, ...overrides }));
 
       openSegment();
@@ -246,6 +356,9 @@ export function createWebTrackRecorderInternal(
     },
 
     markLap: (label) => {
+      // A lifecycle call after finalization must not change what a repeated `stop()`
+      // returns; the recording is over and its result is fixed.
+      if (finalized !== undefined) return;
       if (points.length <= lapStart) return; // nothing recorded since the last one
       laps.push({
         id: newId(),
@@ -257,12 +370,9 @@ export function createWebTrackRecorderInternal(
     },
 
     stop: () => {
-      if (status === "finalized" && started && segments.length === 0 && points.length === 0) {
-        // Stopped without ever starting, or stopped twice with nothing recorded.
-        return Promise.resolve(
-          finalizeTrack({ points: [], segments: [], startedAt, endedAt: startedAt }),
-        );
-      }
+      // Idempotent, and identical: a second call returns the same track rather than a new
+      // one with a fresh id over the same points.
+      if (finalized !== undefined) return Promise.resolve(finalized);
 
       closeSegment();
       stopWatching();
@@ -276,16 +386,20 @@ export function createWebTrackRecorderInternal(
 
       const endedAt = points[points.length - 1]?.t ?? environment.now();
 
-      return Promise.resolve(
-        finalizeTrack({
-          points,
-          segments,
-          startedAt: points[0]?.t ?? startedAt,
-          endedAt,
-          origin: "recorded",
-          ...(laps.length === 0 ? {} : { laps }),
-        }),
-      );
+      const descriptors = channelDescriptors();
+
+      finalized = finalizeTrack({
+        points,
+        segments,
+        id: trackId ?? newId(),
+        startedAt: points[0]?.t ?? startedAt,
+        endedAt,
+        origin: "recorded",
+        ...(laps.length === 0 ? {} : { laps }),
+        ...(descriptors.length === 0 ? {} : { channels: descriptors }),
+      });
+
+      return Promise.resolve(finalized);
     },
 
     onPoint: (cb) => {

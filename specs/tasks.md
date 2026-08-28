@@ -222,6 +222,11 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   recording; `start()` is idempotent and refuses to restart after producing a track; and one
   **public-factory smoke test** proves the real browser wiring — `navigator.geolocation` and
   `navigator.wakeLock` — which an injected environment can never demonstrate.
+  _AC — the recorder owns its state:_ a point handed to `onPoint` is an independent deep copy, so
+  a listener can neither corrupt sampling and finalization nor change what the next listener sees;
+  and one recording has **one identity** — the track id is minted when recording begins, `stop()`
+  is idempotent and returns the same track rather than reminting, segment ids are stable from the
+  moment a segment opens, and a lifecycle call after finalization changes nothing.
   _AC — ADR-0020:_ a candidate strictly older than the last kept point is **dropped, never
   reordered**, even when far enough that `sample()` would otherwise accept it: it is neither
   stored nor emitted, and `stop()` still finalizes. The comparison is `candidate.t <
@@ -236,8 +241,12 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   pause costs no battery; `markLap` twice yields two laps with per-lap stats, marking with
   nothing recorded since the last one is ignored, and laps are absent entirely unless marked.
 - **T3.3 Sensor merge.** Accept `sensors: SensorSource[]`; merge per T1.8 into kept points and
-  union descriptors into `Track.channels`. _AC:_ with a fake HR-like source, every kept point
-  carries the channel and `stats.channels` reports its avg/min/max.
+  union descriptors into `Track.channels`. _AC:_ with a fake source, every kept point carries the
+  channel and `stats.channels` reports its avg/min/max; telemetry is attached **only to points
+  that survive sampling**, since a dropped fix is not a moment anyone will look at; the
+  `SensorMergePolicy` is honoured for both reduce and `maxAgeMs`; sensors start and stop with the
+  recording and across pause/resume; a sample arriving from an obsolete generation is ignored; and
+  a sensor failure surfaces on `onError` with its `sourceId` **without ending the recording**.
 - **T3.4 Autosave + recovery.** Persist the in-progress track every `autosaveMs`.
   _AC:_ simulating a crash mid-recording, `recoverInterruptedTrack` returns a track containing
   all points written before the last autosave.

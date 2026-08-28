@@ -7,14 +7,14 @@
  * `core` stays unit-testable in Node with no browser at all. (ADR-0013)
  */
 
-export type {
-  PositionFailure,
-  PositionFix,
-  WakeLockLease,
-  WebRecorderEnvironment,
-} from "./environment.js";
-export { POSITION_ERROR, createBrowserEnvironment } from "./environment.js";
-
+/**
+ * `WebRecorderEnvironment` and its helpers are deliberately absent.
+ *
+ * T3.1 and `api.md` keep the injected browser off the public contract: a geolocation watch,
+ * a wake lock and a timer are implementation machinery, and exporting them here would make
+ * their shapes package API to maintain forever. Tests import `environment.js` directly,
+ * which is what a source-local seam is for.
+ */
 export { createWebTrackRecorder } from "./recorder.js";
 
 /** Package identity, so a consumer can report which engine build it embeds. */

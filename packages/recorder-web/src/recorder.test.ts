@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { TrackPoint, TrackRecorderError } from "@mapatlas/core";
 import { assertValidTrackGeometry } from "@mapatlas/core";
+import { createFakeSensorSource } from "@mapatlas/core/testing";
 import { describe, expect, it } from "vitest";
 
 import type { PositionFix, WakeLockLease, WebRecorderEnvironment } from "./environment.js";
@@ -666,6 +667,113 @@ describe("errors", () => {
   });
 });
 
+describe("the recorder owns its points", () => {
+  it("does not let a listener mutate what it stored", async () => {
+    // Regression: the stored candidate, `lastKept` and the emitted object were one
+    // reference, so rewriting `t` from a listener corrupted sampling and made stop() throw
+    // TrackTemporalOrderError.
+    const env = createTestEnvironment();
+    const recorder = createWebTrackRecorderInternal({}, env.environment);
+
+    let seen = 0;
+    recorder.onPoint((point) => {
+      seen += 1;
+      if (seen === 2) point.t = T0 - 999_999;
+      point.lat = 0;
+    });
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    env.deliver(fix(500, T0 + 60_000));
+
+    const track = await recorder.stop();
+    expect(track.points.map((p) => p.t)).toEqual([T0, T0 + 60_000]);
+    expect(track.points[1]?.lat).not.toBe(0);
+    expect(() => assertValidTrackGeometry(track)).not.toThrow();
+  });
+
+  it("gives each listener an independent copy", async () => {
+    const env = createTestEnvironment();
+    const recorder = createWebTrackRecorderInternal({}, env.environment);
+
+    const second: TrackPoint[] = [];
+    recorder.onPoint((point) => {
+      point.lat = 12.34;
+    });
+    recorder.onPoint((point) => second.push(point));
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+
+    expect(second[0]?.lat).not.toBe(12.34);
+  });
+
+  it("does not let a listener mutation reach the next sampling decision", async () => {
+    const env = createTestEnvironment();
+    const recorder = createWebTrackRecorderInternal({}, env.environment);
+
+    // Teleporting the kept point would make the next fix look far away.
+    recorder.onPoint((point) => {
+      point.lat = 0;
+      point.lng = 0;
+    });
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    env.deliver(fix(2, T0 + 1000)); // still 2 m from the real last point: too close
+
+    expect((await recorder.stop()).points).toHaveLength(1);
+  });
+});
+
+describe("one recording, one identity", () => {
+  it("returns the same track from a repeated stop", async () => {
+    // Regression: each stop() minted a fresh id over the same points, and T3.4 needs every
+    // autosave and the final write to address one record.
+    const env = createTestEnvironment();
+    const recorder = createWebTrackRecorderInternal({}, env.environment);
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+
+    const first = await recorder.stop();
+    const second = await recorder.stop();
+
+    expect(second.id).toBe(first.id);
+    expect(second).toEqual(first);
+  });
+
+  it("ignores a lap marked after finalization", async () => {
+    const env = createTestEnvironment();
+    const recorder = createWebTrackRecorderInternal({}, env.environment);
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    env.deliver(fix(500, T0 + 60_000));
+    const first = await recorder.stop();
+
+    recorder.markLap("too late");
+
+    expect(await recorder.stop()).toEqual(first);
+  });
+
+  it("keeps a segment's id stable from the moment it opens", async () => {
+    const env = createTestEnvironment();
+    const recorder = createWebTrackRecorderInternal({}, env.environment);
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    recorder.pause();
+    recorder.resume();
+    env.deliver(fix(500, T0 + 60_000));
+
+    const track = await recorder.stop();
+    const ids = track.segments.map((segment) => segment.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.every((id) => id.length === 26)).toBe(true);
+  });
+});
+
 describe("lifecycle", () => {
   it("reports its status", async () => {
     const env = createTestEnvironment();
@@ -703,7 +811,7 @@ describe("lifecycle", () => {
     await expect(recorder.start()).rejects.toThrow(/create another/);
   });
 
-  it("finalizes an empty recording without throwing", async () => {
+  it("finalizes an empty recording without throwing, and repeatably", async () => {
     const env = createTestEnvironment();
     const recorder = createWebTrackRecorderInternal({}, env.environment);
 
@@ -714,6 +822,7 @@ describe("lifecycle", () => {
     expect(track.segments).toEqual([]);
     expect(track.status).toBe("finalized");
     expect(() => assertValidTrackGeometry(track)).not.toThrow();
+    expect(await recorder.stop()).toEqual(track);
   });
 
   it("marks the track as recorded", async () => {
@@ -724,5 +833,192 @@ describe("lifecycle", () => {
     env.deliver(fix(0, T0));
 
     expect((await recorder.stop()).origin).toBe("recorded");
+  });
+});
+
+describe("sensor channels", () => {
+  const HEART_RATE = {
+    key: "heartRateBpm",
+    label: "Heart rate",
+    unit: "bpm",
+    aggregate: "avg" as const,
+  };
+  const DEPTH = { key: "depthM", label: "Depth", unit: "m", aggregate: "max" as const };
+
+  it("merges samples into the points that survive sampling", async () => {
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HEART_RATE] });
+    const recorder = createWebTrackRecorderInternal({ sensors: [sensor] }, env.environment);
+
+    await recorder.start();
+    sensor.emit({ t: T0 - 1000, values: { heartRateBpm: 120 } });
+    env.deliver(fix(0, T0));
+    sensor.emit({ t: T0 + 59_000, values: { heartRateBpm: 150 } });
+    env.deliver(fix(500, T0 + 60_000));
+
+    const track = await recorder.stop();
+    expect(track.points[0]?.channels).toEqual({ heartRateBpm: 120 });
+    expect(track.points[1]?.channels).toEqual({ heartRateBpm: 150 });
+  });
+
+  it("unions descriptors from every configured sensor into the track", async () => {
+    const env = createTestEnvironment();
+    const hr = createFakeSensorSource({ id: "hr", channels: [HEART_RATE] });
+    const depth = createFakeSensorSource({ id: "depth", channels: [DEPTH] });
+    const recorder = createWebTrackRecorderInternal({ sensors: [hr, depth] }, env.environment);
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+
+    expect((await recorder.stop()).channels).toEqual([HEART_RATE, DEPTH]);
+  });
+
+  it("declares no channels when no sensors are configured", async () => {
+    const env = createTestEnvironment();
+    const recorder = createWebTrackRecorderInternal({}, env.environment);
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+
+    expect((await recorder.stop()).channels).toBeUndefined();
+  });
+
+  it("does not attach telemetry to a fix that sampling dropped", async () => {
+    // A dropped fix is not a moment anyone will look at; attaching a reading to it would
+    // only carry that reading into the past.
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HEART_RATE] });
+    const recorder = createWebTrackRecorderInternal({ sensors: [sensor] }, env.environment);
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    sensor.emit({ t: T0 + 500, values: { heartRateBpm: 200 } });
+    env.deliver(fix(2, T0 + 1000)); // too close, too soon — dropped
+    sensor.emit({ t: T0 + 59_000, values: { heartRateBpm: 130 } });
+    env.deliver(fix(500, T0 + 60_000));
+
+    const track = await recorder.stop();
+    expect(track.points).toHaveLength(2);
+    // Both readings were pending when the second point was kept, and `last` wins.
+    expect(track.points[1]?.channels).toEqual({ heartRateBpm: 130 });
+  });
+
+  it("honours the merge policy", async () => {
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HEART_RATE] });
+    const recorder = createWebTrackRecorderInternal(
+      { sensors: [sensor], sensorMerge: { reduce: "avg" } },
+      env.environment,
+    );
+
+    await recorder.start();
+    sensor.emit({ t: T0 - 200, values: { heartRateBpm: 100 } });
+    sensor.emit({ t: T0 - 100, values: { heartRateBpm: 140 } });
+    env.deliver(fix(0, T0));
+
+    expect((await recorder.stop()).points[0]?.channels).toEqual({ heartRateBpm: 120 });
+  });
+
+  it("drops a sample older than maxAgeMs", async () => {
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HEART_RATE] });
+    const recorder = createWebTrackRecorderInternal(
+      { sensors: [sensor], sensorMerge: { maxAgeMs: 1000 } },
+      env.environment,
+    );
+
+    await recorder.start();
+    sensor.emit({ t: T0 - 60_000, values: { heartRateBpm: 99 } });
+    env.deliver(fix(0, T0));
+
+    expect((await recorder.stop()).points[0]?.channels).toBeUndefined();
+  });
+
+  it("keeps the statistics a descriptor makes possible", async () => {
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HEART_RATE] });
+    const recorder = createWebTrackRecorderInternal({ sensors: [sensor] }, env.environment);
+
+    await recorder.start();
+    for (let i = 0; i < 3; i += 1) {
+      sensor.emit({ t: T0 + i * 60_000 - 100, values: { heartRateBpm: 120 + i * 10 } });
+      env.deliver(fix(i * 500, T0 + i * 60_000));
+    }
+
+    const track = await recorder.stop();
+    expect(track.stats?.channels?.["heartRateBpm"]).toMatchObject({ min: 120, max: 140, count: 3 });
+  });
+
+  it("starts and stops every sensor with the recording", async () => {
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HEART_RATE] });
+    const recorder = createWebTrackRecorderInternal({ sensors: [sensor] }, env.environment);
+
+    expect(sensor.started).toBe(false);
+    await recorder.start();
+    expect(sensor.started).toBe(true);
+
+    await recorder.stop();
+    expect(sensor.started).toBe(false);
+  });
+
+  it("stops sensors on pause and restarts them on resume", async () => {
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HEART_RATE] });
+    const recorder = createWebTrackRecorderInternal({ sensors: [sensor] }, env.environment);
+
+    await recorder.start();
+    recorder.pause();
+    expect(sensor.started).toBe(false);
+
+    recorder.resume();
+    expect(sensor.started).toBe(true);
+  });
+
+  it("surfaces a sensor failure without ending the recording", async () => {
+    // Losing a strap must not lose the trip. (ADR-0009)
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HEART_RATE] });
+    const recorder = createWebTrackRecorderInternal({ sensors: [sensor] }, env.environment);
+    const errors: TrackRecorderError[] = [];
+    recorder.onError((e) => errors.push(e));
+
+    await recorder.start();
+    env.deliver(fix(0, T0));
+    sensor.fail({ kind: "disconnected", message: "strap lost" });
+    env.deliver(fix(500, T0 + 60_000));
+
+    expect(errors).toEqual([{ kind: "sensor", message: "strap lost", sourceId: "hr" }]);
+    expect((await recorder.stop()).points).toHaveLength(2);
+  });
+
+  it("ignores samples from a sensor subscription of an obsolete generation", async () => {
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HEART_RATE] });
+    const recorder = createWebTrackRecorderInternal({ sensors: [sensor] }, env.environment);
+
+    await recorder.start();
+    recorder.pause();
+    sensor.emit({ t: T0, values: { heartRateBpm: 99 } }); // while paused
+    recorder.resume();
+    env.deliver(fix(0, T0 + 1000));
+
+    expect((await recorder.stop()).points[0]?.channels).toBeUndefined();
+  });
+
+  it("does not let a listener mutate merged channels", async () => {
+    const env = createTestEnvironment();
+    const sensor = createFakeSensorSource({ id: "hr", channels: [HEART_RATE] });
+    const recorder = createWebTrackRecorderInternal({ sensors: [sensor] }, env.environment);
+
+    recorder.onPoint((point) => {
+      if (point.channels !== undefined) point.channels["heartRateBpm"] = -1;
+    });
+
+    await recorder.start();
+    sensor.emit({ t: T0 - 100, values: { heartRateBpm: 120 } });
+    env.deliver(fix(0, T0));
+
+    expect((await recorder.stop()).points[0]?.channels).toEqual({ heartRateBpm: 120 });
   });
 });

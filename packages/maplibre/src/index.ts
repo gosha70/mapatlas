@@ -3,34 +3,18 @@
 /**
  * `@mapatlas/maplibre` — the MapLibre GL renderer.
  *
- * The translation from engine types to MapLibre style objects is **pure**: a `TileSource`
- * becomes a source descriptor and a `Track` becomes GeoJSON whether or not a map exists,
- * a browser exists, or a PMTiles protocol has been registered. Runtime capability lives at
- * the controller boundary, which is where its lifecycle is.
+ * The **translation** from engine types to MapLibre style objects lives in `./builders`,
+ * and it is deliberately *not* exported. It is an implementation detail of the controller:
+ * a `TileSource` is the contract a consumer writes against, and MapLibre's own source and
+ * layer specifications are what the controller does with it. Publishing the builders would
+ * put MapLibre's style types on this package's public surface, where every change to them
+ * becomes a breaking change here — and would invite consumers to hand-assemble a style the
+ * controller is responsible for.
+ *
+ * Nothing exported here needs a browser, a map, or a registered PMTiles protocol at import
+ * time. Runtime capability lives at the controller boundary, which is where its lifecycle
+ * is.
  */
-
-export type { BuiltTileSource } from "./builders/tile-source.js";
-export {
-  PMTILES_SCHEME,
-  TileSourceError,
-  buildTileSource,
-  buildTileSources,
-  resolveRole,
-  usesPmtiles,
-} from "./builders/tile-source.js";
-
-export type {
-  FeatureCollection,
-  LineStringFeature,
-  PointFeature,
-  Position2D,
-} from "./builders/track-geojson.js";
-export {
-  buildLapFeatures,
-  buildTrackEndpointFeatures,
-  buildTrackLineFeatures,
-  segmentGeometry,
-} from "./builders/track-geojson.js";
 
 /** Package identity, so a consumer can report which engine build it embeds. */
 export const PACKAGE_NAME = "@mapatlas/maplibre";

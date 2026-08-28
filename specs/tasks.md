@@ -327,12 +327,18 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   the track GeoJSON builders (`Track` → one `LineString` per segment, endpoint and lap marks).
   Deterministic translation with **no side effects at all**: they run in Node with no DOM, no
   WebGL and no map, and describing a source never depends on a runtime being present.
-  _AC:_ each `kind` maps to the right MapLibre source type; `styleLayers` pass through verbatim
-  with only `source` and a namespaced `id` filled in, since the engine has no opinion about how
-  contours or bathymetry look; empty attribution is rejected, being a licence obligation; a WMS
-  url without a bbox placeholder is rejected, since it renders one extent everywhere and reports
-  nothing; duplicate source ids are rejected; order is preserved and the first source defaults to
-  `base`; geometry prefers `simplifiedSegments[n]` and falls back to slicing raw points; a
+  _AC:_ each `kind` maps to the right MapLibre source type and each `transport` to the right url
+  shape, with **nothing inferred** (ADR-0023) — in particular the builder adds MapLibre's
+  `pmtiles://` scheme exactly once for all three kinds, never appending `/{z}/{x}/{y}`, and
+  rejects a `TileSource` that already carries the scheme, since it is the renderer's to add and
+  no other renderer can read it; `styleLayers` pass through
+  verbatim with only `source` and a namespaced `id` filled in, since the engine has no opinion
+  about how contours or bathymetry look, and **every** supplied layer id is namespaced so two
+  sources each carrying `labels` yield `a__labels` and `b__labels`; empty attribution is
+  rejected, being a licence obligation; a WMS url without a bbox placeholder is rejected, since
+  it renders one extent everywhere and reports nothing, as is a WMS source of non-`raster` kind
+  and a transport that disagrees with its own url scheme; duplicate source ids are rejected;
+  order is preserved and the first source defaults to `base`; geometry prefers `simplifiedSegments[n]` and falls back to slicing raw points; a
   singleton segment emits **no line feature** while keeping its endpoint mark; and no empty or
   single-position `LineString` is ever emitted, asserted across every fixture.
 - **T4.1b PMTiles protocol bootstrap.** `ensurePmtilesProtocol`, module-level and lazy.
@@ -341,7 +347,9 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   unregister it, because controller A tearing down infrastructure controller B still needs is a
   bug with no owner. _AC:_ no PMTiles source means no `Protocol` is constructed and the global is
   untouched; any number of controllers over PMTiles sources produce exactly **one** registration;
-  and the module exposes no unregister for a controller to reach for.
+  and the module exposes no unregister for a controller to reach for, and no test-only reset —
+  a test needing a fresh realm re-imports the module. The builders themselves stay **internal**:
+  the package publishes the controller, not MapLibre's style specifications.
 - **T4.1 MapController + layers.** Mount a MapLibre GL map, optional base `style`, ordered
   `TileSource[]` across raster/vector/`raster-dem` kinds, engine-owned `attributionPrefix`.
   _AC:_ base + overlay + vector composite in source order; attribution rendered verbatim; the

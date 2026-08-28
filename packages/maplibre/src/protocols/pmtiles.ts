@@ -27,12 +27,13 @@ export interface ProtocolRegistrar {
   createProtocol(): { tile: unknown };
 }
 
+/**
+ * Realm-scoped, and deliberately with no way back. A reset would be a production export
+ * that exists only for tests, and a consumer could use it to make a second registration
+ * possible — the exact state this module exists to prevent. A test that needs a fresh
+ * realm re-imports the module (`vi.resetModules()`).
+ */
 let registered = false;
-
-/** Test-only: forget the registration so a case can observe the first one again. */
-export function resetPmtilesProtocolForTests(): void {
-  registered = false;
-}
 
 export function isPmtilesProtocolRegistered(): boolean {
   return registered;

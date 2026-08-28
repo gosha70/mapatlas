@@ -10,6 +10,10 @@ import type { LayerSpecification, SourceSpecification } from "maplibre-gl";
  * protocol has been registered, whether a map exists, whether anything will ever render —
  * none of it changes what this returns. That is what makes it testable without a browser,
  * and what keeps the runtime capability at the controller boundary where its lifecycle is.
+ *
+ * It also **infers nothing**. `kind` says what the tiles contain and `transport` says how to
+ * fetch them, so the translation is a lookup on two stated axes rather than a guess about
+ * one conflated one. (ADR-0023)
  */
 
 /** What the renderer needs to add one `TileSource` to a style. */
@@ -21,8 +25,8 @@ export interface BuiltTileSource {
    *
    * For a raster source this is the one raster layer the engine generates. For a vector or
    * elevation source it is the consumer's own `styleLayers`, passed through verbatim with
-   * only `source` filled in — the engine has no opinion about how contours or bathymetry
-   * should look, which is the point of the passthrough. (ADR-0011)
+   * only `source` and a namespaced `id` filled in — the engine has no opinion about how
+   * contours or bathymetry should look, which is the point of the passthrough. (ADR-0011)
    */
   layers: LayerSpecification[];
   role: TileSourceRole;
@@ -44,11 +48,26 @@ export class TileSourceError extends Error {
 /** A WMS endpoint MapLibre can actually request tiles from needs a bbox placeholder. */
 const BBOX_PLACEHOLDERS = ["{bbox-epsg-3857}"];
 
-/** MapLibre reads `pmtiles://` through a registered protocol handler, not over HTTP. */
+/**
+ * MapLibre reads PMTiles through a protocol handler registered against this scheme, so the
+ * archive's location is prefixed with it on the way in.
+ *
+ * The scheme is **this renderer's**, not the engine's: Leaflet's PMTiles integration
+ * constructs `PMTiles(url)` from the plain location and OpenLayers has its own source
+ * abstraction, neither of which knows what `pmtiles://` means. A `TileSource` therefore
+ * carries the archive location and `transport: "pmtiles"`, and the translation to a
+ * MapLibre pseudo-scheme happens here, at the only boundary that owns it. (ADR-0023)
+ */
 export const PMTILES_SCHEME = "pmtiles://";
 
+/** Separates a source's id from a layer's own id, so two sources cannot collide. */
+const LAYER_ID_SEPARATOR = "__";
+
+const DEFAULT_RASTER_TILE_SIZE = 256;
+const DEFAULT_DEM_TILE_SIZE = 512;
+
 export function usesPmtiles(source: TileSource): boolean {
-  return source.kind === "pmtiles" || source.url.startsWith(PMTILES_SCHEME);
+  return source.transport === "pmtiles";
 }
 
 /**
@@ -59,22 +78,9 @@ export function resolveRole(source: TileSource, index: number): TileSourceRole {
   return source.role ?? (index === 0 ? "base" : "overlay");
 }
 
-/**
- * PMTiles is a *transport*, not a content type: an archive holds either raster or vector
- * tiles, and `kind: "pmtiles"` alone does not say which.
- *
- * Presence of `styleLayers` decides it, because vector tiles are unrenderable without
- * layers to style them and raster tiles need none. See the note in the T4.1 task: this
- * inference exists because the contract conflates transport with content, and it is the
- * one place in the builders that guesses.
- */
-function pmtilesIsVector(source: TileSource): boolean {
-  return (source.styleLayers?.length ?? 0) > 0;
-}
-
 function rasterLayer(source: TileSource, role: TileSourceRole): LayerSpecification {
   return {
-    id: `${source.id}__raster`,
+    id: `${source.id}${LAYER_ID_SEPARATOR}raster`,
     type: "raster",
     source: source.id,
     ...(source.minZoom === undefined ? {} : { minzoom: source.minZoom }),
@@ -91,9 +97,10 @@ function rasterLayer(source: TileSource, role: TileSourceRole): LayerSpecificati
 /**
  * Consumer style layers, bound to this source.
  *
- * `source` is filled in and `id` is namespaced so two sources carrying similarly-named
- * layers cannot collide, but nothing else is touched: paint, filter and layout are the
- * consumer's business.
+ * `source` is filled in and **every** id is namespaced — the one the consumer supplied as
+ * well as the one they omitted — so two sources carrying a layer called `labels` produce
+ * `a__labels` and `b__labels` rather than one silently replacing the other. Nothing else is
+ * touched: paint, filter and layout are the consumer's business.
  */
 function consumerLayers(source: TileSource): LayerSpecification[] {
   return (source.styleLayers ?? []).map((layer, index) => {
@@ -104,116 +111,137 @@ function consumerLayers(source: TileSource): LayerSpecification[] {
     if (typeof spec["type"] !== "string") {
       throw new TileSourceError(source.id, `styleLayers[${index}] has no "type"`);
     }
+    const localId = typeof spec["id"] === "string" ? spec["id"] : `layer-${String(index)}`;
     return {
       ...spec,
-      id: typeof spec["id"] === "string" ? spec["id"] : `${source.id}__layer-${String(index)}`,
+      id: `${source.id}${LAYER_ID_SEPARATOR}${localId}`,
       source: source.id,
     } as LayerSpecification;
   });
 }
 
-/** Translate one `TileSource` into the source and layers MapLibre needs. */
-export function buildTileSource(source: TileSource, index: number): BuiltTileSource {
-  const role = resolveRole(source, index);
-  const attribution = source.attribution;
+/** MapLibre's own `type`, which is exactly the engine's content kind. */
+const SOURCE_TYPE = {
+  raster: "raster",
+  vector: "vector",
+  "raster-dem": "raster-dem",
+} as const;
 
-  if (attribution.trim() === "") {
+/**
+ * How the url reaches MapLibre.
+ *
+ * `template` and `wms` name individual tiles, so they go in `tiles`; `tilejson` and
+ * `pmtiles` name a document or archive that describes the tile set, so they go in `url`.
+ * PMTiles is `url` for **all three content kinds** — the protocol handler resolves the
+ * archive and serves tiles out of it, so appending `/{z}/{x}/{y}` would ask for a path that
+ * does not exist.
+ */
+function urlFields(source: TileSource): Record<string, unknown> {
+  switch (source.transport) {
+    case "template":
+    case "wms":
+      return { tiles: [source.url] };
+    case "tilejson":
+      return { url: source.url };
+    case "pmtiles":
+      // The one renderer-specific rewrite in the translation, and the reason it belongs
+      // here rather than in the contract.
+      return { url: `${PMTILES_SCHEME}${source.url}` };
+  }
+}
+
+/**
+ * Reject the combinations the renderer cannot express, and the urls that would load
+ * nothing while reporting nothing.
+ */
+function validate(source: TileSource): void {
+  if (source.attribution.trim() === "") {
     // Attribution is a licence obligation, not decoration: OSM and OpenSeaMap both require
     // it, and a source that cannot state its own is one we must not silently render.
     throw new TileSourceError(source.id, "attribution is required and must not be empty");
   }
 
+  if (source.transport === "wms") {
+    if (source.kind !== "raster") {
+      // WMS GetMap returns an image. There is no vector or DEM tile behind it to fetch.
+      throw new TileSourceError(
+        source.id,
+        `transport "wms" carries raster tiles, not ${source.kind}`,
+      );
+    }
+    if (!BBOX_PLACEHOLDERS.some((placeholder) => source.url.includes(placeholder))) {
+      // Without it every request asks for the same extent, so the map renders one tile's
+      // worth of imagery everywhere and looks broken in a way nothing reports.
+      throw new TileSourceError(
+        source.id,
+        `a WMS url must contain a bbox placeholder (${BBOX_PLACEHOLDERS.join(" or ")})`,
+      );
+    }
+  }
+
+  if (source.url.startsWith(PMTILES_SCHEME)) {
+    // Under any transport. `transport: "pmtiles"` already says the source is an archive, so
+    // a prefixed url is a second representation of the same fact — and it is a MapLibre
+    // pseudo-scheme in a renderer-neutral type, which no other renderer can read. Accepting
+    // it would also mean guessing whether to prefix again.
+    throw new TileSourceError(
+      source.id,
+      `url must be the archive location; "${PMTILES_SCHEME}" is the renderer's to add`,
+    );
+  }
+}
+
+/**
+ * Which layers a source contributes.
+ *
+ * Raster imagery is the one thing the engine knows how to draw unaided. A vector source is
+ * unrenderable without the consumer's layers, so it gets theirs. An elevation source in a
+ * terrain role draws nothing at all — `TerrainOptions` points at it, and a hillshade layer
+ * is the consumer's to add.
+ */
+function layersFor(source: TileSource, role: TileSourceRole): LayerSpecification[] {
+  switch (source.kind) {
+    case "raster":
+      return [rasterLayer(source, role)];
+    case "vector":
+      return consumerLayers(source);
+    case "raster-dem":
+      return NON_DRAWING_ROLES.has(role) ? [] : consumerLayers(source);
+  }
+}
+
+/** Translate one `TileSource` into the source and layers MapLibre needs. */
+export function buildTileSource(source: TileSource, index: number): BuiltTileSource {
+  validate(source);
+
+  const role = resolveRole(source, index);
   const bounds = {
     ...(source.minZoom === undefined ? {} : { minzoom: source.minZoom }),
     ...(source.maxZoom === undefined ? {} : { maxzoom: source.maxZoom }),
   };
 
-  switch (source.kind) {
-    case "xyz":
-      return {
-        id: source.id,
-        role,
-        source: {
-          type: "raster",
-          tiles: [source.url],
-          tileSize: source.tileSize ?? 256,
-          attribution,
-          ...bounds,
-        } as SourceSpecification,
-        layers: [rasterLayer(source, role)],
-      };
+  const kindFields: Record<string, unknown> =
+    source.kind === "raster"
+      ? { tileSize: source.tileSize ?? DEFAULT_RASTER_TILE_SIZE }
+      : source.kind === "raster-dem"
+        ? {
+            tileSize: source.tileSize ?? DEFAULT_DEM_TILE_SIZE,
+            encoding: source.encoding ?? "mapbox",
+          }
+        : {};
 
-    case "wms": {
-      if (!BBOX_PLACEHOLDERS.some((placeholder) => source.url.includes(placeholder))) {
-        // Without it every request asks for the same extent, so the map renders one tile's
-        // worth of imagery everywhere and looks broken in a way nothing reports.
-        throw new TileSourceError(
-          source.id,
-          `a WMS url must contain a bbox placeholder (${BBOX_PLACEHOLDERS.join(" or ")})`,
-        );
-      }
-      return {
-        id: source.id,
-        role,
-        source: {
-          type: "raster",
-          tiles: [source.url],
-          tileSize: source.tileSize ?? 256,
-          attribution,
-          ...bounds,
-        } as SourceSpecification,
-        layers: [rasterLayer(source, role)],
-      };
-    }
-
-    case "vector":
-      return {
-        id: source.id,
-        role,
-        source: {
-          type: "vector",
-          url: source.url,
-          attribution,
-          ...bounds,
-        } as SourceSpecification,
-        layers: consumerLayers(source),
-      };
-
-    case "raster-dem":
-      return {
-        id: source.id,
-        role,
-        source: {
-          type: "raster-dem",
-          url: source.url,
-          tileSize: source.tileSize ?? 512,
-          encoding: source.encoding ?? "mapbox",
-          attribution,
-          ...bounds,
-        } as SourceSpecification,
-        // A terrain source draws nothing itself; `TerrainOptions` points at it and the
-        // consumer adds a hillshade layer if they want one visible.
-        layers: NON_DRAWING_ROLES.has(role) ? [] : consumerLayers(source),
-      };
-
-    case "pmtiles": {
-      const vector = pmtilesIsVector(source);
-      return {
-        id: source.id,
-        role,
-        source: (vector
-          ? { type: "vector", url: source.url, attribution, ...bounds }
-          : {
-              type: "raster",
-              tiles: [`${source.url}/{z}/{x}/{y}`],
-              tileSize: source.tileSize ?? 256,
-              attribution,
-              ...bounds,
-            }) as SourceSpecification,
-        layers: vector ? consumerLayers(source) : [rasterLayer(source, role)],
-      };
-    }
-  }
+  return {
+    id: source.id,
+    role,
+    source: {
+      type: SOURCE_TYPE[source.kind],
+      ...urlFields(source),
+      ...kindFields,
+      attribution: source.attribution,
+      ...bounds,
+    } as SourceSpecification,
+    layers: layersFor(source, role),
+  };
 }
 
 /**

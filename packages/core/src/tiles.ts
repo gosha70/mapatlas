@@ -4,12 +4,42 @@ import type { BBox } from "./geo.js";
 import type { Id } from "./ids.js";
 import type { JSONValue } from "./json.js";
 
-export type TileSourceKind = "xyz" | "wms" | "pmtiles" | "vector" | "raster-dem";
+/**
+ * What a source *contains*: image tiles, vector tiles, or an elevation raster whose pixels
+ * encode height.
+ *
+ * Content is orthogonal to transport (ADR-0023). A `.pmtiles` archive holds raster or
+ * vector tiles and the container does not say which; a TileJSON document describes either.
+ * Conflating the two forces the renderer to guess, and a wrong guess renders nothing with
+ * no error to explain it.
+ */
+export type TileSourceKind = "raster" | "vector" | "raster-dem";
+
+/**
+ * How the renderer *fetches* the tiles named by {@link TileSource.url}.
+ *
+ * - `template` — the url is a tile url template (`.../{z}/{x}/{y}.png`).
+ * - `wms` — the url is a WMS GetMap request containing a bbox placeholder.
+ * - `tilejson` — the url points at a TileJSON document describing the tile set.
+ * - `pmtiles` — the url is the location of a `.pmtiles` archive.
+ *
+ * A transport names *how the tiles are obtained*, not how one particular renderer obtains
+ * them. Adapters translate it: MapLibre reads PMTiles through a protocol it registers
+ * against a `pmtiles://` pseudo-scheme, Leaflet's integration constructs a `PMTiles` object
+ * from the plain location, OpenLayers has its own source. None of that belongs here — `url`
+ * is always the underlying location, and the adapter adds whatever its mechanism needs.
+ */
+export type TileSourceTransport = "template" | "wms" | "tilejson" | "pmtiles";
+
 export type TileSourceRole = "base" | "overlay" | "terrain" | "hillshade";
 
 /**
  * Any layer the renderer composites: raster, vector, or an elevation raster driving
  * hillshade and 3D terrain.
+ *
+ * `kind` and `transport` are independent axes — `kind` says what the tiles are, `transport`
+ * says how to fetch them — so every combination the renderer can express is stated rather
+ * than inferred. (ADR-0023)
  *
  * `styleLayers` is an opaque JSON passthrough, which is how `core` can describe contours or
  * bathymetry **without importing a renderer's style types** — the property that keeps the
@@ -17,8 +47,14 @@ export type TileSourceRole = "base" | "overlay" | "terrain" | "hillshade";
  */
 export interface TileSource {
   id: string;
+  /** What the tiles contain. */
   kind: TileSourceKind;
-  /** Template, WMS endpoint, style URL, or .pmtiles location. */
+  /** How to fetch them. */
+  transport: TileSourceTransport;
+  /**
+   * The transport's underlying location or template: a tile url template, a WMS request, a
+   * TileJSON url, or a `.pmtiles` archive location. Never a renderer-specific scheme.
+   */
   url: string;
   /** Rendered verbatim. License compliance is not optional. */
   attribution: string;

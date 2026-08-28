@@ -3,6 +3,7 @@ import type { TileSource } from "@mapatlas/core";
 import { describe, expect, it } from "vitest";
 
 import {
+  PMTILES_SCHEME,
   TileSourceError,
   buildTileSource,
   buildTileSources,
@@ -12,13 +13,14 @@ import {
 
 const OSM: TileSource = {
   id: "osm",
-  kind: "xyz",
+  kind: "raster",
+  transport: "template",
   url: "https://tiles.invalid/{z}/{x}/{y}.png",
   attribution: "© OpenStreetMap contributors",
 };
 
 describe("raster sources", () => {
-  it("translates an xyz source into a raster source and one layer", () => {
+  it("translates a template source into a raster source and one layer", () => {
     const built = buildTileSource(OSM, 0);
 
     expect(built.source).toMatchObject({
@@ -46,6 +48,13 @@ describe("raster sources", () => {
     const built = buildTileSource({ ...OSM, opacity: 0.4 }, 1);
     expect(built.layers[0]).toMatchObject({ paint: { "raster-opacity": 0.4 } });
   });
+
+  it("draws a hillshade input at zero opacity, whatever opacity was asked for", () => {
+    // Rendering an elevation raster as flat imagery buries the map under grey. It is an
+    // input to a hillshade layer the consumer supplies, not something to composite.
+    const built = buildTileSource({ ...OSM, role: "hillshade", opacity: 0.9 }, 1);
+    expect(built.layers[0]).toMatchObject({ paint: { "raster-opacity": 0 } });
+  });
 });
 
 describe("attribution is a licence obligation", () => {
@@ -65,13 +74,14 @@ describe("attribution is a licence obligation", () => {
 describe("WMS", () => {
   const WMS: TileSource = {
     id: "charts",
-    kind: "wms",
+    kind: "raster",
+    transport: "wms",
     url: "https://wms.invalid/?BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256",
     attribution: "NOAA",
   };
 
-  it("translates to a raster source", () => {
-    expect(buildTileSource(WMS, 1).source).toMatchObject({ type: "raster" });
+  it("translates to a raster source whose url is a tile template", () => {
+    expect(buildTileSource(WMS, 1).source).toMatchObject({ type: "raster", tiles: [WMS.url] });
   });
 
   it("rejects a url with no bbox placeholder", () => {
@@ -81,12 +91,20 @@ describe("WMS", () => {
       /bbox placeholder/,
     );
   });
+
+  it("rejects a non-raster content kind, because GetMap returns an image", () => {
+    expect(() => buildTileSource({ ...WMS, kind: "vector" }, 1)).toThrow(
+      /raster tiles, not vector/,
+    );
+    expect(() => buildTileSource({ ...WMS, kind: "raster-dem" }, 1)).toThrow(TileSourceError);
+  });
 });
 
 describe("vector sources carry the consumer's own layers", () => {
   const VECTOR: TileSource = {
     id: "contours",
     kind: "vector",
+    transport: "tilejson",
     url: "https://tiles.invalid/contours.json",
     attribution: "© Contour data",
     styleLayers: [
@@ -95,7 +113,7 @@ describe("vector sources carry the consumer's own layers", () => {
     ],
   };
 
-  it("passes style layers through verbatim, only binding the source", () => {
+  it("passes style layers through verbatim, only binding the source and namespacing the id", () => {
     // The engine has no opinion about how contours or bathymetry look. That passthrough is
     // what lets `core` describe them without importing renderer types. (ADR-0011)
     const built = buildTileSource(VECTOR, 1);
@@ -103,7 +121,7 @@ describe("vector sources carry the consumer's own layers", () => {
     expect(built.source).toMatchObject({ type: "vector", url: VECTOR.url });
     expect(built.layers).toHaveLength(2);
     expect(built.layers[0]).toMatchObject({
-      id: "contour-lines",
+      id: "contours__contour-lines",
       type: "line",
       source: "contours",
       "source-layer": "contour",
@@ -111,8 +129,28 @@ describe("vector sources carry the consumer's own layers", () => {
     });
   });
 
-  it("names an unnamed layer after its source, so two sources cannot collide", () => {
+  it("namespaces every layer id, supplied or not, so two sources cannot collide", () => {
+    // The failure this prevents: two vector sources each carrying a layer called `labels`.
+    // MapLibre keys layers by id, so without namespacing the second `addLayer` throws — or
+    // worse, one source's labels are styled by the other's rules.
+    const labels = [{ id: "labels", type: "symbol" as const, "source-layer": "place" }];
+    const a = buildTileSource({ ...VECTOR, id: "a", styleLayers: labels }, 0);
+    const b = buildTileSource({ ...VECTOR, id: "b", styleLayers: labels }, 1);
+
+    expect(a.layers[0]).toMatchObject({ id: "a__labels", source: "a" });
+    expect(b.layers[0]).toMatchObject({ id: "b__labels", source: "b" });
+    expect(a.layers[0]?.id).not.toBe(b.layers[0]?.id);
+  });
+
+  it("names an unnamed layer after its source and position", () => {
     expect(buildTileSource(VECTOR, 1).layers[1]).toMatchObject({ id: "contours__layer-1" });
+  });
+
+  it("does not mutate the style layers it was given", () => {
+    // They are the consumer's objects; the namespaced id belongs to the built output only.
+    const before = structuredClone(VECTOR.styleLayers);
+    buildTileSource(VECTOR, 1);
+    expect(VECTOR.styleLayers).toEqual(before);
   });
 
   it("rejects a style layer that is not an object or has no type", () => {
@@ -129,12 +167,25 @@ describe("vector sources carry the consumer's own layers", () => {
     delete bare.styleLayers;
     expect(buildTileSource(bare, 1).layers).toEqual([]);
   });
+
+  it("accepts a raw tile template as well as a TileJSON document", () => {
+    const template: TileSource = {
+      ...VECTOR,
+      transport: "template",
+      url: "https://tiles.invalid/{z}/{x}/{y}.pbf",
+    };
+    expect(buildTileSource(template, 1).source).toMatchObject({
+      type: "vector",
+      tiles: ["https://tiles.invalid/{z}/{x}/{y}.pbf"],
+    });
+  });
 });
 
 describe("elevation sources", () => {
   const DEM: TileSource = {
     id: "dem",
     kind: "raster-dem",
+    transport: "tilejson",
     url: "https://tiles.invalid/dem.json",
     attribution: "Elevation data",
     role: "terrain",
@@ -166,41 +217,93 @@ describe("elevation sources", () => {
       styleLayers: [{ id: "shade", type: "hillshade", paint: { "hillshade-exaggeration": 0.5 } }],
     };
     expect(buildTileSource(hillshade, 1).layers[0]).toMatchObject({
-      id: "shade",
+      id: "dem__shade",
       type: "hillshade",
       source: "dem",
     });
   });
 });
 
-describe("PMTiles", () => {
+describe("PMTiles is a transport, not a content type", () => {
+  /** What a consumer writes: the archive's own location, with no renderer scheme on it. */
+  const ARCHIVE = "https://cdn.invalid/region.pmtiles";
+
   const RASTER: TileSource = {
     id: "offline",
-    kind: "pmtiles",
-    url: "pmtiles://https://cdn.invalid/region.pmtiles",
+    kind: "raster",
+    transport: "pmtiles",
+    url: ARCHIVE,
     attribution: "© OpenStreetMap contributors",
   };
 
-  it("is recognised by kind or by url scheme", () => {
+  it("is recognised by the declared transport, never guessed from the url or the layers", () => {
     expect(usesPmtiles(RASTER)).toBe(true);
-    expect(usesPmtiles({ ...RASTER, kind: "xyz" })).toBe(true);
     expect(usesPmtiles(OSM)).toBe(false);
   });
 
-  it("produces a raster source for an archive with no style layers", () => {
-    expect(buildTileSource(RASTER, 0).source).toMatchObject({ type: "raster" });
+  it("adds MapLibre's protocol scheme exactly once, for every content kind", () => {
+    // Two failures pinned together. The scheme is this renderer's — Leaflet builds a
+    // `PMTiles` object from the plain location and knows nothing about `pmtiles://` — so the
+    // builder adds it and the contract never carries it. And the archive location is handed
+    // over whole: the handler resolves tiles out of the archive itself, so appending
+    // `/{z}/{x}/{y}` would ask for a path that does not exist and the map would stay blank
+    // with nothing in the console to explain it.
+    const layers = [{ id: "roads", type: "line" as const, "source-layer": "roads" }];
+    const kinds = [
+      { source: RASTER, type: "raster" },
+      { source: { ...RASTER, kind: "vector" as const, styleLayers: layers }, type: "vector" },
+      { source: { ...RASTER, kind: "raster-dem" as const }, type: "raster-dem" },
+    ];
+
+    for (const { source, type } of kinds) {
+      const built = buildTileSource(source, 0).source as Record<string, unknown>;
+      const url = String(built["url"]);
+
+      expect(built).toMatchObject({ type });
+      expect(url).toBe(`${PMTILES_SCHEME}${ARCHIVE}`);
+      // Exactly one, so a second pass over an already-built source cannot double it.
+      expect(url.split(PMTILES_SCHEME)).toHaveLength(2);
+      expect(url.slice(PMTILES_SCHEME.length)).toBe(ARCHIVE);
+      expect(built).not.toHaveProperty("tiles");
+      expect(url).not.toContain("{z}");
+    }
   });
 
-  it("produces a vector source when style layers are present", () => {
-    // The one inference in the builders: `kind: "pmtiles"` states a transport, not a
-    // content type, and an archive holds either raster or vector tiles. Style layers are
-    // meaningless for raster and mandatory for vector, so they decide it.
-    const vector: TileSource = {
+  it("leaves the scheme off every other transport", () => {
+    // Only the PMTiles branch rewrites the url. A TileJSON document is fetched as given.
+    const tilejson = buildTileSource(
+      { ...RASTER, transport: "tilejson", url: "https://cdn.invalid/tiles.json" },
+      0,
+    ).source as Record<string, unknown>;
+    expect(tilejson["url"]).toBe("https://cdn.invalid/tiles.json");
+  });
+
+  it("takes the content kind from `kind`, not from whether style layers are present", () => {
+    // The defect this pins: a raster archive is raster whether or not the consumer supplied
+    // layers, and a vector archive is vector whether or not they did. Inferring one from the
+    // other renders the wrong source type with no error.
+    const rasterWithLayers: TileSource = {
       ...RASTER,
-      styleLayers: [{ id: "roads", type: "line", "source-layer": "roads" }],
+      styleLayers: [{ id: "shade", type: "hillshade" }],
     };
-    expect(buildTileSource(vector, 0).source).toMatchObject({ type: "vector" });
-    expect(buildTileSource(vector, 0).layers[0]).toMatchObject({ source: "offline" });
+    expect(buildTileSource(rasterWithLayers, 0).source).toMatchObject({ type: "raster" });
+
+    const vectorWithout: TileSource = { ...RASTER, kind: "vector" };
+    expect(buildTileSource(vectorWithout, 0).source).toMatchObject({ type: "vector" });
+    expect(buildTileSource(vectorWithout, 0).layers).toEqual([]);
+  });
+
+  it("rejects a url that already carries the renderer's scheme, under any transport", () => {
+    // `transport: "pmtiles"` already says the source is an archive, so a prefixed url is a
+    // second representation of the same fact — and it is a MapLibre pseudo-scheme sitting in
+    // a renderer-neutral type, which no other renderer can read. Accepting it would also
+    // mean guessing whether to prefix again.
+    const prefixed = `${PMTILES_SCHEME}${ARCHIVE}`;
+    for (const transport of ["pmtiles", "tilejson", "template"] as const) {
+      expect(() => buildTileSource({ ...RASTER, transport, url: prefixed }, 0)).toThrow(
+        /renderer's to add/,
+      );
+    }
   });
 
   it("registers nothing and touches no global — the builders are pure", () => {
@@ -236,9 +339,9 @@ describe("the stack", () => {
   });
 
   it("is deterministic — the same input builds the same output", () => {
-    const sources = [
+    const sources: TileSource[] = [
       OSM,
-      { ...OSM, id: "dem", kind: "raster-dem" as const, role: "terrain" as const },
+      { ...OSM, id: "dem", kind: "raster-dem", transport: "tilejson", role: "terrain" },
     ];
     expect(JSON.stringify(buildTileSources(sources))).toBe(
       JSON.stringify(buildTileSources(sources)),

@@ -102,7 +102,10 @@ test("recovers an interrupted recording across a real page reload", async ({ pag
       ...inner,
       saveTrack: async (track: Parameters<typeof inner.saveTrack>[0]) => {
         await inner.saveTrack(track);
-        window.mapatlas.signals["saved"] = true;
+        // The precondition is a snapshot *with a point in it*, not merely a write. A 50 ms
+        // autosave can fire before the browser has delivered its first fix, and reloading
+        // on that empty snapshot leaves nothing worth recovering.
+        if (track.points.length > 0) window.mapatlas.signals["savedWithPoint"] = true;
       },
     };
 
@@ -115,7 +118,7 @@ test("recovers an interrupted recording across a real page reload", async ({ pag
   }, databaseName);
 
   // Wait for a snapshot to be genuinely on disk, not for an interval to have plausibly fired.
-  await page.waitForFunction(() => window.mapatlas.signals["saved"] === true);
+  await page.waitForFunction(() => window.mapatlas.signals["savedWithPoint"] === true);
 
   // The tab dies. No stop(), no close(), no handover — the recorder, its autosave timer and
   // its adapter all go with the document, which is what a crash actually does and what
@@ -144,8 +147,9 @@ test("recovers an interrupted recording across a real page reload", async ({ pag
   expect(recovered.hasSimplified).toBe(false);
 });
 
-test("continues a recovered recording under its original id, in a new document", async ({
+test("continues a recovered recording across a reload, and records into it", async ({
   page,
+  context,
 }) => {
   await page.goto("/");
   const databaseName = `e2e-resume-${String(Date.now())}`;
@@ -156,7 +160,7 @@ test("continues a recovered recording under its original id, in a new document",
       ...inner,
       saveTrack: async (track: Parameters<typeof inner.saveTrack>[0]) => {
         await inner.saveTrack(track);
-        window.mapatlas.signals["saved"] = true;
+        if (track.points.length > 0) window.mapatlas.signals["savedWithPoint"] = true;
       },
     };
 
@@ -168,38 +172,80 @@ test("continues a recovered recording under its original id, in a new document",
     await recorder.start();
   }, databaseName);
 
-  await page.waitForFunction(() => window.mapatlas.signals["saved"] === true);
+  await page.waitForFunction(() => window.mapatlas.signals["savedWithPoint"] === true);
 
+  // The tab dies mid-recording.
   await page.reload();
 
-  const result = await page.evaluate(async (name) => {
+  // Recover and resume in the new document, then keep recording. The unit tests already
+  // prove the segment arithmetic deterministically; what only a browser shows is that a
+  // resumed recorder attaches to a live geolocation watch and grows the recovered track.
+  await page.evaluate(async (name) => {
     const store = window.mapatlas.createIdbStorageAdapter({ databaseName: name });
     const snapshot = await window.mapatlas.recoverInterruptedTrack(store);
-    if (snapshot === undefined) return { resumed: false };
+    if (snapshot === undefined) throw new Error("nothing was recoverable after the reload");
 
     const recorder = window.mapatlas.createWebTrackRecorder({
       store,
       resumeFrom: snapshot,
       sampling: { minDistanceM: 1 },
     });
-    await recorder.start();
-    const track = await recorder.stop();
 
+    const before = snapshot.points.length;
+    window.mapatlas.result = { snapshot, recorder, before };
+    recorder.onPoint(() => {
+      window.mapatlas.signals["postReloadPoint"] = true;
+    });
+    await recorder.start();
+  }, databaseName);
+
+  // A genuinely new fix from the platform, after the crash.
+  await context.setGeolocation({ latitude: 59.4, longitude: 18.2, accuracy: 5 });
+  await page.waitForFunction(() => window.mapatlas.signals["postReloadPoint"] === true);
+
+  const result = await page.evaluate(async (name) => {
+    const held = window.mapatlas.result as {
+      snapshot: { id: string; startedAt: number; points: unknown[] };
+      recorder: { stop(): Promise<unknown> };
+      before: number;
+    };
+    const track = (await held.recorder.stop()) as {
+      id: string;
+      startedAt: number;
+      status: string;
+      points: { lat: number }[];
+      segments: { startIndex: number; endIndex: number }[];
+    };
+
+    const store = window.mapatlas.createIdbStorageAdapter({ databaseName: name });
     return {
-      resumed: true,
-      sameId: track.id === snapshot.id,
-      sameStart: track.startedAt === snapshot.startedAt,
-      // The crash interval is an unobserved gap: resumption always opens a new segment.
+      sameId: track.id === held.snapshot.id,
+      sameStart: track.startedAt === held.snapshot.startedAt,
+      before: held.before,
+      after: track.points.length,
       segments: track.segments.length,
+      lastSegment: track.segments[track.segments.length - 1],
+      lastLat: track.points[track.points.length - 1]?.lat ?? 0,
       stored: (await store.listTrackSummaries()).length,
       status: track.status,
     };
   }, databaseName);
 
-  expect(result.resumed).toBe(true);
   expect(result.sameId).toBe(true);
   expect(result.sameStart).toBe(true);
   expect(result.status).toBe("finalized");
+  expect(result.after).toBeGreaterThan(result.before);
+
+  // The crash interval is an unobserved gap, so resumption opens a second segment — and it
+  // is non-empty this time, which is what makes the assertion mean anything: an empty one
+  // is dropped on stop(), so a test that never records after resuming cannot see it.
+  expect(result.segments).toBe(2);
+  expect(result.lastSegment?.startIndex).toBe(result.before);
+  expect(result.lastSegment?.endIndex).toBe(result.after - 1);
+
+  // The post-reload point is the one the platform just delivered.
+  expect(result.lastLat).toBeCloseTo(59.4, 2);
+
   // One record, overwritten — not a second trip.
   expect(result.stored).toBe(1);
 });

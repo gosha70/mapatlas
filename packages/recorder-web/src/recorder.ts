@@ -18,6 +18,7 @@ import type {
   TrackStatus,
 } from "@mapatlas/core";
 import {
+  TrackTemporalOrderError,
   assertValidTrackGeometry,
   finalizeTrack,
   mergeSensorSamples,
@@ -269,11 +270,18 @@ export function createWebTrackRecorderInternal(
     // handling RecorderResumeError would still be surprised by a core geometry error
     // depending on which invariant the stored track happened to violate; the original is
     // kept as `cause` so nothing is lost.
+    //
+    // The reason is discriminated rather than assumed. `assertValidTrackGeometry` validates
+    // ranges, coverage *and* chronology within each segment, so a backwards timestamp
+    // inside one segment surfaces here — and reporting that as "geometry" would tell a
+    // caller the shape was wrong when the clock was. A regression across a boundary is
+    // caught by `assertRestorableOrder` below; both are the same fault to a consumer, and
+    // both must say so.
     try {
       assertValidTrackGeometry(resumed);
     } catch (error) {
       throw new RecorderResumeError(
-        "geometry",
+        error instanceof TrackTemporalOrderError ? "temporal-order" : "geometry",
         error instanceof Error ? error.message : String(error),
         { cause: error },
       );

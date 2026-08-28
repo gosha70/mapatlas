@@ -256,6 +256,43 @@ export interface TrackRecorderOptions {
  *  and naming them here would mean owning their shapes forever. */
 export declare function createWebTrackRecorder(o?: TrackRecorderOptions): TrackRecorder;
 
+/** Autosave interval used when a `store` is supplied and `autosaveMs` is omitted. */
+export declare const DEFAULT_AUTOSAVE_MS: 10_000;
+
+/** Two configured sensors describe one channel key differently. */
+export class ChannelConflictError extends Error {
+  readonly channelKey: string;
+}
+
+/** The track offered to `resumeFrom` cannot be continued. */
+export class RecorderResumeError extends Error {
+  readonly reason:
+    | "not-interrupted"   // status is not recording/paused, or origin is not "recorded"
+    | "temporal-order"    // a timestamp runs backwards, within a segment or across a pause
+    | "geometry"          // segment ranges, coverage or lap ranges do not describe the points
+    | "channel-conflict"; // a recovered channel is redefined by a configured sensor
+}
+```
+
+**What `createWebTrackRecorder` throws.** All three are exported from `@mapatlas/recorder-web`, so
+a consumer handles them by type rather than by matching a message.
+
+`ChannelConflictError` is a *configuration* fault — the sensors as supplied disagree — and carries
+the `channelKey`. It is raised whether or not a track is being resumed, which is why it is not a
+`RecorderResumeError`.
+
+`RecorderResumeError` is a *restored-state* fault and carries a `reason`. Where the underlying
+check lives in `core`, the original is preserved as `cause`: a `geometry` reason carries a
+`TrackSegmentRangeError`, `TrackCoverageError` or `TrackLapRangeError`, and a `temporal-order`
+reason carries a `TrackTemporalOrderError` when the regression fell inside a segment. The reason is
+what a consumer should branch on — a backwards timestamp is one fault whether it falls inside a
+segment or across a pause, even though two different checks catch it.
+
+An invalid `autosaveMs` is an ordinary `RangeError`: it is neither a configuration conflict nor a
+restored-state fault, just a number outside its documented domain.
+
+```ts
+
 /** A track left in `recording`/`paused` state by a previous session, so the consumer can
  *  offer resume-or-discard. Reads **summaries**, hydrating only the one candidate, and
  *  returns the most recently started when a device crashed more than once. */

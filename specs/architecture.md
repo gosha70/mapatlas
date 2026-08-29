@@ -229,8 +229,13 @@ The engine bundles no tiles. It documents, and consumers must honor:
 
 - **OpenStreetMap** base — © OpenStreetMap contributors, **ODbL**; attribution required.
 - **OpenSeaMap** seamark overlay — **ODbL, share-alike**; attribution required; overlay only.
-- **NOAA** charts (NCDS/ENC) and bathymetry — **US public domain**; preferred for a commercial
-  consumer over GEBCO (whose terms lean non-commercial).
+- **Bathymetry is not settled, and no publisher is a blanket answer.** An earlier version of
+  this section recorded NOAA charts and bathymetry as blanket US public domain and preferred
+  over GEBCO as leaning non-commercial. Both halves are wrong as stated: GEBCO's published
+  terms for its gridded bathymetry place it in the public domain and explicitly permit
+  commercial exploitation, while NOAA licensing is product- and source-specific — some
+  products carry third-party contributions whose terms travel with them. Licensing is decided
+  **per named product, after reading its contributor metadata**, and recorded in ADR-0024.
 - **Never implement region download against a community tile service.** The OpenStreetMap
   Foundation's tile policy prohibits bulk downloading and offline prefetching from
   `tile.openstreetmap.org`, and instructs applications needing offline maps to self-host or use
@@ -239,8 +244,8 @@ The engine bundles no tiles. It documents, and consumers must honor:
   offline-licensed source. Interactive browsing of a public host during development is a
   courtesy question; bulk download is a policy violation.
 - Do not point production at public community/gov tile hosts; self-host or use PMTiles.
-- **DEM/terrain data is an open decision.** Bathymetry is settled (NOAA, above); the elevation
-  source backing `raster-dem` contours and hillshade is not. Coverage, vertical datum,
+- **DEM/terrain data is an open decision**, as is bathymetry (above); the elevation
+  source backing `raster-dem` contours and hillshade is unchosen. Coverage, vertical datum,
   resolution, archive size, and redistribution rights differ sharply between candidates, so this
   is a product decision to settle before the Phase 4 and Phase 6 exits — not an implementation
   detail.

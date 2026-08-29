@@ -728,3 +728,287 @@ test("a mark keeps the renderer's own classes across a re-render", async ({ page
   });
   expect(stillPlaced).toEqual({ position: "absolute", inside: true });
 });
+
+test("draws consumer marks and per-segment line styling on the real map", async ({ page }) => {
+  // MapLibre validates the data-driven paint expressions the presentation feeds — a `coalesce`
+  // over a missing feature property, a filter separating dashed from solid — and can report a
+  // layer error and return without adding the layer rather than throwing. So both line layers
+  // are asked for by id, and the consumer's marks are read out of the real DOM.
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, track]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.setPresentation({
+        marker: () => ({ ariaLabel: "A consumer mark" }),
+        startMarker: () => ({ ariaLabel: "Where I set off", anchor: "bottom" }),
+        finishMarker: () => null,
+        trackLine: (_t: unknown, index: number) =>
+          index === 0 ? { color: "#aa00aa", widthPx: 6 } : { dashed: true },
+      } as never);
+      probe.controller.renderTrack(track as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, TRACK] as const,
+  );
+
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
+
+  // The finish mark was suppressed by the consumer, so exactly one remains.
+  const marks = page.locator(".mapatlas-marker");
+  await expect(marks).toHaveCount(1);
+  await expect(marks.first()).toHaveAttribute("aria-label", "Where I set off");
+
+  const layers = await page.evaluate(() => ({
+    solid: window.mapatlas.probe?.hasLayer("mapatlas:track-line") ?? false,
+    dashed: window.mapatlas.probe?.hasLayer("mapatlas:track-line-dashed") ?? false,
+  }));
+  expect(layers).toEqual({ solid: true, dashed: true });
+  expect(errors).toEqual([]);
+});
+
+test("a rejected presentation leaves the real map exactly as it was", async ({ page }) => {
+  // Against the real DOM: the mark that was there is the same element afterwards, so a
+  // keyboard user holding focus on it keeps it.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, track]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.setPresentation({
+        marker: () => ({ ariaLabel: "A consumer mark" }),
+        startMarker: () => ({ ariaLabel: "Original start" }),
+        finishMarker: () => null,
+      } as never);
+      probe.controller.renderTrack(track as never);
+      // An event as well, so the callback that throws below is one that actually runs.
+      probe.controller.renderEvents([
+        { id: "e1", position: { lat: 59.33, lng: 18.06 }, occurredAt: 1, media: [], tags: [] },
+      ] as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, TRACK] as const,
+  );
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(2);
+
+  // Mark the surviving element, so a rebuild is detectable rather than merely a re-render.
+  await page.evaluate(() => {
+    document
+      .querySelector('.mapatlas-marker[aria-label="Original start"]')
+      ?.setAttribute("data-original", "yes");
+  });
+
+  const rejected = await page.evaluate(() => {
+    try {
+      window.mapatlas.probe?.controller.setPresentation({
+        // A different anchor, which would force a rebuild, then a failure.
+        startMarker: () => ({ ariaLabel: "Rebuilt", anchor: "center" }),
+        marker: () => {
+          throw new Error("consumer blew up");
+        },
+        lapMarker: () => {
+          throw new Error("consumer blew up");
+        },
+      } as never);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  });
+
+  expect(rejected).toBe("consumer blew up");
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(2);
+
+  // The same element, not a replacement: had reconciliation begun before the later callback
+  // threw, the anchor change would already have rebuilt this one and taken its focus with it.
+  const start = page.locator('.mapatlas-marker[aria-label="Original start"]');
+  await expect(start).toHaveCount(1);
+  await expect(start).toHaveAttribute("data-original", "yes");
+  await expect(start).toHaveClass(/maplibregl-marker-anchor-bottom/);
+});
+
+/**
+ * An asset with declared intrinsic dimensions, larger than any mark that holds it.
+ *
+ * Inline as a data URI so the cases need no network and cannot flake on one, and so
+ * `naturalWidth` is deterministic enough to assert before the containment claim.
+ */
+const OVERSIZED_ICON =
+  "data:image/svg+xml," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">' +
+      '<rect width="200" height="100" fill="#0969da"/></svg>',
+  );
+
+/** Runs in the page: the mark's box, its image's box, and the asset's real size. */
+function measureMark(): {
+  wrapper: { width: number; height: number };
+  image: { width: number; height: number };
+  naturalWidth: number;
+} | null {
+  const wrapper = document.querySelector(".mapatlas-marker");
+  const image = wrapper?.querySelector("img");
+  if (wrapper == null || image == null) return null;
+  const w = wrapper.getBoundingClientRect();
+  const i = image.getBoundingClientRect();
+  return {
+    wrapper: { width: w.width, height: w.height },
+    image: { width: i.width, height: i.height },
+    naturalWidth: image.naturalWidth,
+  };
+}
+
+test("keeps a consumer icon inside the mark it was sized for", async ({ page }) => {
+  // A 200x100 asset in a 24x24 mark. Only a real layout engine settles this: whether the
+  // constraint is *applied* is a unit concern, whether it *holds* is a cascade one, and an
+  // unconstrained image overflows a wrapper that measures correctly and reports no error.
+  //
+  // The asset is an inline SVG data URI with declared intrinsic dimensions, so the case needs
+  // no network and cannot flake on one.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, icon]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.setPresentation({
+        marker: () => ({ ariaLabel: "A marked spot", iconUrl: icon as string, sizePx: [24, 24] }),
+      } as never);
+      probe.controller.renderEvents([
+        { id: "e1", position: { lat: 59.33, lng: 18.06 }, occurredAt: 1, media: [], tags: [] },
+      ] as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, OVERSIZED_ICON] as const,
+  );
+
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(1);
+  await expect(page.locator(".mapatlas-marker img")).toHaveCount(1);
+
+  const boxes = await page.evaluate(measureMark);
+
+  // The asset really is larger than the mark, or the assertion below proves nothing.
+  expect(boxes?.naturalWidth).toBe(200);
+  expect(boxes?.wrapper).toEqual({ width: 24, height: 24 });
+  expect(boxes?.image).toEqual({ width: 24, height: 24 });
+});
+
+test("constrains an icon in a mark sized by a class, not only by sizePx", async ({ page }) => {
+  // `className` is a documented styling path, so a consumer may size the mark entirely
+  // through CSS and supply no `sizePx` at all. The constraint has to follow that too — which
+  // is the reason percentages were chosen over repeating the pixel values.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, icon]) => {
+      const style = document.createElement("style");
+      style.textContent = ".class-sized-mark { width: 24px; height: 24px; }";
+      document.head.append(style);
+
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.setPresentation({
+        // Sized by the class alone: no sizePx.
+        marker: () => ({
+          ariaLabel: "A marked spot",
+          iconUrl: icon as string,
+          className: "class-sized-mark",
+        }),
+      } as never);
+      probe.controller.renderEvents([
+        { id: "e1", position: { lat: 59.33, lng: 18.06 }, occurredAt: 1, media: [], tags: [] },
+      ] as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, OVERSIZED_ICON] as const,
+  );
+
+  await expect(page.locator(".mapatlas-marker img")).toHaveCount(1);
+  const boxes = await page.evaluate(measureMark);
+
+  expect(boxes?.naturalWidth).toBe(200);
+  expect(boxes?.wrapper).toEqual({ width: 24, height: 24 });
+  expect(boxes?.image).toEqual({ width: 24, height: 24 });
+});
+
+test("leaves an icon at its intrinsic size when nothing sized the mark", async ({ page }) => {
+  // The other half of applying the rule unconditionally. `100%` of a wrapper that shrink-wraps
+  // its content resolves against the image's own size and changes nothing — a consumer who
+  // said nothing about size gets the size the asset came with. Only a layout engine settles
+  // that, and asserting it from reasoning is how the previous version of this rule went wrong.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, icon]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.setPresentation({
+        marker: () => ({ ariaLabel: "A marked spot", iconUrl: icon as string }),
+      } as never);
+      probe.controller.renderEvents([
+        { id: "e1", position: { lat: 59.33, lng: 18.06 }, occurredAt: 1, media: [], tags: [] },
+      ] as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, OVERSIZED_ICON] as const,
+  );
+
+  await expect(page.locator(".mapatlas-marker img")).toHaveCount(1);
+  const boxes = await page.evaluate(measureMark);
+
+  expect(boxes?.image).toEqual({ width: 200, height: 100 });
+});

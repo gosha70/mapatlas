@@ -9,10 +9,21 @@
  * technology, and a mark nobody can name is a mark nobody can use.
  */
 export interface MarkerStyle {
-  /** Marker content, inserted verbatim inside the engine's accessible wrapper. */
+  /**
+   * Marker content, inserted verbatim inside the engine's accessible wrapper.
+   *
+   * Takes precedence over {@link MarkerStyle.iconUrl}: `html` is the general escape hatch,
+   * `iconUrl` the convenience, and a style supplying both means the consumer has already
+   * said exactly what it wants drawn.
+   */
   html?: string;
   className?: string;
-  /** Consumer-supplied asset; the engine bundles no icons. */
+  /**
+   * An image to draw, when `html` is absent. Consumer-supplied: the engine bundles no icons.
+   *
+   * Rendered inside the wrapper as an `img` with an empty `alt`, because the wrapper already
+   * carries the accessible name — a second name here would have the mark announced twice.
+   */
   iconUrl?: string;
   color?: string;
   sizePx?: [w: number, h: number];

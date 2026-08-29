@@ -129,14 +129,35 @@ function run(command, args, cwd) {
   }
 }
 
+/** One voice for every failure, whether it stopped the run early or at the end. */
+function report(failures) {
+  console.error(
+    "check:packaging — the dependency graph this repository would publish is not the one it declares:\n",
+  );
+  for (const failure of failures) console.error(`  ${failure}`);
+  console.error(
+    "\nConsumers resolve against exactly this; packages/maplibre/README.md says what they are told to import.",
+  );
+}
+
+// Before anything is created, and fatal on its own. Everything below describes a dependency
+// graph, so a lockfile disagreeing with the manifests makes every result after it a statement
+// about the wrong one — and the work after it reaches the registry, where a failing gate would
+// otherwise sit through npm's retry backoff to reach a conclusion it already has.
+//
+// Deliberately *before* the scratch directory exists: `process.exit` skips a pending `finally`,
+// so exiting from inside the cleanup scope below would leave a temporary directory behind on
+// every failure.
+const drift = lockfileDrift();
+if (drift.length > 0) {
+  report(drift);
+  process.exit(1);
+}
+
 const scratch = mkdtempSync(join(tmpdir(), "mapatlas-packaging-"));
 const failures = [];
 
 try {
-  // Before packing: everything below describes a dependency graph, and a lockfile that
-  // disagrees with the manifests means it is describing the wrong one.
-  failures.push(...lockfileDrift());
-
   const tarballs = PACKAGES.map((directory) => {
     const output = run(
       "npm",
@@ -220,13 +241,7 @@ try {
 if (process.exitCode === 1) process.exit(1);
 
 if (failures.length > 0) {
-  console.error(
-    "check:packaging — the dependency graph this repository would publish is not the one it declares:\n",
-  );
-  for (const failure of failures) console.error(`  ${failure}`);
-  console.error(
-    "\nConsumers resolve against exactly this; packages/maplibre/README.md says what they are told to import.",
-  );
+  report(failures);
   process.exit(1);
 }
 

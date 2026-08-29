@@ -438,3 +438,75 @@ The general rule, and the one worth carrying forward: **when a value answers two
 answers neither — split the axes rather than infer one from the other.** The corollary this
 correction added: a renderer-specific encoding of a value is the renderer's to apply, not
 something the neutral contract carries on its behalf.
+
+## ADR-0024 — Demo map data and hosting (**OPEN — decision required before T4.6**)
+**Status.** Open. This entry records the evidence and the criteria; it deliberately does **not**
+choose a provider, a region, or a dataset. Those are product decisions with cost, licensing and
+lead-time consequences, and `architecture.md §8` already requires the elevation source to be
+settled before the Phase 4 and Phase 6 exits — which are now two and four tasks away.
+
+**Context.** Three separate things force a decision that no amount of implementation can defer.
+
+*The engine may not fetch its own tiles.* `architecture.md §8` forbids region download against a
+community tile service, and binds the demo and tests as well as production: the OSM Foundation's
+tile policy prohibits bulk downloading and offline prefetching, and directs applications needing
+offline maps to self-host or use a provider whose terms permit it. Interactive browsing during
+development is a courtesy question; **bulk download is a policy violation**, so T6.1's region
+store cannot be demonstrated at all without a source we are entitled to copy bytes from.
+
+*Terrain has no source.* T4.2 renders 3D terrain and hillshade from a `raster-dem` source, and
+T4.3 renders contours from a vector source. Every test to date uses `tiles.invalid` — the
+geometry, ordering and lifecycle are proven, the *data* is not.
+
+Neither bathymetry nor elevation is settled, and an earlier version of this entry said
+otherwise. It carried forward a claim from `architecture.md` — NOAA bathymetry as blanket US
+public domain, preferred over GEBCO as leaning non-commercial — and both halves are wrong as
+stated. GEBCO's published terms for its gridded bathymetry place the grid in the public domain
+and explicitly permit commercial exploitation. NOAA licensing is **product- and
+source-specific**: some products incorporate third-party contributions whose terms travel with
+them, so "NOAA bathymetry" is not one dataset with one licence, and its contributor metadata
+has to be read per product.
+
+The correction matters more than the conclusion: a licensing preference recorded without
+naming a product is not evidence, and this ADR exists to stop exactly that from deciding
+anything.
+
+*The demo is the acceptance test.* T4.6 is the first artifact a human opens, and `PRD.md §6`
+requires the demo to work **fully offline**. A fixture pointing at unreachable hosts can prove
+the renderer's behaviour but not that claim.
+
+**Criteria the decision must satisfy.** Recorded now so the choice is an evaluation rather than
+a search:
+
+1. **A named product, not a named agency.** Every criterion below is answered per product, and
+   several publishers ship datasets under different terms. An evaluation that says "NOAA" or
+   "GEBCO" has not started; one that names a product and reads its contributor metadata has.
+2. **Redistribution and offline rights.** May we copy tiles into a PMTiles archive, host it, and
+   let a user download it to their device? This is the criterion that eliminates most options,
+   and it is separate from whether the data is free to *view*.
+3. **Attribution.** What string must appear, and does it survive into `TileSource.attribution`
+   verbatim? The renderer already treats attribution as a licence obligation rather than
+   decoration, and rejects a source that cannot state its own.
+4. **Vertical datum and resolution** for the DEM, and whether it matches the elevation figures
+   `computeStats` derives from GPS altitude. A hillshade that disagrees with the recorded
+   ascent is worse than no hillshade.
+5. **Encoding.** `mapbox` or `terrarium` — the `TileSource.encoding` field already carries this,
+   but the value has to match what the chosen DEM actually publishes.
+6. **Archive size for one representative region.** Not global coverage: a single small region
+   sized so a demo user can download it on a phone. This bounds T6.1's `estimateSize` and the
+   demo's own storage story.
+7. **Delivery.** HTTPS, permissive CORS, and **HTTP range request support** — PMTiles is
+   unusable without ranges. The pinned client does not fail silently: it compares the response
+   against the requested range and throws "Check that your storage backend supports HTTP Byte
+   Serving" when a server returns the whole file. What it produces is therefore tile-load
+   errors, and a map that may still show its other layers around them — bad, but diagnosable,
+   which an earlier version of this entry got wrong by calling it silent.
+
+**What is not blocked.** T4.5 and T4.7 need no real data. T4.6 does, because it is the point at
+which a fixture stops being a unit test and starts being something a person looks at.
+
+**Consequences of leaving it open.** T4.6 either waits, or ships against a placeholder and is
+revised once the decision lands — the second being the outcome `architecture.md` was written to
+avoid. The demo also needs a **simulated GPS mode** regardless of this decision, so that it can
+be operated from a desk rather than by walking around; that is an implementation task, not a
+data one, and is recorded against T4.6.

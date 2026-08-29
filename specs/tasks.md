@@ -535,7 +535,38 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   across renders to preserve focus and reapplies its style, but the renderer fixes `anchor` when
   the marker is constructed and it cannot be updated after. That is safe in T4.3 only because
   every built-in mark's anchor follows from its kind, so a reused element always describes the
-  same kind of mark. Consumer-chosen anchors end that guarantee. _AC:_ two events of different `category` render with different consumer-supplied
+  same kind of mark. Consumer-chosen anchors end that guarantee. Reuse therefore turns on
+  **identity and anchor together** — and on nothing else: a changed class, colour, size, name or
+  markup is a refresh, since rebuilding for those would discard focus for no reason.
+
+  **A presentation is prepared state, never a callback retained and run later.** Every callback
+  runs at the call that installs it or supplies data — `setPresentation`, `renderTrack`,
+  `renderEvents` — against what is already desired, and **all of it completes before anything is
+  committed or reconciled**. Transactional stored state is not enough: a marker rebuilt before a
+  later callback threw has already lost its focus, whatever the stored state says afterwards.
+  Callback results are snapshotted for the same reason prepared geometry is — a presentation
+  reusing one style object could otherwise change the map at the next unrelated reconcile.
+
+  `setPresentation(null)` is a real transition back to neutral defaults, applied immediately
+  rather than at the next render; a callback returning `null` suppresses that mark entirely,
+  which is a decision rather than an absence.
+
+  Per-segment line styling is **data-driven**, folded into each feature and read by a `coalesce`
+  expression, because one layer per segment would mean a hundred layers for a track with a
+  hundred pauses. `dashed` is the exception MapLibre will not data-drive, so it gets a second
+  layer filtered on the same property.
+
+  _AC:_ consumer marks carry their own accessible names; a presentation applies to what is
+  already drawn without waiting for another render; `null` returns suppress marks and
+  `setPresentation(null)` restores the engine's; a throwing callback at any of the three entry
+  points leaves visible and desired state untouched **and touches no marker at all**, proven by
+  a case where an anchor change would force a rebuild before a later callback throws; reuse
+  survives a style change and rebuilds on an anchor change.
+
+  Eight mutations, and two lanes that catch different halves: a *retained* callback evaluated
+  during reconciliation, and an *incremental* apply, both fail in the unit lane; committing the
+  presentation before preparing survives there — with no track rendered there is nothing to
+  churn — and fails in the browser, where the same element must still be present afterwards. _AC:_ two events of different `category` render with different consumer-supplied
   marks and their `ariaLabel`s; with no presentation supplied, neutral defaults render and no
   consumer branding appears; a presentation whose `marker()` throws changes nothing.
 - **T4.5 Draw/edit mode.** `enterDrawMode` with add/move/click vertex handlers and draggable
@@ -546,10 +577,17 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   independent of it either way, so a failed spike costs only `@mapatlas/maplibre`.
   _AC:_ tapping appends a vertex, dragging moves one, the exit fn removes every listener and the
   draft layer; no drawing library appears in `@mapatlas/core`'s dependency tree.
-- **T4.6 Vertical acceptance fixture.** One realistic end-to-end fixture, not a unit stub: a
-  large track (≥5k raw points), a two-segment pause, a DEM + hillshade + contour source stack,
-  two consumer-defined event marks, and a locally-persisted PMTiles region. Exercised as a test
-  and reused by the demo. _AC:_ renders with the network disabled; the pause shows as a gap;
+- **T4.6 Vertical acceptance fixture.** **Blocked on ADR-0024** (demo map data and hosting):
+  the fixture is the first artifact a human opens, and `PRD.md §6` requires it to work offline,
+  which needs a source the project is entitled to copy bytes from. Two additions beyond the
+  original scope: it is reachable as a human-openable `/lab` route in `apps/demo` — through the
+  packages' public entry points, sharing one fixture with the Playwright scenario, while
+  `e2e/harness` stays automation-only — and it carries a **simulated GPS mode**, so the demo can
+  be operated from a desk rather than by walking around.
+
+  One realistic end-to-end fixture, not a unit stub: a large track (≥5k raw points), a
+  two-segment pause, a DEM + hillshade + contour source stack, two consumer-defined event marks,
+  and a locally-persisted PMTiles region. Exercised as a test and reused by the demo. _AC:_ renders with the network disabled; the pause shows as a gap;
   frame time and memory are recorded as a baseline. Its purpose is to surface renderer and
   data-format assumptions here, in Phase 4, rather than in Phase 7 when they are expensive.
 - **T4.7 Interaction + a11y.** `onMapTap`, `onEventClick`; controls keyboard-reachable, visible

@@ -22,6 +22,8 @@ import {
   buildTrackLineFeatures,
 } from "../builders/track-geojson.js";
 import { applyMarkerStyle, createMarkerElement } from "../marks/marker-element.js";
+import type { EventPresentation, TrackLineStyle } from "../marks/presentation.js";
+import { snapshotLineStyle, snapshotMarkerStyle } from "../marks/presentation.js";
 import type { MarkerStyle } from "../marks/marker-style.js";
 import { builtInMark } from "../marks/marker-style.js";
 import type { EngineFeature, EngineFeatureCollection } from "./engine-layers.js";
@@ -296,40 +298,105 @@ function emptyRender(): PreparedRender {
   };
 }
 
-/** Start, finish and lap marks for a track, in the order they occur along it. */
-function trackMarks(track: Track | null): PreparedMark[] {
+/**
+ * Start, finish and lap marks for a track, in the order they occur along it.
+ *
+ * Every consumer callback runs here, before a single marker is touched. A presentation that
+ * throws half way through therefore throws before anything was reconciled — which is a
+ * stronger guarantee than transactional stored state, and the one the DOM needs: a mark that
+ * had already been rebuilt would have lost its focus whatever the stored state then said.
+ *
+ * A callback returning `null` suppresses the mark. That is a decision, not an absence: a
+ * consumer saying "no start mark on this track" gets no start mark, rather than the engine's.
+ */
+function trackMarks(track: Track | null, presentation: EventPresentation | null): PreparedMark[] {
   if (track === null) return [];
   const marks: PreparedMark[] = [];
 
   for (const feature of buildTrackEndpointFeatures(track).features) {
-    marks.push(pointMark(feature, feature.properties.kind === "track-start" ? "start" : "finish"));
+    const start = feature.properties.kind === "track-start";
+    const supplied = start ? presentation?.startMarker : presentation?.finishMarker;
+    const style = supplied === undefined ? undefined : supplied.call(presentation, track);
+    if (style === null) continue;
+    marks.push(pointMark(feature, start ? "start" : "finish", style));
   }
-  for (const feature of buildLapFeatures(track).features) {
+
+  for (const [index, feature] of buildLapFeatures(track).features.entries()) {
+    const lap = track.laps?.[index];
+    const supplied = presentation?.lapMarker;
+    const style =
+      supplied === undefined || lap === undefined
+        ? undefined
+        : supplied.call(presentation, lap, track);
+    if (style === null) continue;
     // Keyed by the lap's own id, not its position: inserting or removing an earlier lap
     // would otherwise hand a focused element to a different lap and move it there.
     marks.push({
-      ...pointMark(feature, "lap"),
+      ...pointMark(feature, "lap", style),
       key: `lap:${track.id}:${feature.properties.lapId ?? "unidentified"}`,
     });
   }
   return marks;
 }
 
-function pointMark(feature: PointFeature, kind: "start" | "finish" | "lap"): PreparedMark {
+function pointMark(
+  feature: PointFeature,
+  kind: "start" | "finish" | "lap",
+  supplied: MarkerStyle | undefined,
+): PreparedMark {
   return {
     key: `${feature.properties.kind}:${feature.properties.trackId}`,
     lngLat: feature.geometry.coordinates,
-    style: builtInMark(kind, feature.properties.label),
+    style:
+      supplied === undefined
+        ? builtInMark(kind, feature.properties.label)
+        : snapshotMarkerStyle(supplied),
   };
 }
 
 /** A mark per event, keyed by event id so a re-render of the same events is stable. */
-function eventMarks(events: readonly MapEvent[]): PreparedMark[] {
+function eventMarks(
+  events: readonly MapEvent[],
+  presentation: EventPresentation | null,
+): PreparedMark[] {
   return events.map((event) => ({
     key: `event:${event.id}`,
     lngLat: [event.position.lng, event.position.lat] as Position2D,
-    style: builtInMark("event"),
+    style:
+      presentation === null
+        ? builtInMark("event")
+        : snapshotMarkerStyle(presentation.marker(event)),
   }));
+}
+
+/** Consumer line styling, folded into each segment feature so one layer can read it. */
+function styledTrackLines(
+  track: Track | null,
+  presentation: EventPresentation | null,
+): EngineFeatureCollection {
+  if (track === null) return emptyCollection();
+  const built = buildTrackLineFeatures(track);
+  const supplied = presentation?.trackLine;
+  if (supplied === undefined) return built;
+
+  return {
+    type: "FeatureCollection",
+    features: built.features.map((feature) => {
+      const style: TrackLineStyle = snapshotLineStyle(
+        supplied.call(presentation, track, feature.properties.segmentIndex),
+      );
+      return {
+        ...feature,
+        properties: {
+          ...feature.properties,
+          ...(style.color === undefined ? {} : { lineColor: style.color }),
+          ...(style.widthPx === undefined ? {} : { lineWidthPx: style.widthPx }),
+          ...(style.opacity === undefined ? {} : { lineOpacity: style.opacity }),
+          ...(style.dashed === undefined ? {} : { lineDashed: style.dashed }),
+        },
+      };
+    }),
+  };
 }
 
 /**
@@ -377,10 +444,34 @@ export function trackBounds(track: Track): BBox | null {
   return [west, south, east, north];
 }
 
-/** A mark on the map: the renderer's marker and the element it wraps. */
+/**
+ * A mark on the map: the renderer's marker, the element it wraps, and the anchor it was
+ * built with — which cannot be changed afterwards, so it decides whether reuse is possible.
+ */
 interface PlacedMarker {
   readonly marker: MarkerHandle;
   readonly element: HTMLElement;
+  readonly anchor: "center" | "bottom";
+}
+
+/**
+ * Freeze a snapshot all the way down, before any consumer callback can see it.
+ *
+ * The canonical snapshot is what every later `setPresentation` re-derives from, and it is
+ * handed to consumer callbacks as their `track` argument. A callback that mutates it would
+ * corrupt two things at once: the map it is currently producing — geometry read before the
+ * callback disagreeing with marks read after — and every future presentation change, which
+ * would re-derive from the mutation.
+ *
+ * Frozen rather than cloned per call. A second clone would isolate each pass at O(points)
+ * each time, while freezing costs that once and makes the mutation *loud*: assigning to a
+ * frozen property throws in strict mode, which module code always is. The engine never
+ * mutates these, so nothing legitimate is constrained.
+ */
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
 }
 
 /** Padding used when framing a track, so its endpoints are not flush against the edge. */
@@ -390,6 +481,7 @@ const FIT_PADDING_PX = 40;
 export interface MapControllerCore {
   setSources(sources: TileSource[]): void;
   setTerrain(terrain: TerrainOptions | null): void;
+  setPresentation(presentation: EventPresentation | null): void;
   renderTrack(track: Track | null): void;
   renderEvents(events: MapEvent[]): void;
   renderDraft(points: DraftTrackPoint[] | null): void;
@@ -406,6 +498,7 @@ export interface MapControllerOptions {
   sources: TileSource[];
   style?: string | JSONValue;
   terrain?: TerrainOptions | null;
+  presentation?: EventPresentation;
   center?: LatLng;
   zoom?: number;
   /** Engine-owned and neutral; never a library default. (ADR-0008) */
@@ -452,6 +545,19 @@ export function createMapControllerInternal(
    * mutated in between — which would move a mark, or make it disagree with the line already
    * prepared from the same track.
    */
+  /**
+   * Snapshots of what the engine was last asked to draw, so a presentation change can be
+   * applied to it without rereading anything the caller still holds.
+   *
+   * Deep copies, taken at the call. Retaining the caller's `Track` would reintroduce the
+   * aliasing T4.3 removed — a mutation between `renderTrack` and `setPresentation` would
+   * silently move marks — and the presentation callbacks need these objects, so a projection
+   * is not enough here.
+   */
+  let trackSnapshot: Track | null = null;
+  let eventsSnapshot: readonly MapEvent[] = [];
+  let presentation: EventPresentation | null = options.presentation ?? null;
+
   let render: PreparedRender = emptyRender();
   /** Placed markers by key, so a re-render updates the ones that stayed rather than churning. */
   let markers = new Map<string, PlacedMarker>();
@@ -574,27 +680,33 @@ export function createMapControllerInternal(
    * must not mean keeping what it says — a lap renamed between renders would announce its
    * old name indefinitely — so the style is reapplied every time.
    *
-   * `anchor` is not updated, because MapLibre fixes it when the marker is constructed. That
-   * is safe **only while every mark's anchor follows from its kind**, which is true of the
-   * built-ins: a key that reuses an element always describes the same kind of mark. T4.4 ends
-   * that guarantee by letting a consumer choose the anchor, and must rebuild rather than
-   * reuse when it changes — recorded there rather than guessed at here, since a branch no
-   * test can reach is a branch nothing keeps honest.
+   * `anchor` is the one thing a refresh cannot change: MapLibre fixes it when the marker is
+   * constructed. So reuse turns on **identity and anchor together** — same key and same
+   * anchor reuses; same key with a different anchor rebuilds, because there is nothing to
+   * update. That is the only property treated this way: a changed class, colour, size, name
+   * or markup is a refresh, not a rebuild, and rebuilding for those would throw away focus
+   * for no reason.
+   *
+   * T4.3 could not reach this branch — every built-in mark's anchor follows from its kind, so
+   * a key that reused an element always described the same kind of mark. A consumer-supplied
+   * presentation ends that guarantee, which is why the branch belongs here and not there.
    */
   function place(mark: PreparedMark, existing: PlacedMarker | undefined): PlacedMarker {
     const [lng, lat] = mark.lngLat;
+    const anchor = mark.style.anchor ?? "bottom";
 
-    if (existing !== undefined) {
+    if (existing !== undefined && existing.anchor === anchor) {
       applyMarkerStyle(existing.element, mark.style);
       existing.marker.setLngLat(lng, lat);
       return existing;
     }
+    existing?.marker.remove();
 
     const element = createMarkerElement(environment.document, mark.style);
-    const marker = environment.createMarker(element, { anchor: mark.style.anchor ?? "bottom" });
+    const marker = environment.createMarker(element, { anchor });
     marker.setLngLat(lng, lat);
     marker.addTo(map);
-    return { marker, element };
+    return { marker, element, anchor };
   }
 
   function applyLivePosition(): void {
@@ -670,18 +782,39 @@ export function createMapControllerInternal(
 
     renderTrack(track: Track | null): void {
       if (destroyed) throw new MapControllerDestroyedError("renderTrack");
-      // Both projections are taken here, from the same track, in one pass. Keeping the track
-      // and re-deriving marks on the next `renderEvents` would read a caller's object again,
-      // and a mutation in between would leave marks disagreeing with the line beside them.
-      prepareRender({
-        trackLines: track === null ? emptyCollection() : buildTrackLineFeatures(track),
-        trackMarks: trackMarks(track),
-      });
+      // Snapshot first, then prepare from the snapshot — so what the presentation sees, and
+      // what a later `setPresentation` re-derives from, is the same immutable thing.
+      const snapshot = track === null ? null : deepFreeze(structuredClone(track) as Track);
+      // Prepared before either is committed: a presentation callback that throws leaves the
+      // previous track and its marks exactly as they were.
+      const lines = styledTrackLines(snapshot, presentation);
+      const marks = trackMarks(snapshot, presentation);
+
+      trackSnapshot = snapshot;
+      prepareRender({ trackLines: lines, trackMarks: marks });
     },
 
     renderEvents(events: MapEvent[]): void {
       if (destroyed) throw new MapControllerDestroyedError("renderEvents");
-      prepareRender({ eventMarks: eventMarks(events) });
+      const snapshot = deepFreeze(structuredClone(events) as MapEvent[]);
+      const marks = eventMarks(snapshot, presentation);
+
+      eventsSnapshot = snapshot;
+      prepareRender({ eventMarks: marks });
+    },
+
+    setPresentation(next: EventPresentation | null): void {
+      if (destroyed) throw new MapControllerDestroyedError("setPresentation");
+      // Every callback runs here, against what is already desired, and **all of it completes
+      // before anything is committed or reconciled**. Transactional stored state would not be
+      // enough: a marker rebuilt before a later callback threw has already lost its focus,
+      // whatever the stored state says afterwards.
+      const lines = styledTrackLines(trackSnapshot, next);
+      const marks = trackMarks(trackSnapshot, next);
+      const events = eventMarks(eventsSnapshot, next);
+
+      presentation = next;
+      prepareRender({ trackLines: lines, trackMarks: marks, eventMarks: events });
     },
 
     renderDraft(points: DraftTrackPoint[] | null): void {

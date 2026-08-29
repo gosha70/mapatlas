@@ -74,4 +74,5 @@ first, then keep the gates green from then on.
 - No secrets, no bundled map tiles, no bundled ML models in the repo.
 - No telemetry / network egress the consumer did not configure (see [`SECURITY.md`](SECURITY.md)).
 - Accessibility: map controls keyboard-reachable, visible focus, respect `prefers-reduced-motion`.
-- Document downstream data-license obligations (OSM/OpenSeaMap ODbL, NOAA public domain).
+- Document downstream data-license obligations (OSM/OpenSeaMap ODbL, and bathymetry/elevation
+  terms **per named product** — they differ between datasets from one publisher; see ADR-0024).

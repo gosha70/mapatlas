@@ -35,7 +35,7 @@ test("reports a declared error that never arrives", async ({ page }) => {
 
   watch.expect(/never happens/, "something that will not occur");
 
-  expect(watch.satisfied()).toBe(false);
+  expect(watch.settled()).toBe(false);
   expect(watch.problems()).toHaveLength(1);
   expect(watch.problems()[0]).toContain("none arrived");
   // The reason travels with the report, since an unexplained pattern is indistinguishable
@@ -52,7 +52,7 @@ test("accepts a declared error, and only the declared one", async ({ page }) => 
     console.error("expected trouble happened");
   });
 
-  expect(watch.satisfied()).toBe(true);
+  expect(watch.settled()).toBe(true);
   expect(watch.problems()).toEqual([]);
 
   await page.evaluate(() => {
@@ -76,7 +76,7 @@ test("holds a declaration to an exact count when one is given", async ({ page })
   expect(watch.problems()[0]).toContain("saw 2");
 });
 
-test("a counted expectation is satisfied only at its count", async ({ page }) => {
+test("a counted expectation settles at its count, and not before", async ({ page }) => {
   // The distinction a polling test depends on. Treating the first match as enough would let
   // it stop in the middle of the chain it is waiting on, and whether the rest arrived before
   // teardown would decide the result — passing or failing on timing rather than behaviour.
@@ -84,24 +84,73 @@ test("a counted expectation is satisfied only at its count", async ({ page }) =>
   const watch = watchConsole(page);
   watch.expect(/tile/, "two tiles fail", 2);
 
-  expect(watch.satisfied()).toBe(false);
+  expect(watch.settled()).toBe(false);
 
   await page.evaluate(() => {
     console.error("tile 1 failed");
   });
-  expect(watch.satisfied()).toBe(false);
+  expect(watch.settled()).toBe(false);
 
   await page.evaluate(() => {
     console.error("tile 2 failed");
   });
-  expect(watch.satisfied()).toBe(true);
+  expect(watch.settled()).toBe(true);
   expect(watch.problems()).toEqual([]);
+});
 
-  // And past it, unsatisfied again: "exactly two" is not "two or more".
+test("overshoot settles the wait and is reported, rather than waiting for a timeout", async ({
+  page,
+}) => {
+  // Settling and judging are different questions, and this is where they diverge. Equality
+  // would look stricter and be worse: past the count it never holds again, so the poll would
+  // run to a timeout saying "still waiting" about something that already overshot — a wrong
+  // pass traded for an uninformative failure. Settling ends the wait; `problems()` says what
+  // actually happened.
+  await page.goto("/");
+  const watch = watchConsole(page);
+  watch.expect(/tile/, "two tiles fail", 2);
+
   await page.evaluate(() => {
+    console.error("tile 1 failed");
+    console.error("tile 2 failed");
     console.error("tile 3 failed");
   });
-  expect(watch.satisfied()).toBe(false);
+
+  expect(watch.settled()).toBe(true);
+  expect(watch.problems()).toHaveLength(1);
+  expect(watch.problems()[0]).toContain("saw 3");
+});
+
+test("settling and judging agree wherever they can, and diverge only on overshoot", async ({
+  page,
+}) => {
+  // Structural rather than remembered: the two predicates are checked against one another
+  // over every shape a declaration can be in, so a later change to one that contradicts the
+  // other fails here instead of somewhere it would look like a flake.
+  await page.goto("/");
+
+  const cases = [
+    { errors: 0, count: 2, settled: false, problems: 1, why: "nothing arrived" },
+    { errors: 1, count: 2, settled: false, problems: 1, why: "half a chain" },
+    { errors: 2, count: 2, settled: true, problems: 0, why: "exactly what was asked for" },
+    { errors: 3, count: 2, settled: true, problems: 1, why: "overshoot: settled, and wrong" },
+    { errors: 0, count: null, settled: false, problems: 1, why: "uncounted, nothing arrived" },
+    { errors: 1, count: null, settled: true, problems: 0, why: "uncounted, one is enough" },
+    { errors: 5, count: null, settled: true, problems: 0, why: "uncounted, any number will do" },
+  ];
+
+  for (const { errors, count, settled, problems, why } of cases) {
+    const watch = watchConsole(page);
+    if (count === null) watch.expect(/tile/, why);
+    else watch.expect(/tile/, why, count);
+
+    await page.evaluate((n) => {
+      for (let i = 0; i < n; i += 1) console.error(`tile ${String(i)} failed`);
+    }, errors);
+
+    expect(watch.settled(), why).toBe(settled);
+    expect(watch.problems(), why).toHaveLength(problems);
+  }
 });
 
 test("does not let a late declaration excuse an error already seen", async ({ page }) => {

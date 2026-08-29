@@ -643,8 +643,28 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   frame time and memory are recorded as a baseline. Its purpose is to surface renderer and
   data-format assumptions here, in Phase 4, rather than in Phase 7 when they are expensive.
 - **T4.7 Interaction + a11y.** `onMapTap`, `onEventClick`; controls keyboard-reachable, visible
-  focus, `prefers-reduced-motion` respected. _AC:_ a11y checks pass in the demo shell; draw-mode
-  vertices are keyboard-operable, not pointer-only.
+  focus, `prefers-reduced-motion` respected. Completes `MapController`, so this is the task that
+  puts `createMapController` on the package barrel and makes `api.md`'s declaration true.
+
+  Two places this leaks if it is treated as a stylesheet concern:
+
+  **`prefers-reduced-motion` must be read by the controller, not only by CSS.** The camera is
+  moved from JavaScript — `fitTrack`, `fitBounds`, `recenter`, and whatever T4.2's terrain and
+  T4.3's live position animate — and a media query in a stylesheet has no say over an eased
+  camera transition. The controller reads the query itself, through the environment seam like
+  every other platform capability, so a consumer who has asked for less motion gets a camera
+  that jumps rather than flies. (T4.3 deliberately shipped non-animated camera moves so that
+  this decision would not have to be unpicked here.)
+
+  **`onMapTap` and `onEventClick` can both fire for one tap on an event mark**, and which wins
+  is a contract, not an accident. Pinned before it becomes ambient behaviour: a tap on a mark
+  reports the event and **not** the map position, because a consumer handling both would
+  otherwise open an event and drop a pin at the same coordinate from a single gesture.
+
+  _AC:_ a11y checks pass in the demo shell; draw-mode vertices are keyboard-operable, not
+  pointer-only; a reduced-motion preference reaches the camera, asserted through the seam rather
+  than through a stylesheet; and a tap on an event mark fires `onEventClick` alone, asserted in
+  both lanes.
 
 ## Phase 5 — `@mapatlas/react`
 - **T5.1 Hooks.** `useTrackRecorder` (live `channels`, `markLap`, `recovered`), `useEventLog`,

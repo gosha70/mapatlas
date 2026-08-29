@@ -129,5 +129,37 @@ export function applyMarkerStyle(wrapper: HTMLElement, style: MarkerStyle): void
   else wrapper.style.color = style.color;
 
   const content = wrapper.querySelector(`.${CONTENT_CLASS}`);
-  if (content !== null) content.innerHTML = style.html ?? "";
+  if (content !== null) content.innerHTML = markerContent(style);
+}
+
+/**
+ * What goes inside the wrapper.
+ *
+ * `html` wins when both are given: it is the general escape hatch, and a style supplying it
+ * has already said exactly what to draw. `iconUrl` is the convenience for the common case,
+ * and the engine bundles no icons, so it is always a consumer's own asset.
+ *
+ * The image carries an empty `alt` deliberately. The wrapper already holds the accessible
+ * name; a second one here would have the mark announced twice, and an `img` with no `alt` at
+ * all would have assistive technology read out the file name.
+ */
+function markerContent(style: MarkerStyle): string {
+  if (style.html !== undefined) return style.html;
+  if (style.iconUrl === undefined) return "";
+  return `<img src="${escapeAttribute(style.iconUrl)}" alt="" />`;
+}
+
+/**
+ * Escape a value going into an attribute.
+ *
+ * `html` is inserted verbatim and is consumer-trusted by contract, but `iconUrl` is a *value*
+ * the engine puts into markup it composes itself — so a url containing a quote must not be
+ * able to close the attribute and add its own.
+ */
+function escapeAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }

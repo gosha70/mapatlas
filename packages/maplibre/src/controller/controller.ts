@@ -454,6 +454,26 @@ interface PlacedMarker {
   readonly anchor: "center" | "bottom";
 }
 
+/**
+ * Freeze a snapshot all the way down, before any consumer callback can see it.
+ *
+ * The canonical snapshot is what every later `setPresentation` re-derives from, and it is
+ * handed to consumer callbacks as their `track` argument. A callback that mutates it would
+ * corrupt two things at once: the map it is currently producing — geometry read before the
+ * callback disagreeing with marks read after — and every future presentation change, which
+ * would re-derive from the mutation.
+ *
+ * Frozen rather than cloned per call. A second clone would isolate each pass at O(points)
+ * each time, while freezing costs that once and makes the mutation *loud*: assigning to a
+ * frozen property throws in strict mode, which module code always is. The engine never
+ * mutates these, so nothing legitimate is constrained.
+ */
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
 /** Padding used when framing a track, so its endpoints are not flush against the edge. */
 const FIT_PADDING_PX = 40;
 
@@ -764,7 +784,7 @@ export function createMapControllerInternal(
       if (destroyed) throw new MapControllerDestroyedError("renderTrack");
       // Snapshot first, then prepare from the snapshot — so what the presentation sees, and
       // what a later `setPresentation` re-derives from, is the same immutable thing.
-      const snapshot = track === null ? null : (structuredClone(track) as Track);
+      const snapshot = track === null ? null : deepFreeze(structuredClone(track) as Track);
       // Prepared before either is committed: a presentation callback that throws leaves the
       // previous track and its marks exactly as they were.
       const lines = styledTrackLines(snapshot, presentation);
@@ -776,7 +796,7 @@ export function createMapControllerInternal(
 
     renderEvents(events: MapEvent[]): void {
       if (destroyed) throw new MapControllerDestroyedError("renderEvents");
-      const snapshot = structuredClone(events) as MapEvent[];
+      const snapshot = deepFreeze(structuredClone(events) as MapEvent[]);
       const marks = eventMarks(snapshot, presentation);
 
       eventsSnapshot = snapshot;

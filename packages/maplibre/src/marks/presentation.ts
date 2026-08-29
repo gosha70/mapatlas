@@ -37,6 +37,24 @@ export interface EventPresentation {
 }
 
 /**
+ * Class names the renderer owns.
+ *
+ * A consumer supplying one of these would be recorded as owning it, and dropping it on a
+ * later refresh would remove a class MapLibre still needs — DOM class tokens carry no
+ * ownership count, so `maplibregl-marker` removed once is removed for good, taking the
+ * mark's absolute positioning with it. Rejected rather than filtered, so a consumer learns
+ * at the call instead of wondering why a class it asked for never appears.
+ */
+const RENDERER_CLASS_PREFIX = "maplibregl-";
+
+export class MarkerStyleError extends Error {
+  constructor(detail: string) {
+    super(`marker style: ${detail}`);
+    this.name = "MarkerStyleError";
+  }
+}
+
+/**
  * A deep copy of a marker style.
  *
  * The same rule the rest of the controller follows: prepared state is a snapshot, not a view.
@@ -45,6 +63,16 @@ export interface EventPresentation {
  * that decided it, and a mark's size would drift from the one its presentation returned.
  */
 export function snapshotMarkerStyle(style: MarkerStyle): MarkerStyle {
+  const reserved = (style.className ?? "")
+    .split(/\s+/)
+    .filter((token) => token.startsWith(RENDERER_CLASS_PREFIX));
+  if (reserved.length > 0) {
+    throw new MarkerStyleError(
+      `"${reserved.join('", "')}" ${reserved.length === 1 ? "is" : "are"} reserved for the ` +
+        `renderer; a mark that gave one up on a later render would lose the positioning ` +
+        `MapLibre puts on it`,
+    );
+  }
   return {
     ...style,
     ...(style.sizePx === undefined ? {} : { sizePx: [style.sizePx[0], style.sizePx[1]] }),

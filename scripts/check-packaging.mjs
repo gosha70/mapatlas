@@ -140,20 +140,24 @@ function report(failures) {
   );
 }
 
+// Before anything is created, and fatal on its own. Everything below describes a dependency
+// graph, so a lockfile disagreeing with the manifests makes every result after it a statement
+// about the wrong one — and the work after it reaches the registry, where a failing gate would
+// otherwise sit through npm's retry backoff to reach a conclusion it already has.
+//
+// Deliberately *before* the scratch directory exists: `process.exit` skips a pending `finally`,
+// so exiting from inside the cleanup scope below would leave a temporary directory behind on
+// every failure.
+const drift = lockfileDrift();
+if (drift.length > 0) {
+  report(drift);
+  process.exit(1);
+}
+
 const scratch = mkdtempSync(join(tmpdir(), "mapatlas-packaging-"));
 const failures = [];
 
 try {
-  // Before packing, and fatal on its own. Everything below describes a dependency graph, so
-  // a lockfile disagreeing with the manifests makes every result after it a statement about
-  // the wrong one — and the work after it reaches the registry, where a failing gate would
-  // otherwise sit through npm's retry backoff to reach a conclusion it already has.
-  const drift = lockfileDrift();
-  if (drift.length > 0) {
-    report(drift);
-    process.exit(1);
-  }
-
   const tarballs = PACKAGES.map((directory) => {
     const output = run(
       "npm",

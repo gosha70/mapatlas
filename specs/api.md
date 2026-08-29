@@ -927,6 +927,17 @@ a decision, not an absence, so the engine's own mark does not appear in its plac
 `setPresentation(null)` restores the neutral built-ins immediately, rather than at the next
 render.
 
+Callbacks receive the engine's canonical snapshot **deep-frozen**. A callback that mutated it
+would corrupt the map it is producing — geometry read before it disagreeing with marks read
+after — and every later `setPresentation`, which re-derives from that same snapshot. Freezing
+makes the attempt throw rather than silently succeed.
+
+`MarkerStyle.html` takes precedence over `iconUrl`; an `iconUrl` is rendered as an `img` with an
+empty `alt`, since the wrapper already carries the accessible name. Class names beginning
+`maplibregl-` are **reserved for the renderer** and rejected: DOM class tokens carry no
+ownership count, so a consumer that supplied one and later dropped it would have the refresh
+remove the renderer's own and take the mark's positioning with it.
+
 A mark is **reused when its key and its anchor both match**, and rebuilt otherwise. Reuse
 preserves the element and the focus on it while reapplying name, class, content, colour and
 size; `anchor` alone forces a rebuild, because the renderer fixes it at construction and it

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // @vitest-environment happy-dom
-import type { JSONValue, MapEvent, TileSource, Track } from "@mapatlas/core";
+import type { JSONValue, MapEvent, TileSource, Track, TrackPoint } from "@mapatlas/core";
 import type { LayerSpecification } from "maplibre-gl";
 
 import type { MarkerStyle } from "../marks/marker-style.js";
@@ -1424,7 +1424,11 @@ describe("the engine does not assume it owns a map because one id is present", (
 });
 
 describe("the presentation seam", () => {
-  const EVENT_STYLE: MarkerStyle = { ariaLabel: "A catch", color: "#ff0000", html: "<b>F</b>" };
+  const EVENT_STYLE: MarkerStyle = {
+    ariaLabel: "A marked spot",
+    color: "#ff0000",
+    html: "<b>F</b>",
+  };
 
   function presentationOf(overrides: Partial<EventPresentation> = {}): EventPresentation {
     return { marker: () => EVENT_STYLE, ...overrides };
@@ -1457,7 +1461,7 @@ describe("the presentation seam", () => {
 
     controller.setPresentation(presentationOf());
 
-    expect(placed(rig)[0]?.element.getAttribute("aria-label")).toBe("A catch");
+    expect(placed(rig)[0]?.element.getAttribute("aria-label")).toBe("A marked spot");
   });
 
   it("returns to neutral defaults on setPresentation(null), immediately", () => {
@@ -1466,7 +1470,9 @@ describe("the presentation seam", () => {
     controller.renderTrack(trackFixture());
     controller.renderEvents([eventFixture("e1", 18.06)]);
     controller.setPresentation(presentationOf());
-    expect(placed(rig).some((m) => m.element.getAttribute("aria-label") === "A catch")).toBe(true);
+    expect(placed(rig).some((m) => m.element.getAttribute("aria-label") === "A marked spot")).toBe(
+      true,
+    );
 
     controller.setPresentation(null);
 
@@ -1665,5 +1671,120 @@ describe("presentation results are snapshots, not views", () => {
       [18.06, 59.33],
       [18.07, 59.34],
     ]);
+  });
+});
+
+describe("a presentation callback cannot reach behind the engine's back", () => {
+  it("refuses a callback's attempt to mutate the track it was given", () => {
+    // Two failures at once if it could. The line is built before the callbacks run and the
+    // marks after, so a mutation lands in one and not the other — a start mark somewhere the
+    // line does not go. And the mutation would persist into every later setPresentation,
+    // which re-derives from this same snapshot.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+
+    expect(() => {
+      controller.setPresentation({
+        marker: () => EVENT_MARK,
+        trackLine: (track) => {
+          (track.points as TrackPoint[])[0] = { lat: 10, lng: 999, t: 1 };
+          return {};
+        },
+      });
+      controller.renderTrack(trackFixture());
+    }).toThrow(TypeError);
+  });
+
+  it("keeps geometry and marks agreeing after a callback has run", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation({ marker: () => EVENT_MARK, trackLine: () => ({}) });
+
+    controller.renderTrack(trackFixture());
+
+    const line = rig.map.data(ENGINE_SOURCE.track)?.features[0];
+    const first = (line?.geometry as { coordinates: [number, number][] }).coordinates[0];
+    expect(placed(rig)[0]?.lngLat).toEqual(first);
+  });
+});
+
+describe("marker content", () => {
+  it("renders a consumer's icon when no markup was supplied", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation({
+      marker: () => ({ ariaLabel: "A marked spot", iconUrl: "https://cdn.invalid/sign.png" }),
+    });
+
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+
+    const image = placed(rig)[0]?.element.querySelector("img");
+    expect(image?.getAttribute("src")).toBe("https://cdn.invalid/sign.png");
+    // Empty, not absent: the wrapper already carries the name, and an img with no alt has
+    // assistive technology read out the file name instead.
+    expect(image?.getAttribute("alt")).toBe("");
+  });
+
+  it("prefers supplied markup over an icon, since html is the explicit escape hatch", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation({
+      marker: () => ({
+        ariaLabel: "A marked spot",
+        html: "<b>F</b>",
+        iconUrl: "https://x.invalid/i",
+      }),
+    });
+
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+
+    const content = placed(rig)[0]?.element.querySelector("[aria-hidden='true']");
+    expect(content?.innerHTML).toBe("<b>F</b>");
+    expect(content?.querySelector("img")).toBeNull();
+  });
+
+  it("escapes an icon url, since the engine composes that markup itself", () => {
+    // `html` is consumer-trusted by contract and inserted verbatim; `iconUrl` is a value the
+    // engine puts into an attribute, so it must not be able to close it and add another.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation({
+      marker: () => ({ ariaLabel: "A marked spot", iconUrl: '" onerror="boom()' }),
+    });
+
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+
+    const image = placed(rig)[0]?.element.querySelector("img");
+    expect(image?.getAttribute("onerror")).toBeNull();
+    expect(image?.getAttribute("src")).toBe('" onerror="boom()');
+  });
+});
+
+describe("renderer-owned class names are reserved", () => {
+  it("rejects a consumer class the renderer owns", () => {
+    // DOM class tokens carry no ownership count, so a consumer that supplied
+    // `maplibregl-marker` and later dropped it would have the refresh remove MapLibre's own
+    // — taking the mark's absolute positioning with it.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+
+    expect(() => {
+      controller.setPresentation({
+        marker: () => ({ ariaLabel: "A marked spot", className: "mine maplibregl-marker" }),
+      });
+      controller.renderEvents([eventFixture("e1", 18.06)]);
+    }).toThrow(/reserved for the renderer/);
+  });
+
+  it("allows any class that is not the renderer's", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation({
+      marker: () => ({ ariaLabel: "A marked spot", className: "catch-mark important" }),
+    });
+
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+
+    expect(placed(rig)[0]?.element.className).toContain("catch-mark");
   });
 });

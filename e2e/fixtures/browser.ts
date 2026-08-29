@@ -109,12 +109,41 @@ export async function serveMapFixtures(page: Page): Promise<void> {
   });
 }
 
-/** Console output a test knowingly provokes, and everything else, which is a failure. */
+/**
+ * Console output a test knowingly provokes — and everything else, which is a failure.
+ *
+ * Declaring an expected error is an **expectation, not a suppression**. A declaration that
+ * merely permitted an error would let a test claiming "exactly one error proves the handler
+ * was reached" pass in the case where the handler was never reached and no error occurred at
+ * all — the claim quietly inverted into its own opposite. So a declared error that never
+ * arrives is reported just as loudly as an undeclared one that does.
+ */
 export interface ConsoleWatch {
-  /** Declare an error this test expects, with the reason it is expected. */
-  allow(pattern: RegExp): void;
-  /** Every error seen that no `allow` covers. */
-  unexpected(): string[];
+  /**
+   * Declare an error this test expects, and why.
+   *
+   * The reason is required because it is the part a later reader needs: an unexplained
+   * pattern is indistinguishable from a silenced defect. `count` pins an exact number where
+   * the test can rely on one; by default any number of matches will do, but at least one must.
+   */
+  expect(pattern: RegExp, reason: string, count?: number): void;
+  /** Everything wrong with what reached the console: undeclared errors, and absent ones. */
+  problems(): string[];
+  /**
+   * Whether every declared error has arrived.
+   *
+   * For polling. An expected error is usually the *end* of an asynchronous chain — a fetch,
+   * a parse, a rejection — so a test that declares one has to wait for it, or it ends before
+   * the thing it is claiming has happened and the declaration proves nothing.
+   */
+  satisfied(): boolean;
+}
+
+interface Declaration {
+  readonly pattern: RegExp;
+  readonly reason: string;
+  readonly count: number | null;
+  matched: number;
 }
 
 /**
@@ -134,17 +163,46 @@ export function consoleFor(page: Page): ConsoleWatch {
 }
 
 export function watchConsole(page: Page): ConsoleWatch {
-  const seen: string[] = [];
-  const allowed: RegExp[] = [];
+  const undeclared: string[] = [];
+  const declarations: Declaration[] = [];
+
+  function record(line: string): void {
+    // Against the declarations standing at the time the error arrived, so a declaration made
+    // after the fact cannot retroactively excuse something already seen.
+    const declaration = declarations.find((entry) => entry.pattern.test(line));
+    if (declaration === undefined) undeclared.push(line);
+    else declaration.matched += 1;
+  }
 
   page.on("console", (message) => {
-    if (message.type() === "error") seen.push(message.text());
+    if (message.type() === "error") record(message.text());
   });
-  page.on("pageerror", (error) => seen.push(error.message));
+  page.on("pageerror", (error) => {
+    record(error.message);
+  });
 
   const watch: ConsoleWatch = {
-    allow: (pattern) => allowed.push(pattern),
-    unexpected: () => seen.filter((line) => !allowed.some((pattern) => pattern.test(line))),
+    expect: (pattern, reason, count) => {
+      declarations.push({ pattern, reason, count: count ?? null, matched: 0 });
+    },
+    satisfied: () => declarations.every((entry) => entry.matched > 0),
+    problems: () => {
+      const problems = undeclared.map((line) => `unexpected console error: ${line}`);
+      for (const { pattern, reason, count, matched } of declarations) {
+        if (matched === 0) {
+          problems.push(
+            `expected a console error matching ${String(pattern)} (${reason}) — none arrived, ` +
+              `so whatever was supposed to produce it did not run`,
+          );
+        } else if (count !== null && matched !== count) {
+          problems.push(
+            `expected ${String(count)} console error(s) matching ${String(pattern)} ` +
+              `(${reason}) — saw ${String(matched)}`,
+          );
+        }
+      }
+      return problems;
+    },
   };
   watches.set(page, watch);
   return watch;

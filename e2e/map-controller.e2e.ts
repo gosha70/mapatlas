@@ -20,7 +20,7 @@ test.afterEach(({ page }, testInfo) => {
   // Only when the test itself passed: a test that already failed has its own diagnosis, and
   // console noise from the failure would bury it.
   if (testInfo.status === testInfo.expectedStatus) {
-    expect(consoleFor(page).unexpected()).toEqual([]);
+    expect(consoleFor(page).problems()).toEqual([]);
   }
 });
 
@@ -209,9 +209,15 @@ test("registers the real PMTiles protocol on the real MapLibre runtime", async (
   // handler. A break at either version fails here rather than at a consumer's first archive.
   await page.goto("/");
   // The host answers, but with bytes that are not an archive — deliberately, since this
-  // proves the handler is *registered and reached*, not that it can read one. So exactly one
-  // error is expected, from the client rejecting them.
-  console_.allow(/pmtiles|archive|magic number/i);
+  // proves the handler is *registered and reached*, not that it can read one. The rejection
+  // is therefore **required**, not merely tolerated: without it the test would pass in the
+  // case it exists to rule out, where the flag flips true but nothing ever reaches the
+  // handler. Matched on the client's own wording so a different failure cannot stand in for
+  // it.
+  console_.expect(
+    /Wrong magic number for PMTiles archive/,
+    "the registered handler read the served bytes and rejected them, which is what proves it was reached",
+  );
 
   expect(await page.evaluate(() => window.mapatlas.isPmtilesProtocolRegistered())).toBe(false);
 
@@ -233,6 +239,12 @@ test("registers the real PMTiles protocol on the real MapLibre runtime", async (
   await expect
     .poll(async () => page.evaluate(() => window.mapatlas.isPmtilesProtocolRegistered()))
     .toBe(true);
+
+  // And wait for the handler to actually be reached. Registration is set during install,
+  // synchronously; reading the archive is the end of an asynchronous chain that finishes
+  // after it. Ending here would leave the reachability claim unproven — which is precisely
+  // what it did until the declaration was made to require its error rather than tolerate it.
+  await expect.poll(() => console_.satisfied()).toBe(true);
 });
 
 test("registers nothing for a stack with no PMTiles source", async ({ page }) => {

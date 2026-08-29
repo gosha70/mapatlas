@@ -609,7 +609,12 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
 
   The browser lane serves the hosts these specs invent — a real 256×256 PNG for raster and DEM
   templates, a TileJSON pointing back at it, an empty vector tile — and **fails on any console
-  error a test has not declared**. Before the worker was wired up nothing was ever requested, so
+  error a test has not declared, and on any declared error that never arrives**. A declaration
+  is an expectation, not a suppression: one that merely permitted its error would let a test
+  claiming "this error proves the handler was reached" pass in exactly the case it exists to
+  rule out, where nothing ran and no error occurred. It carries a required reason, since an
+  unexplained pattern is indistinguishable from a silenced defect, and the watch has its own
+  tests for the same reason the fake map does. Before the worker was wired up nothing was ever requested, so
   the invented hosts cost nothing; with it working, a green run printed several hundred lines of
   `AJAXError`. Noise on that scale is where a real failure hides, and a lane that always prints
   errors cannot fail on one. The archive host answers too, with bytes that are not an archive,

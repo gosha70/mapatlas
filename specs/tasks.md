@@ -495,6 +495,13 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   release the browser lane has never run — and without the check, reintroducing one passes
   every other gate, which is precisely how it got in.
 
+  A residual imprecision, recorded rather than left implicit: `settled()` polls a count that
+  grows, so a sample taken while a chain is mid-flight can end a wait early. The bound on that is
+  a signal saying rendering has finished — an idle or render-complete event — reaching
+  `settled()` through the environment seam the way reduced-motion does, at which point the fake
+  can drive the timing deterministically instead of the poll interval having to be unlucky in
+  our favour. An extension, not a defect.
+
   It checks the **lockfile against the manifests** first, because `npm ci` does not: `npm ci`
   validates that the resolution graph can be satisfied, and a peer range is not part of that
   graph, so a manifest edited without a reinstall leaves a lockfile contradicting the package
@@ -629,9 +636,11 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   about the DOM and MapLibre's style state. The harness now sets it, and the lane paints;
   documented in `api.md` and the package README as the consumer requirement it is.
 
-- **T4.6 Vertical acceptance fixture.** **Blocked on ADR-0024** (demo map data and hosting):
-  the fixture is the first artifact a human opens, and `PRD.md §6` requires it to work offline,
-  which needs a source the project is entitled to copy bytes from. Two additions beyond the
+- **T4.6 Vertical acceptance fixture.** ADR-0024 has settled the elevation source; **one input
+  remains** — whether the representative region is US-only, which selects between Copernicus DEM
+  GLO-30 Public and USGS 3DEP. The build script inherits two obligations from that ADR: the
+  attribution and liability strings are checked against the licence document and written into
+  the archive, and the region is verified as released coverage before tiles are cut. Two additions beyond the
   original scope: it is reachable as a human-openable `/lab` route in `apps/demo` — through the
   packages' public entry points, sharing one fixture with the Playwright scenario, while
   `e2e/harness` stays automation-only — and it carries a **simulated GPS mode**, so the demo can

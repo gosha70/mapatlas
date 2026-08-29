@@ -244,8 +244,11 @@ The engine bundles no tiles. It documents, and consumers must honor:
   offline-licensed source. Interactive browsing of a public host during development is a
   courtesy question; bulk download is a policy violation.
 - Do not point production at public community/gov tile hosts; self-host or use PMTiles.
-- **DEM/terrain data is an open decision**, as is bathymetry (above); the elevation
-  source backing `raster-dem` contours and hillshade is unchosen. Coverage, vertical datum,
+- **DEM/terrain data is decided in ADR-0024**: Copernicus DEM GLO-30 Public, terrarium-encoded
+  into the archive at build time, or USGS 3DEP 1/3 arc-second if the representative region is
+  US-only. Nothing is fetched from a third party at runtime, which is also what takes CORS and
+  upstream maintenance out of the runtime risk set entirely. Bathymetry remains unchosen, and
+  is licensed per named product as above. Coverage, vertical datum,
   resolution, archive size, and redistribution rights differ sharply between candidates, so this
   is a product decision to settle before the Phase 4 and Phase 6 exits — not an implementation
   detail.

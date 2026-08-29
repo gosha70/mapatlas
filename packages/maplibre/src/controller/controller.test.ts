@@ -123,6 +123,8 @@ interface Harness {
   readonly markers: FakeMarker[];
   /** A pointer release anywhere in the document, which is how a gesture ends. */
   releasePointer(): void;
+  /** Document listeners still attached — these outlive the map, so they must come off. */
+  readonly releaseListenerCount: number;
   readonly environment: MapEnvironment;
   readonly addProtocol: ReturnType<typeof vi.fn>;
   readonly createProtocol: ReturnType<typeof vi.fn>;
@@ -166,6 +168,9 @@ function harness(preinstalled: PreinstalledStyleState = {}): Harness {
     createProtocol,
     releasePointer: () => {
       for (const listener of [...releaseListeners]) listener();
+    },
+    get releaseListenerCount() {
+      return releaseListeners.length;
     },
   };
 }
@@ -2329,6 +2334,89 @@ describe("draw-mode ownership", () => {
     expect(rig.map.data(ENGINE_SOURCE.draft)?.features).toHaveLength(3);
     expect(rig.map.layerIds).toContain(ENGINE_LAYER.draftLine);
     expect(rig.map.layerIds).toContain(ENGINE_LAYER.draftVertex);
+  });
+
+  it("takes its document listener off, on every path that ends a drag", () => {
+    // A document listener outlives the map that installed it, so a missed teardown leaks
+    // silently instead of failing — nothing on the map is left pointing at it to notice.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const before = rig.releaseListenerCount;
+    const exit = controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: () => undefined,
+    });
+
+    rig.map.featuresUnderPointer = [{ properties: { kind: "draft-vertex", index: 0 } }];
+    rig.map.firePointer("mousedown", { x: 1, y: 1, lng: 0, lat: 0 });
+    expect(rig.releaseListenerCount).toBe(before + 1);
+
+    rig.releasePointer();
+    expect(rig.releaseListenerCount).toBe(before);
+
+    // And through exit, from a drag still in flight.
+    rig.map.firePointer("mousedown", { x: 1, y: 1, lng: 0, lat: 0 });
+    expect(rig.releaseListenerCount).toBe(before + 1);
+    exit();
+    expect(rig.releaseListenerCount).toBe(before);
+  });
+
+  it("takes its document listener off when destroyed mid-drag", () => {
+    // The path that matters most: `destroy()` tears down the map, and the document is not the
+    // map, so this is the leak that nothing else would report.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const before = rig.releaseListenerCount;
+    controller.enterDrawMode({ onVertexAdd: () => undefined, onVertexMove: () => undefined });
+    rig.map.featuresUnderPointer = [{ properties: { kind: "draft-vertex", index: 0 } }];
+    rig.map.firePointer("mousedown", { x: 1, y: 1, lng: 0, lat: 0 });
+    expect(rig.releaseListenerCount).toBe(before + 1);
+
+    controller.destroy();
+
+    expect(rig.releaseListenerCount).toBe(before);
+  });
+
+  it("ignores a release belonging to another controller's gesture", () => {
+    // Two maps share one document, so every controller hears every release. A controller with
+    // no gesture in flight must treat one as nothing — otherwise one map's drag ending would
+    // reach into another's state.
+    const shared = harness();
+    const first = createMapControllerInternal(
+      { container: CONTAINER, sources: [OSM] },
+      shared.environment,
+    );
+    const firstMap = shared.map;
+    firstMap.fireLoad();
+
+    // A second controller over the same environment, and so the same document.
+    const second = createMapControllerInternal(
+      { container: CONTAINER, sources: [OSM] },
+      shared.environment,
+    );
+    const secondMap = shared.map;
+    secondMap.fireLoad();
+    expect(secondMap).not.toBe(firstMap);
+
+    const moved: number[] = [];
+    first.enterDrawMode({ onVertexAdd: () => undefined, onVertexMove: () => undefined });
+    second.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: (index) => moved.push(index),
+    });
+
+    // Only the second controller has a gesture in flight.
+    secondMap.featuresUnderPointer = [{ properties: { kind: "draft-vertex", index: 7 } }];
+    secondMap.firePointer("mousedown", { x: 1, y: 1, lng: 0, lat: 0 });
+    expect(secondMap.dragPanEnabled).toBe(false);
+    expect(firstMap.dragPanEnabled).toBe(true);
+
+    // A release reaches both. The first has nothing to end; the second ends cleanly.
+    shared.releasePointer();
+
+    expect(secondMap.dragPanEnabled).toBe(true);
+    expect(firstMap.dragPanEnabled).toBe(true);
+    expect(moved).toEqual([]);
   });
 
   it("releases interaction when the controller is destroyed mid-session", () => {

@@ -203,6 +203,16 @@ export interface MapEnvironment {
    * panning while the button is still down — the rest of the gesture then pans the map.
    * Measured, not reasoned: dragging a vertex across a mark 75px away restored panning at that
    * exact point and dropped the remaining half of the moves.
+   *
+   * A document listener outlives the map that installed it, so the returned unsubscribe is
+   * called on **every** path that ends a drag — release, cancellation, `exit()` and `destroy()`
+   * — and a missed one leaks silently, since nothing on the map is left pointing at it.
+   *
+   * `setPointerCapture` on the canvas is the platform's own version of this and would need no
+   * teardown discipline, but reaching it means either exposing the renderer's original event
+   * through this seam to get a `pointerId`, or attaching a second listener directly to the
+   * container alongside the renderer's own. Both are larger than the discipline they replace;
+   * recorded as the better shape if this seam ever carries pointer events natively.
    */
   onPointerRelease(listener: () => void): () => void;
   /**

@@ -913,6 +913,25 @@ layers are. `setSources` re-validates standing terrain against the prospective s
 nothing until both pass, so a stack that would orphan terrain throws and leaves desired state as
 it was.
 
+**Contract (`EventPresentation`):** a presentation is **prepared state, not a callback the
+renderer retains and runs while drawing**. Every callback is evaluated at the call that installs
+it or supplies data — `setPresentation`, `renderTrack`, `renderEvents` — and all preparation
+completes before any renderer state is mutated. A callback that throws therefore rejects the
+whole operation with **nothing reconciled**: not merely the stored state rolled back, but no
+marker created, removed or rebuilt, because a rebuilt marker has already lost the focus a
+keyboard user was holding. Results are snapshotted, so a presentation reusing one style object
+cannot change the map after the call that read it.
+
+Returning `null` from `startMarker`, `finishMarker` or `lapMarker` **suppresses** that mark —
+a decision, not an absence, so the engine's own mark does not appear in its place.
+`setPresentation(null)` restores the neutral built-ins immediately, rather than at the next
+render.
+
+A mark is **reused when its key and its anchor both match**, and rebuilt otherwise. Reuse
+preserves the element and the focus on it while reapplying name, class, content, colour and
+size; `anchor` alone forces a rebuild, because the renderer fixes it at construction and it
+cannot be changed after.
+
 **Contract:** `MarkerStyle.html` is inserted into the DOM verbatim — it is **consumer-authored
 markup and must never be built from untrusted input** (see `SECURITY.md`). Every mark carries an
 `ariaLabel`; the engine supplies none, because only the consumer knows what a mark means. With no

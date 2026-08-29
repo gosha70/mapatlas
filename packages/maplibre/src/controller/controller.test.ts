@@ -2,6 +2,9 @@
 // @vitest-environment happy-dom
 import type { JSONValue, MapEvent, TileSource, Track } from "@mapatlas/core";
 import type { LayerSpecification } from "maplibre-gl";
+
+import type { MarkerStyle } from "../marks/marker-style.js";
+import type { EventPresentation } from "../marks/presentation.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ENGINE_ID_PREFIX, ENGINE_LAYER, ENGINE_SOURCE } from "./engine-layers.js";
@@ -96,6 +99,9 @@ function twoSegmentFixture(): Track {
     ],
   };
 }
+
+/** A minimal consumer mark, for cases where the style itself is not what is under test. */
+const EVENT_MARK: MarkerStyle = { ariaLabel: "A consumer mark" };
 
 function eventFixture(id: string, lng: number): MapEvent {
   return {
@@ -895,6 +901,7 @@ describe("engine state is namespaced, persistent, and out of the consumer's way"
     expect(rig.map.sourceIds).toContain(ENGINE_SOURCE.draft);
     expect(engineLayerIds(rig.map)).toEqual([
       ENGINE_LAYER.trackLine,
+      ENGINE_LAYER.trackLineDashed,
       ENGINE_LAYER.draftLine,
       ENGINE_LAYER.draftVertex,
     ]);
@@ -1407,10 +1414,256 @@ describe("the engine does not assume it owns a map because one id is present", (
     rig.map.fireLoad();
     expect(engineLayerIds(rig.map)).toEqual([
       ENGINE_LAYER.trackLine,
+      ENGINE_LAYER.trackLineDashed,
       ENGINE_LAYER.draftLine,
       ENGINE_LAYER.draftVertex,
     ]);
     expect(rig.map.sourceIds).toContain(ENGINE_SOURCE.track);
     expect(rig.map.sourceIds).toContain(ENGINE_SOURCE.draft);
+  });
+});
+
+describe("the presentation seam", () => {
+  const EVENT_STYLE: MarkerStyle = { ariaLabel: "A catch", color: "#ff0000", html: "<b>F</b>" };
+
+  function presentationOf(overrides: Partial<EventPresentation> = {}): EventPresentation {
+    return { marker: () => EVENT_STYLE, ...overrides };
+  }
+
+  it("draws consumer marks for events, with their own accessible names", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation(
+      presentationOf({
+        marker: (event) => ({ ariaLabel: `Event ${event.id}`, color: "#00ff00" }),
+      }),
+    );
+
+    controller.renderEvents([eventFixture("e1", 18.06), eventFixture("e2", 18.07)]);
+
+    expect(placed(rig).map((m) => m.element.getAttribute("aria-label"))).toEqual([
+      "Event e1",
+      "Event e2",
+    ]);
+  });
+
+  it("applies to what is already drawn, without waiting for the next render call", () => {
+    // A presentation change is a change to the map, not a change to the next update. Waiting
+    // would leave the consumer's own marks absent until something unrelated happened.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+    expect(placed(rig)[0]?.element.getAttribute("aria-label")).toBe("Event");
+
+    controller.setPresentation(presentationOf());
+
+    expect(placed(rig)[0]?.element.getAttribute("aria-label")).toBe("A catch");
+  });
+
+  it("returns to neutral defaults on setPresentation(null), immediately", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.renderTrack(trackFixture());
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+    controller.setPresentation(presentationOf());
+    expect(placed(rig).some((m) => m.element.getAttribute("aria-label") === "A catch")).toBe(true);
+
+    controller.setPresentation(null);
+
+    expect(
+      placed(rig)
+        .map((m) => m.element.getAttribute("aria-label"))
+        .sort(),
+    ).toEqual(["Event", "Track finish", "Track start"]);
+  });
+
+  it("lets a consumer suppress a mark entirely", () => {
+    // `null` is a decision, not an absence: no start mark, rather than the engine's.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation(presentationOf({ startMarker: () => null }));
+
+    controller.renderTrack(trackFixture());
+
+    expect(placed(rig).map((m) => m.element.getAttribute("aria-label"))).toEqual(["Track finish"]);
+  });
+
+  it("styles each segment from the consumer's callback, folded into the features", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation(
+      presentationOf({
+        trackLine: (_track, index) =>
+          index === 0 ? { color: "#111111", widthPx: 8 } : { dashed: true },
+      }),
+    );
+
+    controller.renderTrack(twoSegmentFixture());
+
+    const features = rig.map.data(ENGINE_SOURCE.track)?.features ?? [];
+    expect(features[0]?.properties).toMatchObject({ lineColor: "#111111", lineWidthPx: 8 });
+    expect(features[1]?.properties).toMatchObject({ lineDashed: true });
+    // Dashed is the one property MapLibre will not data-drive, so it gets its own layer and
+    // the two are filtered apart rather than one segment being drawn twice.
+    expect(rig.map.layerIds).toContain(ENGINE_LAYER.trackLineDashed);
+  });
+});
+
+describe("a presentation is prepared, never retained and run later", () => {
+  it("leaves everything unchanged when a callback throws at setPresentation", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.renderTrack(trackFixture());
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+    const before = placed(rig).map((m) => m.element.getAttribute("aria-label"));
+
+    expect(() => {
+      controller.setPresentation({
+        marker: () => {
+          throw new Error("consumer blew up");
+        },
+      });
+    }).toThrow(/consumer blew up/);
+
+    expect(placed(rig).map((m) => m.element.getAttribute("aria-label"))).toEqual(before);
+  });
+
+  it("leaves the previous events visible when a callback throws at renderEvents", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation({
+      marker: (event) => {
+        if (event.id === "bad") throw new Error("no style for that");
+        return { ariaLabel: `Event ${event.id}` };
+      },
+    });
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+
+    expect(() => {
+      controller.renderEvents([eventFixture("bad", 18.07)]);
+    }).toThrow(/no style for that/);
+
+    expect(placed(rig).map((m) => m.element.getAttribute("aria-label"))).toEqual(["Event e1"]);
+  });
+
+  it("leaves the previous track visible when a line callback throws at renderTrack", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.renderTrack(trackFixture());
+    const before = rig.map.data(ENGINE_SOURCE.track);
+
+    expect(() => {
+      controller.setPresentation({
+        marker: () => EVENT_MARK,
+        trackLine: () => {
+          throw new Error("no line for that");
+        },
+      });
+    }).toThrow(/no line for that/);
+
+    expect(rig.map.data(ENGINE_SOURCE.track)).toEqual(before);
+  });
+
+  it("touches no marker at all when preparation fails part way", () => {
+    // The case that separates "transactional stored state" from "transactional DOM". A
+    // presentation that changes an anchor forces a rebuild; if reconciliation had started
+    // before the later callback threw, the focused mark would already be gone — and no
+    // amount of rolling back stored state brings focus back.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation({ marker: () => ({ ariaLabel: "First", anchor: "bottom" }) });
+    controller.renderEvents([eventFixture("keep", 18.06), eventFixture("later", 18.07)]);
+    const original = placed(rig);
+    expect(original).toHaveLength(2);
+    const createdBefore = rig.markers.length;
+
+    expect(() => {
+      controller.setPresentation({
+        marker: (event) => {
+          // A different anchor for the first mark, which would force a rebuild...
+          if (event.id === "keep") return { ariaLabel: "Rebuilt", anchor: "center" };
+          // ...and then a failure while preparing the second.
+          throw new Error("blew up after the anchor changed");
+        },
+      });
+    }).toThrow(/blew up after the anchor changed/);
+
+    expect(placed(rig)).toEqual(original);
+    expect(rig.markers).toHaveLength(createdBefore);
+    expect(rig.markers.some((m) => m.removed)).toBe(false);
+    expect(original[0]?.element.getAttribute("aria-label")).toBe("First");
+  });
+});
+
+describe("reuse turns on identity and anchor together", () => {
+  it("reuses the element when only the style changed", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation({ marker: () => ({ ariaLabel: "Before", color: "#111111" }) });
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+    const first = placed(rig)[0];
+
+    controller.setPresentation({ marker: () => ({ ariaLabel: "After", color: "#222222" }) });
+
+    expect(placed(rig)[0]).toBe(first);
+    expect(first?.element.getAttribute("aria-label")).toBe("After");
+    expect(rig.markers).toHaveLength(1);
+  });
+
+  it("rebuilds when the anchor changed, because the renderer fixes it at construction", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation({ marker: () => ({ ariaLabel: "Pin", anchor: "bottom" }) });
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+    const first = placed(rig)[0];
+
+    controller.setPresentation({ marker: () => ({ ariaLabel: "Dot", anchor: "center" }) });
+
+    expect(placed(rig)).toHaveLength(1);
+    expect(placed(rig)[0]).not.toBe(first);
+    expect(first?.removed).toBe(true);
+    expect(placed(rig)[0]?.anchor).toBe("center");
+  });
+});
+
+describe("presentation results are snapshots, not views", () => {
+  it("ignores a style object the consumer mutates after returning it", () => {
+    // A presentation that reuses one style object across events — or holds the `sizePx` it
+    // returned — would otherwise be able to change the map after the call that decided it.
+    //
+    // The mutation has to be *re-applied* to be visible, since the first render already wrote
+    // the then-current values into the DOM. Any later reconcile does that: prepared marks are
+    // reapplied every time, which is what refreshes a renamed lap. So an aliased style would
+    // surface at the next unrelated update, which is the worst possible moment to discover it.
+    const shared: MarkerStyle = { ariaLabel: "Shared", sizePx: [10, 10] };
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation({ marker: () => shared });
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+
+    shared.sizePx![0] = 99;
+    shared.ariaLabel = "Changed";
+    // An unrelated update, which reapplies every prepared mark.
+    controller.showLivePosition({ lat: 59.33, lng: 18.06, t: 1 });
+
+    const mark = placed(rig).find((m) => m.element.getAttribute("aria-label") !== null);
+    expect(mark?.element.style.width).toBe("10px");
+    expect(mark?.element.getAttribute("aria-label")).toBe("Shared");
+  });
+
+  it("ignores a track the consumer mutates after renderTrack", () => {
+    // setPresentation re-derives from the snapshot, not from the caller's object.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const track = trackFixture();
+    controller.renderTrack(track);
+
+    track.points[0] = { lat: 0, lng: 0, t: 1 };
+    controller.setPresentation({ marker: () => EVENT_MARK });
+
+    expect(placed(rig).map((m) => m.lngLat)).toEqual([
+      [18.06, 59.33],
+      [18.07, 59.34],
+    ]);
   });
 });

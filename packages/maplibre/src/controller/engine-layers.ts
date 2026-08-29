@@ -32,6 +32,7 @@ export const ENGINE_SOURCE = {
 
 export const ENGINE_LAYER = {
   trackLine: `${ENGINE_ID_PREFIX}track-line`,
+  trackLineDashed: `${ENGINE_ID_PREFIX}track-line-dashed`,
   draftLine: `${ENGINE_ID_PREFIX}draft-line`,
   draftVertex: `${ENGINE_ID_PREFIX}draft-vertex`,
 } as const;
@@ -89,13 +90,39 @@ export const ENGINE_SOURCES: readonly (readonly [id: string, source: SourceSpeci
  * has to stay legible over whatever it crosses. Marks are **not** here: they are DOM markers,
  * since `MarkerStyle.html` is inserted verbatim and has to be keyboard-reachable.
  */
+/**
+ * Per-segment line styling, read from each feature.
+ *
+ * Data-driven rather than one layer per segment: a track with a hundred pauses would
+ * otherwise mean a hundred layers, and MapLibre's draw cost is per layer. Defaults live in
+ * the expression's fallback, so a segment the consumer said nothing about renders as the
+ * engine's neutral line.
+ */
+const LINE_PAINT = {
+  "line-color": ["coalesce", ["get", "lineColor"], "#0969da"],
+  "line-width": ["coalesce", ["get", "lineWidthPx"], 3],
+  "line-opacity": ["coalesce", ["get", "lineOpacity"], 1],
+};
+
+/** `dashed` is the one property MapLibre will not data-drive, so it gets its own layer. */
+const DASH_PATTERN: readonly [number, number] = [2, 2];
+
 export const ENGINE_LAYERS: readonly LayerSpecification[] = [
   {
     id: ENGINE_LAYER.trackLine,
     type: "line",
     source: ENGINE_SOURCE.track,
+    filter: ["!=", ["get", "lineDashed"], true],
     layout: { "line-join": "round", "line-cap": "round" },
-    paint: { "line-color": "#0969da", "line-width": 3 },
+    paint: LINE_PAINT,
+  },
+  {
+    id: ENGINE_LAYER.trackLineDashed,
+    type: "line",
+    source: ENGINE_SOURCE.track,
+    filter: ["==", ["get", "lineDashed"], true],
+    layout: { "line-join": "round", "line-cap": "round" },
+    paint: { ...LINE_PAINT, "line-dasharray": [...DASH_PATTERN] },
   },
   {
     id: ENGINE_LAYER.draftLine,

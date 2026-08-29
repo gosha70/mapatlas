@@ -728,3 +728,125 @@ test("a mark keeps the renderer's own classes across a re-render", async ({ page
   });
   expect(stillPlaced).toEqual({ position: "absolute", inside: true });
 });
+
+test("draws consumer marks and per-segment line styling on the real map", async ({ page }) => {
+  // MapLibre validates the data-driven paint expressions the presentation feeds — a `coalesce`
+  // over a missing feature property, a filter separating dashed from solid — and can report a
+  // layer error and return without adding the layer rather than throwing. So both line layers
+  // are asked for by id, and the consumer's marks are read out of the real DOM.
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, track]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.setPresentation({
+        marker: () => ({ ariaLabel: "A consumer mark" }),
+        startMarker: () => ({ ariaLabel: "Where I set off", anchor: "bottom" }),
+        finishMarker: () => null,
+        trackLine: (_t: unknown, index: number) =>
+          index === 0 ? { color: "#aa00aa", widthPx: 6 } : { dashed: true },
+      } as never);
+      probe.controller.renderTrack(track as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, TRACK] as const,
+  );
+
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
+
+  // The finish mark was suppressed by the consumer, so exactly one remains.
+  const marks = page.locator(".mapatlas-marker");
+  await expect(marks).toHaveCount(1);
+  await expect(marks.first()).toHaveAttribute("aria-label", "Where I set off");
+
+  const layers = await page.evaluate(() => ({
+    solid: window.mapatlas.probe?.hasLayer("mapatlas:track-line") ?? false,
+    dashed: window.mapatlas.probe?.hasLayer("mapatlas:track-line-dashed") ?? false,
+  }));
+  expect(layers).toEqual({ solid: true, dashed: true });
+  expect(errors).toEqual([]);
+});
+
+test("a rejected presentation leaves the real map exactly as it was", async ({ page }) => {
+  // Against the real DOM: the mark that was there is the same element afterwards, so a
+  // keyboard user holding focus on it keeps it.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, track]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.setPresentation({
+        marker: () => ({ ariaLabel: "A consumer mark" }),
+        startMarker: () => ({ ariaLabel: "Original start" }),
+        finishMarker: () => null,
+      } as never);
+      probe.controller.renderTrack(track as never);
+      // An event as well, so the callback that throws below is one that actually runs.
+      probe.controller.renderEvents([
+        { id: "e1", position: { lat: 59.33, lng: 18.06 }, occurredAt: 1, media: [], tags: [] },
+      ] as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, TRACK] as const,
+  );
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(2);
+
+  // Mark the surviving element, so a rebuild is detectable rather than merely a re-render.
+  await page.evaluate(() => {
+    document
+      .querySelector('.mapatlas-marker[aria-label="Original start"]')
+      ?.setAttribute("data-original", "yes");
+  });
+
+  const rejected = await page.evaluate(() => {
+    try {
+      window.mapatlas.probe?.controller.setPresentation({
+        // A different anchor, which would force a rebuild, then a failure.
+        startMarker: () => ({ ariaLabel: "Rebuilt", anchor: "center" }),
+        marker: () => {
+          throw new Error("consumer blew up");
+        },
+        lapMarker: () => {
+          throw new Error("consumer blew up");
+        },
+      } as never);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  });
+
+  expect(rejected).toBe("consumer blew up");
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(2);
+
+  // The same element, not a replacement: had reconciliation begun before the later callback
+  // threw, the anchor change would already have rebuilt this one and taken its focus with it.
+  const start = page.locator('.mapatlas-marker[aria-label="Original start"]');
+  await expect(start).toHaveCount(1);
+  await expect(start).toHaveAttribute("data-original", "yes");
+  await expect(start).toHaveClass(/maplibregl-marker-anchor-bottom/);
+});

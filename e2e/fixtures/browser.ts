@@ -125,6 +125,8 @@ export interface ConsoleWatch {
    * The reason is required because it is the part a later reader needs: an unexplained
    * pattern is indistinguishable from a silenced defect. `count` pins an exact number where
    * the test can rely on one; by default any number of matches will do, but at least one must.
+   * A counted declaration counts as satisfied only at exactly that number, so a test polling
+   * {@link ConsoleWatch.satisfied} waits for the whole chain rather than its first link.
    */
   expect(pattern: RegExp, reason: string, count?: number): void;
   /** Everything wrong with what reached the console: undeclared errors, and absent ones. */
@@ -185,7 +187,14 @@ export function watchConsole(page: Page): ConsoleWatch {
     expect: (pattern, reason, count) => {
       declarations.push({ pattern, reason, count: count ?? null, matched: 0 });
     },
-    satisfied: () => declarations.every((entry) => entry.matched > 0),
+    // Against the count each declaration actually asked for. Treating a counted expectation
+    // as satisfied by its first match would let a polling test stop in the middle of the
+    // chain it is waiting on, and whether the rest arrived before teardown would decide the
+    // result — a test that passes or fails on timing rather than on behaviour.
+    satisfied: () =>
+      declarations.every((entry) =>
+        entry.count === null ? entry.matched > 0 : entry.matched === entry.count,
+      ),
     problems: () => {
       const problems = undeclared.map((line) => `unexpected console error: ${line}`);
       for (const { pattern, reason, count, matched } of declarations) {

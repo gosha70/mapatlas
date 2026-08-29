@@ -125,20 +125,33 @@ export interface ConsoleWatch {
    * The reason is required because it is the part a later reader needs: an unexplained
    * pattern is indistinguishable from a silenced defect. `count` pins an exact number where
    * the test can rely on one; by default any number of matches will do, but at least one must.
-   * A counted declaration counts as satisfied only at exactly that number, so a test polling
-   * {@link ConsoleWatch.satisfied} waits for the whole chain rather than its first link.
+   * A count is judged exactly by {@link ConsoleWatch.problems}; {@link ConsoleWatch.settled}
+   * merely stops waiting once it is reached, so a test polling on it waits for the whole
+   * chain rather than its first link.
    */
   expect(pattern: RegExp, reason: string, count?: number): void;
   /** Everything wrong with what reached the console: undeclared errors, and absent ones. */
   problems(): string[];
   /**
-   * Whether every declared error has arrived.
+   * Whether waiting any longer could still help.
    *
-   * For polling. An expected error is usually the *end* of an asynchronous chain — a fetch,
-   * a parse, a rejection — so a test that declares one has to wait for it, or it ends before
-   * the thing it is claiming has happened and the declaration proves nothing.
+   * For polling, and deliberately **not** the same question as {@link ConsoleWatch.problems}.
+   * An expected error is usually the *end* of an asynchronous chain — a fetch, a parse, a
+   * rejection — so a test that declares one has to wait for it, or it ends before the thing
+   * it claims has happened.
+   *
+   * A counted declaration settles at `>= count`, not at `== count`. Equality looks stricter
+   * and is worse: a count that grows towards a final value passes *through* its expected
+   * number, so a poll sampling at the wrong moment sees equality hold transiently and lets
+   * the test proceed on a premise that is about to stop being true. And past the count,
+   * equality never holds again, so the poll runs to a timeout that says "still waiting"
+   * about something that already overshot.
+   *
+   * So settling ends the wait and `problems()` judges the outcome. Overshoot is settled *and*
+   * a problem — which is the point: the wait stops, and the failure says what actually
+   * happened.
    */
-  satisfied(): boolean;
+  settled(): boolean;
 }
 
 interface Declaration {
@@ -187,13 +200,11 @@ export function watchConsole(page: Page): ConsoleWatch {
     expect: (pattern, reason, count) => {
       declarations.push({ pattern, reason, count: count ?? null, matched: 0 });
     },
-    // Against the count each declaration actually asked for. Treating a counted expectation
-    // as satisfied by its first match would let a polling test stop in the middle of the
-    // chain it is waiting on, and whether the rest arrived before teardown would decide the
-    // result — a test that passes or fails on timing rather than on behaviour.
-    satisfied: () =>
+    // `>=`, so overshoot ends the wait rather than extending it to a timeout. Judging the
+    // count is `problems()`'s job; this one only answers whether waiting could still help.
+    settled: () =>
       declarations.every((entry) =>
-        entry.count === null ? entry.matched > 0 : entry.matched === entry.count,
+        entry.count === null ? entry.matched > 0 : entry.matched >= entry.count,
       ),
     problems: () => {
       const problems = undeclared.map((line) => `unexpected console error: ${line}`);

@@ -244,7 +244,7 @@ test("registers the real PMTiles protocol on the real MapLibre runtime", async (
   // synchronously; reading the archive is the end of an asynchronous chain that finishes
   // after it. Ending here would leave the reachability claim unproven — which is precisely
   // what it did until the declaration was made to require its error rather than tolerate it.
-  await expect.poll(() => console_.satisfied()).toBe(true);
+  await expect.poll(() => console_.settled()).toBe(true);
 });
 
 test("registers nothing for a stack with no PMTiles source", async ({ page }) => {

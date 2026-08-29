@@ -43,6 +43,13 @@ export type MapCall =
 
 export class FakeMapError extends Error {}
 
+/**
+ * How far a gesture may travel and still produce a click.
+ *
+ * MapLibre's own threshold: past it the gesture is a drag and no `click` is dispatched.
+ */
+const CLICK_TOLERANCE_PX = 3;
+
 export interface FakeMap extends MapLike {
   /** Every call in the order it arrived. */
   readonly calls: readonly MapCall[];
@@ -111,6 +118,9 @@ export function createFakeMap(
   const queriedPoints: { x: number; y: number }[] = [];
   const dragPanChanges: boolean[] = [];
   let dragPanEnabled = true;
+  /** Where the pointer went down, and how far it has travelled since. */
+  let gestureStart: { x: number; y: number } | null = null;
+  let gestureTravel = 0;
   // A style document may declare terrain, and MapLibre applies it without the controller
   // asking. Starting from the style rather than from `null` is what lets a test show that
   // the controller owns terrain it did not itself set.
@@ -178,6 +188,33 @@ export function createFakeMap(
       type: MapEventName,
       at: { x: number; y: number; lng: number; lat: number } = { x: 0, y: 0, lng: 0, lat: 0 },
     ): boolean {
+      // MapLibre suppresses `click` once a gesture passes its movement tolerance, so a
+      // completed drag is followed by no click at all. A fake that let a test fire one anyway
+      // would hide the bug where a gesture kept past that point swallows the next unrelated
+      // click — which is exactly the bug it did hide.
+      if (type === "mousedown" || type === "touchstart") {
+        gestureStart = { x: at.x, y: at.y };
+        gestureTravel = 0;
+      }
+      if (gestureStart !== null && (type === "mousemove" || type === "touchmove")) {
+        gestureTravel = Math.max(
+          gestureTravel,
+          Math.hypot(at.x - gestureStart.x, at.y - gestureStart.y),
+        );
+      }
+      if (type === "click" && gestureTravel > CLICK_TOLERANCE_PX) {
+        throw new FakeMapError(
+          `the renderer would not fire "click" after a gesture that travelled ` +
+            `${gestureTravel.toFixed(1)}px — its tolerance is ${String(CLICK_TOLERANCE_PX)}px`,
+        );
+      }
+      if (type === "click" || type === "mouseup" || type === "touchend") {
+        if (type === "click") {
+          gestureStart = null;
+          gestureTravel = 0;
+        }
+      }
+
       let prevented = false;
       const event: MapPointerEvent = {
         point: { x: at.x, y: at.y },

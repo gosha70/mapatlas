@@ -570,47 +570,51 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   marks and their `ariaLabel`s; with no presentation supplied, neutral defaults render and no
   consumer branding appears; a presentation whose `marker()` throws changes nothing.
 - **T4.5 Draw/edit mode.** `enterDrawMode` with add/move/click vertex handlers and draggable
-  vertices, over the draft geometry T4.3 already renders. Needs its own deterministic event
-  seam — pointer events, vertex hit-testing and drag are what make this a separate task rather
-  than an appendix to the render surface — plus one real-browser drag.
+  vertices, over the draft geometry T4.3 already renders, plus one real-browser drag. Its own
+  deterministic event seam — pointer events, vertex hit-testing and drag are what make this a
+  separate task rather than an appendix to the render surface. No drawing library: the
+  interaction is small and the engine already owns the geometry.
 
   **`exit()` owns interaction state only.** It removes the permanent and in-flight listeners and
   restores the map's pan behaviour to what it found. It does **not** remove the draft source or
-  layers, and does not clear their data: `renderDraft(null)` stays the only way to clear
-  geometry, and a consumer may want the line they authored to remain after they stop editing it.
-  This supersedes the original acceptance wording, which predates T4.3's decision to make engine
-  layers persistent so their ordering could not drift.
+  layers, and does not clear their data — `renderDraft(null)` alone clears persistent geometry.
+  This supersedes the original wording, which predates T4.3's decision to make engine layers
+  persistent so their ordering could not drift.
 
   The down event calls `preventDefault()` **before** anything else — the renderer decides at
   gesture start whether it owns the pointer, so disabling `dragPan` inside the callback can
   already be too late. Panning is restored to its **entry state**, not enabled, since a consumer
-  may have disabled it themselves. Every termination path releases the drag: `mouseup`/`touchend`
-  finish it and keep the gesture for the click that follows, while `mouseout`/`touchcancel` take
-  it away and forget it, since no click follows and a remembered gesture would swallow the next.
+  may have disabled it themselves.
+
+  **A stale gesture is discarded by the next press, not at the end of its own.** Whether a click
+  follows a gesture is the renderer's decision, made against a movement tolerance that is not
+  ours to know: it sends one for a press that stayed within it and none for a press that passed
+  it. So the end of a gesture releases the drag and keeps the gesture, and the two things that
+  can happen to it both do the right thing — a click consumes it, and the next press discards
+  it. Clearing at the end instead lets a press that drifted two pixels off a vertex fall through
+  to the hit test and be taken as an instruction to add one; never clearing lets a completed
+  drag's gesture be consumed by the user's next unrelated tap, which then does nothing at all,
+  once per drag. `mouseout`/`touchcancel` clear immediately, since a cancelled gesture is
+  followed by nothing.
 
   A consumer callback that throws cancels **only the active drag** — panning back, temporary
-  listeners detached, the session still live for another attempt — and rethrows. `exit()` and
-  `destroy()` use the same cleanup path. One session at a time: a second `enterDrawMode` is
-  refused rather than leaving two claims on `dragPan` that nobody could reason about. `exit()` is
-  idempotent, and a drag never also reports a vertex click or a vertex add.
+  listeners detached, gesture cleared, the session still live for another attempt — and
+  rethrows. `exit()` and `destroy()` use the same cleanup path. One session at a time: a second
+  `enterDrawMode` is refused rather than leaving two claims on `dragPan` nobody could reason
+  about. `exit()` is idempotent, and a drag never also reports a vertex click or a vertex add.
 
-  _AC:_ every rule above, mutation-tested. **The real-browser drag is blocked**: it needs to
-  hit-test a rendered layer, and nothing paints in the browser lane — see the note below. It is
-  present as a declared-pending test so the requirement stays visible.
+  _AC:_ every rule above, mutation-tested; and a **real-browser drag** proving the vertex moved,
+  the camera did not, and panning was restored — the camera observed through a mark anchored to
+  a coordinate rather than by widening the seam to read it.
 
-  **Lane defect found here, predating this task.** A raw MapLibre map built with no engine code
-  and one inline GeoJSON source reaches `sourcedata` and `styledata` but never `load` or `idle`,
-  reports `loaded()` and `isSourceLoaded()` false, and emits no `error`;
-  `queryRenderedFeatures` returns nothing for it or for the engine's layers; a screenshot of
-  either is blank, with a deliberately magenta 12px line absent from every sampled pixel. WebGL
-  is present and working (SwiftShader via ANGLE) and the canvas is sized. So **every browser
-  assertion made so far is about the DOM and MapLibre's style state** — marks, attribution,
-  classes, layer presence, terrain — all true, all worth having, and none of them painting.
-  Fixing that is its own task; until then the lane cannot answer "is it drawn". A third-party drawing library may back this **only** if it is first
-  verified against the exact pinned `maplibre-gl` version; the `TrackDraft` contract stays
-  independent of it either way, so a failed spike costs only `@mapatlas/maplibre`.
-  _AC:_ tapping appends a vertex, dragging moves one, the exit fn removes every listener and the
-  draft layer; no drawing library appears in `@mapatlas/core`'s dependency tree.
+  **Consumers must call `setWorkerUrl`.** MapLibre loads its worker as a separate module
+  resolved relative to the importing chunk, so a bundler that rewrites imports resolves it
+  beside the rewritten chunk and the request 404s. Nothing errors: the map is constructed, the
+  style parses, sources emit `sourcedata`, and nothing is ever painted. Found here because the
+  browser lane had never verified that anything renders — every assertion before this task was
+  about the DOM and MapLibre's style state. The harness now sets it, and the lane paints;
+  documented in `api.md` and the package README as the consumer requirement it is.
+
 - **T4.6 Vertical acceptance fixture.** **Blocked on ADR-0024** (demo map data and hosting):
   the fixture is the first artifact a human opens, and `PRD.md §6` requires it to work offline,
   which needs a source the project is entitled to copy bytes from. Two additions beyond the

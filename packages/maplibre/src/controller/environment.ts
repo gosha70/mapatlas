@@ -83,8 +83,14 @@ export interface DragPanLike {
 }
 
 export interface MapLike {
-  on(type: MapEventName, listener: (event: MapPointerEvent) => void): void;
-  off(type: MapEventName, listener: (event: MapPointerEvent) => void): void;
+  // Overloaded rather than one signature taking a pointer event, because `load` carries none.
+  // A single signature typechecks only because a zero-argument function is assignable to it,
+  // and then something has to cast to call the listener back — a seam quietly saying that
+  // every listener receives an event when one of them never does.
+  on(type: "load", listener: () => void): void;
+  on(type: MapPointerEventName, listener: (event: MapPointerEvent) => void): void;
+  off(type: "load", listener: () => void): void;
+  off(type: MapPointerEventName, listener: (event: MapPointerEvent) => void): void;
   /** What is drawn at a point, restricted to the layers asked about. */
   queryRenderedFeatures(
     point: { x: number; y: number },
@@ -185,6 +191,20 @@ export interface MapEnvironment {
    * on a map. A `MapLike` that could build markers would be two things at once.
    */
   createMarker(element: HTMLElement, options: MarkerOptions): MarkerHandle;
+  /**
+   * A pointer release anywhere in the document, and a function to stop listening.
+   *
+   * The map cannot answer this. Its `mouseup` fires only for a release over the container, so
+   * a drag that ends a pixel outside it — an ordinary thing to do near a map's edge — never
+   * ends, and the pan behaviour the drag borrowed is never given back.
+   *
+   * The map's `mouseout` looks like the answer and is not: it bubbles, so it fires when the
+   * pointer crosses a marker *inside* the map, cancelling a drag mid-gesture and re-enabling
+   * panning while the button is still down — the rest of the gesture then pans the map.
+   * Measured, not reasoned: dragging a vertex across a mark 75px away restored panning at that
+   * exact point and dropped the remaining half of the moves.
+   */
+  onPointerRelease(listener: () => void): () => void;
   /**
    * Where engine-owned marker elements come from.
    *

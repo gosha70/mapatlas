@@ -1152,8 +1152,18 @@ test("drags a real vertex without panning the map, then gives panning back", asy
   // The vertex moved...
   expect(after.log?.moved.length ?? 0).toBeGreaterThan(0);
   expect(after.log?.moved.at(-1)?.[0]).toBe(0);
-  // ...the map did not, or the reference mark would have moved with it...
-  expect(after.reference).toEqual(start?.reference);
+  // ...the map did not, or the reference mark would have moved with it. Polled, not read
+  // once: a marker's transform updates on the renderer's next frame, so reading the rect
+  // immediately after the release can find it unmoved because nothing has repainted yet —
+  // the assertion carrying this test's whole value passing for the wrong reason.
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const r = document.querySelector(".mapatlas-marker")?.getBoundingClientRect();
+        return r === undefined ? null : { x: Math.round(r.left), y: Math.round(r.top) };
+      }),
+    )
+    .toEqual(start?.reference);
   // ...a drag was not also a click or an add...
   expect(after.log?.clicked).toEqual([]);
   expect(after.log?.added).toEqual([]);
@@ -1170,9 +1180,90 @@ test("drags a real vertex without panning the map, then gives panning back", asy
   await page.mouse.move(start!.vertex.x - 90, start!.vertex.y + 150, { steps: 8 });
   await page.mouse.up();
 
-  const panned = await page.evaluate(() => {
-    const reference = document.querySelector(".mapatlas-marker")?.getBoundingClientRect();
-    return reference === undefined ? null : { x: Math.round(reference.left) };
+  // Polled for the same reason, in reverse: reading before the pan paints would report the
+  // old position and fail intermittently.
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const r = document.querySelector(".mapatlas-marker")?.getBoundingClientRect();
+        return r === undefined ? null : Math.round(r.left);
+      }),
+    )
+    .not.toBe(start?.reference.x);
+});
+
+test("a drag survives the pointer crossing a mark inside the map", async ({ page }) => {
+  // `mouseout` bubbles, so it fires when the pointer passes over a marker *inside* the map.
+  // Treating that as a cancellation re-enables panning while the button is still down, and
+  // the rest of the gesture pans the map under the vertex being dragged. Only a real gesture
+  // over a real marker settles whether that happens.
+  await page.goto("/");
+
+  const CENTRE = { lat: 59.33, lng: 18.06 };
+
+  await page.evaluate(
+    ([raster, attribution, centre]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        center: centre,
+        zoom: 14,
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      } as never);
+      window.mapatlas.probe = probe;
+      probe.controller.renderDraft([
+        centre as { lat: number; lng: number },
+        { lat: 59.332, lng: 18.064 },
+      ]);
+      // Directly in the drag path, about 75px east of the vertex at this zoom.
+      probe.controller.renderEvents([
+        {
+          id: "in-the-way",
+          position: { lat: 59.33, lng: 18.0632 },
+          occurredAt: 1,
+          media: [],
+          tags: [],
+        },
+      ] as never);
+      window.mapatlas.drawLog = { moved: [], added: [], clicked: [] };
+      window.mapatlas.exitDraw = probe.controller.enterDrawMode({
+        onVertexAdd: (at) => window.mapatlas.drawLog?.added.push(at),
+        onVertexMove: (index, to) => window.mapatlas.drawLog?.moved.push([index, to]),
+      });
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, CENTRE] as const,
+  );
+
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(1);
+  await expect
+    .poll(async () => page.evaluate(() => window.mapatlas.probe?.vertexIsRendered() ?? false))
+    .toBe(true);
+
+  const from = await page.evaluate(() => {
+    const c = document.querySelector(".maplibregl-map")?.getBoundingClientRect();
+    return c === undefined ? null : { x: c.left + c.width / 2, y: c.top + c.height / 2 };
   });
-  expect(panned?.x).not.toBe(start?.reference.x);
+  expect(from).not.toBeNull();
+
+  await page.mouse.move(from!.x, from!.y);
+  await page.mouse.down();
+  const panDuring: boolean[] = [];
+  for (let step = 1; step <= 10; step += 1) {
+    await page.mouse.move(from!.x + step * 12, from!.y);
+    panDuring.push(await page.evaluate(() => window.mapatlas.probe?.dragPanEnabled() ?? true));
+  }
+  await page.mouse.up();
+
+  // Panning stayed borrowed for the whole gesture, including the frames over the mark...
+  expect(panDuring).toEqual(Array.from({ length: 10 }, () => false));
+  // ...and every move was reported, rather than half of them being lost to a cancellation.
+  expect(await page.evaluate(() => window.mapatlas.drawLog?.moved.length ?? 0)).toBe(10);
+  expect(await page.evaluate(() => window.mapatlas.probe?.dragPanEnabled() ?? false)).toBe(true);
 });

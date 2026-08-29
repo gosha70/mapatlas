@@ -2145,21 +2145,23 @@ describe("draw mode borrows interaction and gives it back", () => {
     expect(rig.map.listenerCount("mousemove")).toBe(0);
   });
 
-  it("forgets a cancelled gesture, so it cannot swallow the next click", () => {
+  it("cannot be given a click after a cancelled touch, because the renderer sends none", () => {
+    // The mirror of the press rule above, and the reason a cancelled gesture needs no
+    // clearing: `touchcancel` means the platform stopped tracking the sequence, so no click
+    // is dispatched for it and there is nothing left for a stale gesture to swallow. This
+    // test used to fire `mouseout` and then a whole tap — but `mouseout` is deliberately not
+    // a cancellation, and the tap's own press discards the gesture on the way in, so it
+    // passed without either half doing anything. Cleanup on cancel is covered where the
+    // gesture endings are enumerated; what is left to pin is the renderer's rule.
     const { controller, harness: rig } = mount({ sources: [OSM] });
     rig.map.fireLoad();
-    const h = handlers();
-    controller.enterDrawMode(h);
+    controller.enterDrawMode(handlers());
 
     vertexUnderPointer(rig, 0);
-    rig.map.firePointer("mousedown", AT);
-    rig.map.firePointer("mouseout", AT);
+    rig.map.firePointer("touchstart", AT);
+    rig.map.firePointer("touchcancel", AT);
 
-    // A later, unrelated tap on empty map still adds.
-    vertexUnderPointer(rig, null);
-    tap(rig, ELSEWHERE);
-
-    expect(h.added).toEqual([{ lat: 59.36, lng: 18.09 }]);
+    expect(() => rig.map.firePointer("click", AT)).toThrow(/without a preceding press/);
   });
 });
 

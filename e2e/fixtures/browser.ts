@@ -128,10 +128,22 @@ export interface ConsoleWatch {
    * A count is judged exactly by {@link ConsoleWatch.problems}; {@link ConsoleWatch.settled}
    * merely stops waiting once it is reached, so a test polling on it waits for the whole
    * chain rather than its first link.
+   *
+   * Throws on a pattern this watch cannot use reliably, and on a count below one — see
+   * {@link watchConsole}.
    */
   expect(pattern: RegExp, reason: string, count?: number): void;
   /** Everything wrong with what reached the console: undeclared errors, and absent ones. */
   problems(): string[];
+  /**
+   * How many errors have been recorded, whatever became of them.
+   *
+   * For the watch's own tests. Console messages arrive over a different channel from an
+   * `evaluate` response, so their ordering relative to it is conventional rather than
+   * guaranteed; a test that emits errors and reads the result immediately is asserting
+   * against delivery timing. Polling this to the number emitted removes that.
+   */
+  seen(): number;
   /**
    * Whether waiting any longer could still help.
    *
@@ -161,6 +173,12 @@ interface Declaration {
   matched: number;
 }
 
+/** One error, and which declaration absorbed it — so a later report can explain a zero. */
+interface Record_ {
+  readonly line: string;
+  readonly absorbedBy: Declaration | null;
+}
+
 /**
  * The watch belonging to a page.
  *
@@ -177,16 +195,23 @@ export function consoleFor(page: Page): ConsoleWatch {
   return watch;
 }
 
+/**
+ * Build the watch for a page.
+ *
+ * Two things are rejected at declaration time rather than coped with at report time, because
+ * a guard that quietly does the wrong thing is the failure mode this whole file exists to
+ * prevent — and it applies to what the guard is *handed*, not only to what reaches it.
+ */
 export function watchConsole(page: Page): ConsoleWatch {
-  const undeclared: string[] = [];
+  const records: Record_[] = [];
   const declarations: Declaration[] = [];
 
   function record(line: string): void {
     // Against the declarations standing at the time the error arrived, so a declaration made
     // after the fact cannot retroactively excuse something already seen.
-    const declaration = declarations.find((entry) => entry.pattern.test(line));
-    if (declaration === undefined) undeclared.push(line);
-    else declaration.matched += 1;
+    const declaration = declarations.find((entry) => entry.pattern.test(line)) ?? null;
+    if (declaration !== null) declaration.matched += 1;
+    records.push({ line, absorbedBy: declaration });
   }
 
   page.on("console", (message) => {
@@ -198,8 +223,28 @@ export function watchConsole(page: Page): ConsoleWatch {
 
   const watch: ConsoleWatch = {
     expect: (pattern, reason, count) => {
+      if (pattern.global || pattern.sticky) {
+        // `test()` on a `g` or `y` pattern advances `lastIndex`, so the same pattern matches,
+        // then misses, then matches. A counted declaration would settle on whichever way the
+        // stride happened to fall. Nothing here uses one today, which is exactly why one
+        // would be added later without anyone thinking about it.
+        throw new Error(
+          `console watch: ${String(pattern)} is global or sticky, and \`test\` on one advances ` +
+            `lastIndex — matches would alternate. Declare it without the g or y flag.`,
+        );
+      }
+      if (count !== undefined && count < 1) {
+        // "Match this and expect none of it" is a suppression wearing a count, and not what
+        // the parameter is for: an undeclared error is already a failure, so nothing needs
+        // declaring in order to be forbidden.
+        throw new Error(
+          `console watch: a count of ${String(count)} declares an error that must not happen, ` +
+            `which is what *not* declaring it already does. Use a count of one or more.`,
+        );
+      }
       declarations.push({ pattern, reason, count: count ?? null, matched: 0 });
     },
+    seen: () => records.length,
     // `>=`, so overshoot ends the wait rather than extending it to a timeout. Judging the
     // count is `problems()`'s job; this one only answers whether waiting could still help.
     settled: () =>
@@ -207,12 +252,31 @@ export function watchConsole(page: Page): ConsoleWatch {
         entry.count === null ? entry.matched > 0 : entry.matched >= entry.count,
       ),
     problems: () => {
-      const problems = undeclared.map((line) => `unexpected console error: ${line}`);
-      for (const { pattern, reason, count, matched } of declarations) {
+      const problems = records
+        .filter((entry) => entry.absorbedBy === null)
+        .map((entry) => `unexpected console error: ${entry.line}`);
+
+      for (const declaration of declarations) {
+        const { pattern, reason, count, matched } = declaration;
         if (matched === 0) {
+          // Why it matched nothing matters more than that it did. An earlier declaration
+          // whose pattern also covers these lines took them first, so the subject ran fine
+          // and the report would otherwise accuse it of not running — the exact
+          // misdiagnosis this file exists to prevent, reachable with two declarations.
+          const shadow = records.find(
+            (entry) =>
+              entry.absorbedBy !== null &&
+              entry.absorbedBy !== declaration &&
+              pattern.test(entry.line),
+          );
           problems.push(
-            `expected a console error matching ${String(pattern)} (${reason}) — none arrived, ` +
-              `so whatever was supposed to produce it did not run`,
+            shadow === undefined
+              ? `expected a console error matching ${String(pattern)} (${reason}) — none ` +
+                  `arrived, so whatever was supposed to produce it did not run`
+              : `expected a console error matching ${String(pattern)} (${reason}) — it matched ` +
+                  `nothing because ${String(shadow.absorbedBy?.pattern)} was declared first and ` +
+                  `absorbed "${shadow.line}". Declarations are first-match-wins; narrow the ` +
+                  `earlier one or declare this one before it.`,
           );
         } else if (count !== null && matched !== count) {
           problems.push(

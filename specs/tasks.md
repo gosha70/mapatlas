@@ -495,6 +495,14 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   release the browser lane has never run — and without the check, reintroducing one passes
   every other gate, which is precisely how it got in.
 
+  The watch validates what it is *handed*, not only what reaches it: a global or sticky pattern
+  is refused, because `test()` on one advances `lastIndex` and matches would alternate; a count
+  below one is refused, because "match this and expect none" is a suppression wearing a count
+  and an undeclared error already fails. Declarations are first-match-wins, so a declaration
+  that matched nothing while a broader one absorbed its lines is reported as **shadowed**
+  rather than as the subject having failed to run — that misdiagnosis is reachable with two
+  declarations in one test, and it is the exact failure this file exists to prevent.
+
   A residual imprecision, recorded rather than left implicit: `settled()` polls a count that
   grows, so a sample taken while a chain is mid-flight can end a wait early. The bound on that is
   a signal saying rendering has finished — an idle or render-complete event — reaching

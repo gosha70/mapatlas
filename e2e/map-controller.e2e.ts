@@ -1012,3 +1012,30 @@ test("leaves an icon at its intrinsic size when nothing sized the mark", async (
 
   expect(boxes?.image).toEqual({ width: 200, height: 100 });
 });
+
+/**
+ * The real-browser drag T4.5 asks for, and cannot yet run.
+ *
+ * Dragging a vertex requires hit-testing a *rendered* layer, and **nothing renders in this
+ * lane**. Established by elimination rather than inference:
+ *
+ *   - a raw MapLibre map, built with no engine code and one inline GeoJSON source, reaches
+ *     `sourcedata` and `styledata` but never `load` or `idle`, reports `loaded() === false`
+ *     and `isSourceLoaded() === false`, and emits no `error`;
+ *   - `queryRenderedFeatures` returns nothing, for that map and for the engine's own layers;
+ *   - a screenshot of either is blank — a deliberately magenta 12px line does not appear in
+ *     a single sampled pixel;
+ *   - WebGL is present and working (SwiftShader via ANGLE), and the canvas is sized 800x600.
+ *
+ * So every browser assertion made so far is about the DOM and MapLibre's **style state** —
+ * marks, attribution, classes, layer presence, terrain — all of which are true and worth
+ * having, and none of which touch painting. That is a gap in the lane, not in this task, and
+ * it predates it.
+ *
+ * Left as a failing-by-declaration test rather than deleted, so the requirement stays visible
+ * and re-enables the moment the lane paints. The interaction itself is covered
+ * deterministically in `controller.test.ts`, where the fake drives every gesture path.
+ */
+test.fixme("drags a real vertex without panning the map, then gives panning back", () => {
+  // Re-enable with the body from this branch's history once the browser lane renders.
+});

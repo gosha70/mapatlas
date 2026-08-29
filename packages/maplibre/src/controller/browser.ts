@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Map as MapLibreMap, Marker, addProtocol } from "maplibre-gl";
-import type { GeoJSONSource, LayerSpecification, StyleSpecification } from "maplibre-gl";
+import type {
+  GeoJSONSource,
+  LayerSpecification,
+  MapMouseEvent,
+  StyleSpecification,
+} from "maplibre-gl";
 import { Protocol } from "pmtiles";
 
 import type { EngineFeatureCollection } from "./engine-layers.js";
@@ -40,12 +45,19 @@ const backing = new WeakMap<MapLike, MapLibreMap>();
 
 function adapt(map: MapLibreMap): MapLike {
   const adapter: MapLike = {
+    // MapLibre's own event union is far wider than the seam, and its listener types are
+    // invariant across it, so the bridge casts once here rather than at every call site.
     on: (type, listener) => {
-      map.on(type, listener);
+      map.on(type as "click", listener as unknown as (event: MapMouseEvent) => void);
     },
     off: (type, listener) => {
-      map.off(type, listener);
+      map.off(type as "click", listener as unknown as (event: MapMouseEvent) => void);
     },
+    queryRenderedFeatures: (point, layerIds) =>
+      map
+        .queryRenderedFeatures([point.x, point.y], { layers: [...layerIds] })
+        .map((feature) => ({ properties: feature.properties })),
+    dragPan: map.dragPan,
     addSource: (id, source) => {
       map.addSource(id, source);
     },

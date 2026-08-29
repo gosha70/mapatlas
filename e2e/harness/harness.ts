@@ -69,6 +69,14 @@ declare global {
       probe?: MountedProbe;
       /** Set by the bare-MapLibre scenario. */
       rawMap?: { getTerrain(): unknown };
+      /** What a draw-mode scenario's handlers recorded. */
+      drawLog?: {
+        moved: [number, { lat: number; lng: number }][];
+        added: { lat: number; lng: number }[];
+        clicked: number[];
+      };
+      /** The draw-mode exit function, so a test can release interaction. */
+      exitDraw?: () => void;
       /** The controller under test, so a later `page.evaluate` can drive it. */
       controller?: ReturnType<typeof createMapController>;
       /** Set by a running scenario, read by the test. */
@@ -90,12 +98,15 @@ function mapContainer(): HTMLElement {
 interface MapProbe {
   getTerrain(): unknown;
   getLayer(id: string): unknown;
+  dragPan: { isEnabled(): boolean };
 }
 
 interface MountedProbe {
   controller: MapControllerCore;
   getTerrain(): unknown;
   hasLayer(id: string): boolean;
+  /** Whether the map will pan again, which draw mode borrows and must give back. */
+  dragPanEnabled(): boolean;
 }
 
 function mountWithProbe(options: MapControllerOptions): MountedProbe {
@@ -113,6 +124,11 @@ function mountWithProbe(options: MapControllerOptions): MountedProbe {
     controller,
     getTerrain: () => map?.getTerrain() ?? null,
     hasLayer: (id: string) => map?.getLayer(id) !== undefined,
+    // `dragPan` is on the controller's own seam, so this needs nothing the engine does not
+    // already publish. The camera deliberately is *not*: reading it would mean widening
+    // `MapLike` for a test, and a mark anchored to a coordinate is a better observable
+    // anyway — it is what a user would see move.
+    dragPanEnabled: () => map?.dragPan.isEnabled() ?? false,
   };
 }
 

@@ -3,7 +3,15 @@
 import type { LayerSpecification, SourceSpecification, TerrainSpecification } from "maplibre-gl";
 
 import type { EngineFeatureCollection } from "./engine-layers.js";
-import type { MapConstructorOptions, MapLike, MarkerHandle, MarkerOptions } from "./environment.js";
+import type {
+  MapConstructorOptions,
+  MapEventName,
+  MapLike,
+  MapPointerEvent,
+  MarkerHandle,
+  MarkerOptions,
+  RenderedFeature,
+} from "./environment.js";
 
 /**
  * A MapLibre stand-in that **enforces MapLibre's rules** rather than merely recording calls.
@@ -51,6 +59,18 @@ export interface FakeMap extends MapLike {
   readonly options: MapConstructorOptions;
   readonly loadListenerCount: number;
   fireLoad(): void;
+
+  /** Listener counts by event, so a test can prove every one was detached. */
+  listenerCount(type?: MapEventName): number;
+  /** What a hit test finds; a test sets what is under the pointer. */
+  featuresUnderPointer: RenderedFeature[];
+  /** Points the map was asked about, so a test can check *where* it looked. */
+  readonly queriedPoints: readonly { x: number; y: number }[];
+  /** Drive a gesture. Returns whether a listener called `preventDefault`. */
+  firePointer(type: MapEventName, at?: { x: number; y: number; lng: number; lat: number }): boolean;
+  /** Whether panning is currently enabled, and how many times it changed. */
+  readonly dragPanEnabled: boolean;
+  readonly dragPanChanges: readonly boolean[];
 }
 
 /** Terrain declared by a base style document, if any. */
@@ -87,7 +107,10 @@ export function createFakeMap(
   const sourceData = new Map<string, EngineFeatureCollection>();
   /** Layer ids in draw order, which `beforeId` inserts into rather than appends to. */
   let order: string[] = (preinstalled.layers ?? []).map((layer) => layer.id);
-  let loadListeners: (() => void)[] = [];
+  const listeners = new Map<MapEventName, ((event: MapPointerEvent) => void)[]>();
+  const queriedPoints: { x: number; y: number }[] = [];
+  const dragPanChanges: boolean[] = [];
+  let dragPanEnabled = true;
   // A style document may declare terrain, and MapLibre applies it without the controller
   // asking. Starting from the style rather than from `null` is what lets a test show that
   // the controller owns terrain it did not itself set.
@@ -119,17 +142,71 @@ export function createFakeMap(
       return terrain;
     },
     get loadListenerCount() {
-      return loadListeners.length;
+      return (listeners.get("load") ?? []).length;
+    },
+    listenerCount(type?: MapEventName) {
+      if (type !== undefined) return (listeners.get(type) ?? []).length;
+      return [...listeners.values()].reduce((total, group) => total + group.length, 0);
+    },
+    featuresUnderPointer: [],
+    get queriedPoints() {
+      return queriedPoints;
+    },
+    get dragPanEnabled() {
+      return dragPanEnabled;
+    },
+    get dragPanChanges() {
+      return dragPanChanges;
     },
 
-    on(_type: "load", listener: () => void): void {
-      loadListeners.push(listener);
+    on(type: MapEventName, listener: (event: MapPointerEvent) => void): void {
+      listeners.set(type, [...(listeners.get(type) ?? []), listener]);
     },
-    off(_type: "load", listener: () => void): void {
-      loadListeners = loadListeners.filter((registered) => registered !== listener);
+    off(type: MapEventName, listener: (event: MapPointerEvent) => void): void {
+      listeners.set(
+        type,
+        (listeners.get(type) ?? []).filter((registered) => registered !== listener),
+      );
     },
     fireLoad(): void {
-      for (const listener of [...loadListeners]) listener();
+      for (const listener of [...(listeners.get("load") ?? [])]) {
+        (listener as unknown as () => void)();
+      }
+    },
+
+    firePointer(
+      type: MapEventName,
+      at: { x: number; y: number; lng: number; lat: number } = { x: 0, y: 0, lng: 0, lat: 0 },
+    ): boolean {
+      let prevented = false;
+      const event: MapPointerEvent = {
+        point: { x: at.x, y: at.y },
+        lngLat: { lng: at.lng, lat: at.lat },
+        preventDefault: () => {
+          prevented = true;
+        },
+      };
+      for (const listener of [...(listeners.get(type) ?? [])]) listener(event);
+      return prevented;
+    },
+
+    queryRenderedFeatures(point: { x: number; y: number }): readonly RenderedFeature[] {
+      queriedPoints.push(point);
+      return this.featuresUnderPointer;
+    },
+
+    dragPan: {
+      enable(): void {
+        dragPanEnabled = true;
+        dragPanChanges.push(true);
+      },
+      disable(): void {
+        dragPanEnabled = false;
+        dragPanChanges.push(false);
+      },
+      isEnabled(): boolean {
+        return dragPanEnabled;
+      },
     },
 
     addSource(id: string, source: SourceSpecification): void {

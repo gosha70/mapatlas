@@ -26,6 +26,8 @@ import type { EventPresentation, TrackLineStyle } from "../marks/presentation.js
 import { snapshotLineStyle, snapshotMarkerStyle } from "../marks/presentation.js";
 import type { MarkerStyle } from "../marks/marker-style.js";
 import { builtInMark } from "../marks/marker-style.js";
+import type { DrawModeHandlers, DrawSession } from "./draw-mode.js";
+import { MapDrawModeError, startDrawMode } from "./draw-mode.js";
 import type { EngineFeature, EngineFeatureCollection } from "./engine-layers.js";
 import {
   ENGINE_ID_PREFIX,
@@ -489,6 +491,8 @@ export interface MapControllerCore {
   fitTrack(track: Track): void;
   fitBounds(bbox: BBox, paddingPx?: number): void;
   recenter(to: LatLng, zoom?: number): void;
+  /** Enter vertex-editing interaction; the returned fn exits it, and is idempotent. */
+  enterDrawMode(handlers: DrawModeHandlers): () => void;
   destroy(): void;
 }
 
@@ -563,6 +567,14 @@ export function createMapControllerInternal(
   let markers = new Map<string, PlacedMarker>();
   let liveMarker: PlacedMarker | null = null;
 
+  /**
+   * The one draw-mode session, if any.
+   *
+   * One at a time. Two would leave two sets of listeners and two claims on the map's pan
+   * behaviour, and whichever exited last would decide what panning ends up as — ownership
+   * nobody could reason about, so a second entry is refused instead.
+   */
+  let drawSession: DrawSession | null = null;
   let loaded = false;
   let destroyed = false;
 
@@ -852,12 +864,34 @@ export function createMapControllerInternal(
       );
     },
 
+    enterDrawMode(handlers: DrawModeHandlers): () => void {
+      if (destroyed) throw new MapControllerDestroyedError("enterDrawMode");
+      if (drawSession !== null) {
+        throw new MapDrawModeError(
+          "a session is already active; exit it before entering again, or two sets of " +
+            "listeners would each claim the map's pan behaviour",
+        );
+      }
+      const session = startDrawMode(map, handlers);
+      drawSession = session;
+      return () => {
+        session.exit();
+        // Only clears the slot if this session still owns it, so an exit called late cannot
+        // silently retire a session someone else started afterwards.
+        if (drawSession === session) drawSession = null;
+      };
+    },
+
     destroy(): void {
       // Idempotent, and deliberately silent about the PMTiles protocol: `addProtocol`
       // installs on the MapLibre runtime rather than on this map, so unregistering it would
       // break every other controller in the realm. (ADR-0023, and the T4.1b bootstrap.)
       if (destroyed) return;
       destroyed = true;
+      // The same idempotent cleanup an explicit exit runs: interaction is borrowed, and a
+      // destroyed controller must not leave listeners or a disabled pan behind it.
+      drawSession?.exit();
+      drawSession = null;
       map.off("load", onLoad);
       installed = [];
       // Markers live in the DOM outside MapLibre's container-emptying, so they are removed

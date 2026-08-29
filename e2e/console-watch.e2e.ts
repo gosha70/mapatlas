@@ -76,6 +76,34 @@ test("holds a declaration to an exact count when one is given", async ({ page })
   expect(watch.problems()[0]).toContain("saw 2");
 });
 
+test("a counted expectation is satisfied only at its count", async ({ page }) => {
+  // The distinction a polling test depends on. Treating the first match as enough would let
+  // it stop in the middle of the chain it is waiting on, and whether the rest arrived before
+  // teardown would decide the result — passing or failing on timing rather than behaviour.
+  await page.goto("/");
+  const watch = watchConsole(page);
+  watch.expect(/tile/, "two tiles fail", 2);
+
+  expect(watch.satisfied()).toBe(false);
+
+  await page.evaluate(() => {
+    console.error("tile 1 failed");
+  });
+  expect(watch.satisfied()).toBe(false);
+
+  await page.evaluate(() => {
+    console.error("tile 2 failed");
+  });
+  expect(watch.satisfied()).toBe(true);
+  expect(watch.problems()).toEqual([]);
+
+  // And past it, unsatisfied again: "exactly two" is not "two or more".
+  await page.evaluate(() => {
+    console.error("tile 3 failed");
+  });
+  expect(watch.satisfied()).toBe(false);
+});
+
 test("does not let a late declaration excuse an error already seen", async ({ page }) => {
   // Otherwise a test could discover an error and retroactively declare it away, which is
   // suppression wearing an expectation's clothes.

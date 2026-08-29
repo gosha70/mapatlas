@@ -439,74 +439,96 @@ answers neither — split the axes rather than infer one from the other.** The c
 correction added: a renderer-specific encoding of a value is the renderer's to apply, not
 something the neutral contract carries on its behalf.
 
-## ADR-0024 — Demo map data and hosting (**OPEN — decision required before T4.6**)
-**Status.** Open. This entry records the evidence and the criteria; it deliberately does **not**
-choose a provider, a region, or a dataset. Those are product decisions with cost, licensing and
-lead-time consequences, and `architecture.md §8` already requires the elevation source to be
-settled before the Phase 4 and Phase 6 exits — which are now two and four tasks away.
+## ADR-0024 — Demo elevation data and hosting
+**Status.** Decided, pending one input: **whether the representative region is US-only.** If it
+is, the decision is USGS 3DEP; otherwise it is Copernicus. Everything else below is settled.
 
-**Context.** Three separate things force a decision that no amount of implementation can defer.
+**Decision.** **Copernicus DEM GLO-30 Public** — specifically `COP-DEM_GLO-30-DGED`, 2021
+release, read from the `s3://copernicus-dem-30m` mirror at build time and **terrarium-encoded by
+us into the PMTiles archive**. Nothing is fetched from a third party at runtime.
 
-*The engine may not fetch its own tiles.* `architecture.md §8` forbids region download against a
-community tile service, and binds the demo and tests as well as production: the OSM Foundation's
-tile policy prohibits bulk downloading and offline prefetching, and directs applications needing
-offline maps to self-host or use a provider whose terms permit it. Interactive browsing during
-development is a courtesy question; **bulk download is a policy violation**, so T6.1's region
-store cannot be demonstrated at all without a source we are entitled to copy bytes from.
+**If the representative region is US-only, take USGS 3DEP 1/3 arc-second instead.** It is a
+cleaner single-product answer on six of the seven criteria: public domain, so redistribution is
+trivially satisfied and attribution nearly vanishes; and **bare-earth**, which removes the one
+real defect in the Copernicus choice. Copernicus is right only if the region is non-US or the
+demo must generalise globally.
 
-*Terrain has no source.* T4.2 renders 3D terrain and hillshade from a `raster-dem` source, and
-T4.3 renders contours from a vector source. Every test to date uses `tiles.invalid` — the
-geometry, ordering and lifecycle are proven, the *data* is not.
+**Against the criteria.**
 
-Neither bathymetry nor elevation is settled, and an earlier version of this entry said
-otherwise. It carried forward a claim from `architecture.md` — NOAA bathymetry as blanket US
-public domain, preferred over GEBCO as leaning non-commercial — and both halves are wrong as
-stated. GEBCO's published terms for its gridded bathymetry place the grid in the public domain
-and explicitly permit commercial exploitation. NOAA licensing is **product- and
-source-specific**: some products incorporate third-party contributions whose terms travel with
-them, so "NOAA bathymetry" is not one dataset with one licence, and its contributor metadata
-has to be read per product.
+1. **A named product, not a named agency.** "Copernicus DEM" is a family, not a product — which
+   is the trap this criterion exists for. The instances are EEA-10, GLO-30 and GLO-90, packaged
+   as INSPIRE, DGED or DTED, and the packaging changes the data: 32-bit float in DGED, 16-bit
+   signed in DTED. The licence excludes the higher-resolution WorldDEM-10 from public
+   distribution under separate terms. GLO-30 **Public** is also a deliberate subset: some
+   countries' tiles are not released publicly and there are no ocean tiles at all, so **the
+   representative region must be chosen from released coverage**, and that check belongs here
+   rather than in a build failure.
 
-The correction matters more than the conclusion: a licensing preference recorded without
-naming a product is not evidence, and this ADR exists to stop exactly that from deciding
-anything.
+2. **Redistribution and offline rights — passes explicitly, not by silence.** Article 4 grants
+   reproduction, distribution, communication to the general public, and adaptation, modification
+   and combination with other data; Article 5 makes it free of charge; Article 3 grants it
+   worldwide and without limitation in time. Terrarium-encoding is adaptation, so both the
+   archive and the user's download are covered. **Mapbox Terrain-RGB fails here** — its terms do
+   not permit caching tiles outside its own SDKs — which is the elimination this criterion was
+   written to perform.
 
-*The demo is the acceptance test.* T4.6 is the first artifact a human opens, and `PRD.md §6`
-requires the demo to work **fully offline**. A fixture pointing at unreachable hosts can prove
-the renderer's behaviour but not that claim.
+3. **Attribution is three strings and a file placement, not one string.** Because we modify the
+   data, the derived-works notice applies: *"produced using Copernicus WorldDEM-30 © DLR e.V.
+   2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the
+   European Union and ESA; all rights reserved"*. Two obligations that are usually missed, and
+   which are **carried code rather than prose**: a verbatim liability sentence stating that the
+   organisations in charge of Copernicus incur no liability for any use of the data must appear
+   in any licence or notice covering redistribution, and downstream recipients must be bound by
+   the same obligations. Together those mean a **LICENSE file shipped inside the archive**, not
+   only an on-map credit. There is also a no-endorsement clause.
 
-**Criteria the decision must satisfy.** Recorded now so the choice is an evaluation rather than
-a search:
+4. **Datum and resolution.** Horizontal WGS84-G1150 (EPSG:4326); vertical EGM2008 (EPSG:3855),
+   metres. Two consequences for the statistics `computeStats` derives from GPS:
 
-1. **A named product, not a named agency.** Every criterion below is answered per product, and
-   several publishers ship datasets under different terms. An evaluation that says "NOAA" or
-   "GEBCO" has not started; one that names a product and reads its contributor metadata has.
-2. **Redistribution and offline rights.** May we copy tiles into a PMTiles archive, host it, and
-   let a user download it to their device? This is the criterion that eliminates most options,
-   and it is separate from whether the data is free to *view*.
-3. **Attribution.** What string must appear, and does it survive into `TileSource.attribution`
-   verbatim? The renderer already treats attribution as a licence obligation rather than
-   decoration, and rejects a source that cannot state its own.
-4. **Vertical datum and resolution** for the DEM, and whether it matches the elevation figures
-   `computeStats` derives from GPS altitude. A hillshade that disagrees with the recorded
-   ascent is worse than no hillshade.
-5. **Encoding.** `mapbox` or `terrarium` — the `TileSource.encoding` field already carries this,
-   but the value has to match what the chosen DEM actually publishes.
-6. **Archive size for one representative region.** Not global coverage: a single small region
-   sized so a demo user can download it on a phone. This bounds T6.1's `estimateSize` and the
-   demo's own storage story.
-7. **Delivery.** HTTPS, permissive CORS, and **HTTP range request support** — PMTiles is
-   unusable without ranges. The pinned client does not fail silently: it compares the response
-   against the requested range and throws "Check that your storage backend supports HTTP Byte
-   Serving" when a server returns the whole file. What it produces is therefore tile-load
-   errors, and a map that may still show its other layers around them — bad, but diagnosable,
-   which an earlier version of this entry got wrong by calling it silent.
+   - GPS reports height above the WGS84 **ellipsoid**; EGM2008 is a **geoid**. Absolute
+     altitudes therefore disagree by the local undulation — tens of metres — while elevation
+     *gain* and *profile shape* largely cancel, since undulation varies over hundreds of
+     kilometres. **Relative statistics are comparable; absolute altitude is not**, unless a
+     geoid grid ships too. Recorded here rather than discovered in a bug report.
+   - The native grid's longitudinal spacing widens beyond 50°N and 50°S, so "30 m" holds near
+     the equator and not elsewhere.
 
-**What is not blocked.** T4.5 and T4.7 need no real data. T4.6 does, because it is the point at
-which a fixture stops being a unit test and starts being something a person looks at.
+   **The real cost: it is a DSM, not a DTM.** It represents the surface including buildings and
+   vegetation, so over forest the elevation reads high by the canopy height. If the product ever
+   shows trail profiles that is a visible defect, and it is the strongest argument against this
+   choice — and the reason a US-only region should take 3DEP instead.
 
-**Consequences of leaving it open.** T4.6 either waits, or ships against a placeholder and is
-revised once the decision lands — the second being the outcome `architecture.md` was written to
-avoid. The demo also needs a **simulated GPS mode** regardless of this decision, so that it can
-be operated from a desk rather than by walking around; that is an implementation task, not a
-data one, and is recorded against T4.6.
+5. **Encoding: terrarium.** Copernicus ships COG GeoTIFF, so we encode either way, and encoding
+   ourselves is a benefit under criterion 2: the runtime then depends on no third party's
+   behaviour at all. Decode is `(R * 256 + G + B / 256) - 32768`, simple enough that fixtures can
+   synthesise pixels by hand and a unit test can check known values against it. Mapbox's
+   `-10000 + (R * 65536 + G * 256 + B) * 0.1` is no harder and buys nothing here.
+
+6. **Archive size — to be measured, not calculated.** The shape: a 1°×1° footprint at z12 is on
+   the order of 130 terrarium tiles, and the full pyramid beneath it about a third more again,
+   so low tens of MB per degree-cell at 256px; a few-degree region with a z14 ceiling should land
+   in the low hundreds of MB. That is a download, not a distribution problem — but the criterion
+   asked for a measured number, and it is a build-script output.
+
+7. **Delivery splits build-time from runtime.** Build-time: S3 over HTTPS, range-read by
+   construction since COGs depend on it, unauthenticated. Runtime: **nothing** — the archive is
+   local. CORS stops being a criterion at all, which is usually where candidates die.
+
+**Rejected: AWS Terrain Tiles (Tilezen/Joerd).** Already terrarium, already tiled, and
+bare-earth — better than Copernicus on the DSM problem. It fails criterion 1 exactly as written:
+it is a **mosaic of national DEMs**, and its attribution is a compound string naming ArcticDEM,
+Geoscience Australia, Austria's DGM, Canada's Open Government Licence, EU-DEM, ETOPO1 and
+others. "Carried verbatim" would then mean carrying a string whose correct contents depend on
+which region was archived, over sources with **mixed vertical datums** — which defeats criterion
+4 as well.
+
+**Consequences.** The archive shape matters more than the data's vintage. The Copernicus DEM
+datasets were released for use in 2019 and are maintained until 2026; since Article 3 grants
+rights without limitation in time and we archive rather than fetch, an end to upstream
+maintenance threatens anyone depending on a live endpoint, not us. That is a third argument for
+the archive design, alongside the OSM tile policy and offline operation.
+
+Two things become build-script obligations rather than prose: the attribution and liability
+strings must be **checked against the licence document at build time and written into the
+archive**, and the region must be verified as released coverage before tiles are cut.
+

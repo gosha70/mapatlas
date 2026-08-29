@@ -30,8 +30,52 @@ const PACKAGES = ["packages/core", "packages/maplibre"];
 /** What a consumer must be able to reach from their own project root. */
 const CONSUMER_IMPORTS = ["@mapatlas/maplibre", "maplibre-gl/dist/maplibre-gl.css"];
 
+/**
+ * A command whose own diagnosis survives.
+ *
+ * `execFileSync` throws `Command failed: …` and a script stack, which says nothing about
+ * *why*: a registry timeout, an auth failure, a cache permission error and a corrupt tarball
+ * all look identical. The tool already explained itself on stderr, so the failure carries
+ * that explanation rather than replacing it with a stack.
+ */
+class CommandFailed extends Error {
+  constructor(command, args, cwd, cause) {
+    super(`\`${[command, ...args].join(" ")}\` failed in ${cwd}`);
+    this.name = "CommandFailed";
+    this.status = typeof cause.status === "number" ? cause.status : null;
+    // A spawn that never reached npm — a missing cwd, npm not on PATH — reports here and
+    // nowhere else, since there is no tool output to relay.
+    this.code = typeof cause.code === "string" ? cause.code : null;
+    this.stdout = typeof cause.stdout === "string" ? cause.stdout : "";
+    this.stderr = typeof cause.stderr === "string" ? cause.stderr : "";
+  }
+
+  report() {
+    const exit = this.status === null ? "" : ` (exit ${String(this.status)})`;
+    const sections = [`check:packaging — ${this.message}${exit}`];
+    if (this.code !== null) sections.push(`  the command itself could not run: ${this.code}`);
+    // stderr first: npm puts the actionable line there, and it is what a reader needs.
+    if (this.stderr.trim() !== "") sections.push(`\n--- npm stderr ---\n${this.stderr.trimEnd()}`);
+    if (this.stdout.trim() !== "") sections.push(`\n--- npm stdout ---\n${this.stdout.trimEnd()}`);
+    return sections.join("\n");
+  }
+}
+
+/**
+ * `--loglevel=error` rather than `--silent`: stdout stays clean enough to read a tarball
+ * filename off, while anything that actually goes wrong still reaches stderr, where the
+ * failure path above can relay it.
+ */
 function run(command, args, cwd) {
-  return execFileSync(command, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  try {
+    return execFileSync(command, args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    throw new CommandFailed(command, args, cwd, error ?? {});
+  }
 }
 
 const scratch = mkdtempSync(join(tmpdir(), "mapatlas-packaging-"));
@@ -41,7 +85,7 @@ try {
   const tarballs = PACKAGES.map((directory) => {
     const output = run(
       "npm",
-      ["pack", "--silent", "--pack-destination", scratch],
+      ["pack", "--loglevel=error", "--pack-destination", scratch],
       join(root, directory),
     );
     return join(scratch, output.trim().split("\n").at(-1));
@@ -54,7 +98,14 @@ try {
 
   run(
     "npm",
-    ["install", "--install-strategy=nested", "--no-audit", "--no-fund", "--silent", ...tarballs],
+    [
+      "install",
+      "--install-strategy=nested",
+      "--no-audit",
+      "--no-fund",
+      "--loglevel=error",
+      ...tarballs,
+    ],
     scratch,
   );
 
@@ -78,9 +129,18 @@ try {
   if (!existsSync(join(scratch, "node_modules/maplibre-gl/package.json"))) {
     failures.push("maplibre-gl is not installed at the consumer root — it is not a peer");
   }
+} catch (error) {
+  // A gate that cannot say why it failed is a gate nobody trusts. npm's own diagnosis is
+  // relayed verbatim rather than summarised into `Command failed`.
+  console.error(
+    error instanceof CommandFailed ? error.report() : `check:packaging — ${String(error)}`,
+  );
+  process.exitCode = 1;
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
+
+if (process.exitCode === 1) process.exit(1);
 
 if (failures.length > 0) {
   console.error("check:packaging — the published artifact would not work for a consumer:\n");

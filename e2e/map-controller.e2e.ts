@@ -850,3 +850,65 @@ test("a rejected presentation leaves the real map exactly as it was", async ({ p
   await expect(start).toHaveAttribute("data-original", "yes");
   await expect(start).toHaveClass(/maplibregl-marker-anchor-bottom/);
 });
+
+test("keeps a consumer icon inside the mark it was sized for", async ({ page }) => {
+  // A 200x100 asset in a 24x24 mark. Only a real layout engine settles this: whether the
+  // constraint is *applied* is a unit concern, whether it *holds* is a cascade one, and an
+  // unconstrained image overflows a wrapper that measures correctly and reports no error.
+  //
+  // The asset is an inline SVG data URI with declared intrinsic dimensions, so the case needs
+  // no network and cannot flake on one.
+  const OVERSIZED_ICON =
+    "data:image/svg+xml," +
+    encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">' +
+        '<rect width="200" height="100" fill="#0969da"/></svg>',
+    );
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, icon]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.setPresentation({
+        marker: () => ({ ariaLabel: "A marked spot", iconUrl: icon as string, sizePx: [24, 24] }),
+      } as never);
+      probe.controller.renderEvents([
+        { id: "e1", position: { lat: 59.33, lng: 18.06 }, occurredAt: 1, media: [], tags: [] },
+      ] as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, OVERSIZED_ICON] as const,
+  );
+
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(1);
+  await expect(page.locator(".mapatlas-marker img")).toHaveCount(1);
+
+  const boxes = await page.evaluate(() => {
+    const wrapper = document.querySelector(".mapatlas-marker");
+    const image = wrapper?.querySelector("img");
+    if (wrapper == null || image == null) return null;
+    const w = wrapper.getBoundingClientRect();
+    const i = image.getBoundingClientRect();
+    return {
+      wrapper: { width: w.width, height: w.height },
+      image: { width: i.width, height: i.height },
+      naturalWidth: image.naturalWidth,
+    };
+  });
+
+  // The asset really is larger than the mark, or the assertion below proves nothing.
+  expect(boxes?.naturalWidth).toBe(200);
+  expect(boxes?.wrapper).toEqual({ width: 24, height: 24 });
+  expect(boxes?.image).toEqual({ width: 24, height: 24 });
+});

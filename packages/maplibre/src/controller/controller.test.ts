@@ -1725,6 +1725,44 @@ describe("marker content", () => {
     expect(image?.getAttribute("alt")).toBe("");
   });
 
+  it("sizes the icon to the mark, so an intrinsically larger asset cannot overflow it", () => {
+    // An icon is a consumer's own asset and can be any size; nothing constrains it to the
+    // mark unless the engine says so, and an unconstrained one overflows a wrapper that
+    // measures correctly and reports no error. Whether the constraint *works* is a layout
+    // question the browser lane settles; this pins that it is applied at all.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation({
+      marker: () => ({
+        ariaLabel: "A marked spot",
+        iconUrl: "https://cdn.invalid/big.png",
+        sizePx: [24, 24],
+      }),
+    });
+
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+
+    const image = placed(rig)[0]?.element.querySelector("img");
+    expect(image?.style.width).toBe("100%");
+    expect(image?.style.height).toBe("100%");
+    // Letterboxed rather than cropped or stretched: the engine has no idea what it depicts.
+    expect(image?.style.objectFit).toBe("contain");
+  });
+
+  it("leaves an icon at its intrinsic size when the style asks for none", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.setPresentation({
+      marker: () => ({ ariaLabel: "A marked spot", iconUrl: "https://cdn.invalid/big.png" }),
+    });
+
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+
+    const image = placed(rig)[0]?.element.querySelector("img");
+    expect(image?.style.width).toBe("");
+    expect(image?.style.height).toBe("");
+  });
+
   it("prefers supplied markup over an icon, since html is the explicit escape hatch", () => {
     const { controller, harness: rig } = mount({ sources: [OSM] });
     rig.map.fireLoad();

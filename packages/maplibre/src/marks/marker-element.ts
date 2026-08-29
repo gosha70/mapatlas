@@ -146,7 +146,24 @@ export function applyMarkerStyle(wrapper: HTMLElement, style: MarkerStyle): void
 function markerContent(style: MarkerStyle): string {
   if (style.html !== undefined) return style.html;
   if (style.iconUrl === undefined) return "";
-  return `<img src="${escapeAttribute(style.iconUrl)}" alt="" />`;
+
+  // Nothing constrains an image otherwise: a consumer's asset keeps its intrinsic size and
+  // overflows a wrapper that measures correctly and reports no error.
+  //
+  // Sized in percentages rather than by repeating `sizePx`. The span between wrapper and
+  // image is inline, so it establishes no containing block and the percentages resolve
+  // against the wrapper — which means they also follow a wrapper the consumer resized
+  // through `className`, where repeated pixel values would not. `contain` letterboxes rather
+  // than cropping or distorting, because the engine has no idea what the icon depicts.
+  //
+  // Applied only when `sizePx` gave the wrapper a definite size. Without one the consumer has
+  // said nothing about size, and `100%` of an auto-sized wrapper is not a constraint.
+  const box =
+    style.sizePx === undefined
+      ? "display:block"
+      : "display:block;width:100%;height:100%;object-fit:contain";
+
+  return `<img src="${escapeAttribute(style.iconUrl)}" alt="" style="${box}" />`;
 }
 
 /**

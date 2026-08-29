@@ -577,10 +577,17 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   independent of it either way, so a failed spike costs only `@mapatlas/maplibre`.
   _AC:_ tapping appends a vertex, dragging moves one, the exit fn removes every listener and the
   draft layer; no drawing library appears in `@mapatlas/core`'s dependency tree.
-- **T4.6 Vertical acceptance fixture.** One realistic end-to-end fixture, not a unit stub: a
-  large track (≥5k raw points), a two-segment pause, a DEM + hillshade + contour source stack,
-  two consumer-defined event marks, and a locally-persisted PMTiles region. Exercised as a test
-  and reused by the demo. _AC:_ renders with the network disabled; the pause shows as a gap;
+- **T4.6 Vertical acceptance fixture.** **Blocked on ADR-0024** (demo map data and hosting):
+  the fixture is the first artifact a human opens, and `PRD.md §6` requires it to work offline,
+  which needs a source the project is entitled to copy bytes from. Two additions beyond the
+  original scope: it is reachable as a human-openable `/lab` route in `apps/demo` — through the
+  packages' public entry points, sharing one fixture with the Playwright scenario, while
+  `e2e/harness` stays automation-only — and it carries a **simulated GPS mode**, so the demo can
+  be operated from a desk rather than by walking around.
+
+  One realistic end-to-end fixture, not a unit stub: a large track (≥5k raw points), a
+  two-segment pause, a DEM + hillshade + contour source stack, two consumer-defined event marks,
+  and a locally-persisted PMTiles region. Exercised as a test and reused by the demo. _AC:_ renders with the network disabled; the pause shows as a gap;
   frame time and memory are recorded as a baseline. Its purpose is to surface renderer and
   data-format assumptions here, in Phase 4, rather than in Phase 7 when they are expensive.
 - **T4.7 Interaction + a11y.** `onMapTap`, `onEventClick`; controls keyboard-reachable, visible

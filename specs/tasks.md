@@ -673,25 +673,50 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   focus, `prefers-reduced-motion` respected. Completes `MapController`, so this is the task that
   puts `createMapController` on the package barrel and makes `api.md`'s declaration true.
 
-  Two places this leaks if it is treated as a stylesheet concern:
+  **The renderer's keyboard handler is a second `dragPan`.** MapLibre's canvas is focusable and
+  binds the arrow keys to pan and `+`/`-` to zoom. Keyboard vertex movement will use the arrows,
+  so on a focused map the two collide — the same borrow-and-give-back problem draw mode already
+  solves for panning, and `map.keyboard` has the same `enable`/`disable`/`isEnabled` shape. It
+  goes on the seam alongside `DragPanLike`, restored to its **entry state** rather than enabled,
+  and it is borrowed only while draw mode holds the map.
 
-  **`prefers-reduced-motion` must be read by the controller, not only by CSS.** The camera is
-  moved from JavaScript — `fitTrack`, `fitBounds`, `recenter`, and whatever T4.2's terrain and
-  T4.3's live position animate — and a media query in a stylesheet has no say over an eased
-  camera transition. The controller reads the query itself, through the environment seam like
-  every other platform capability, so a consumer who has asked for less motion gets a camera
-  that jumps rather than flies. (T4.3 deliberately shipped non-animated camera moves so that
-  this decision would not have to be unpicked here.)
+  **Keyboard-operable vertices are an architectural fork, not an attribute.** Draft vertices are
+  layer features painted into the canvas: there is nothing to focus, nothing in the tab order,
+  and nothing assistive technology can see. Two shapes exist — a parallel DOM layer of focusable
+  elements positioned over each vertex, or one focusable canvas with a roving selection index and
+  `aria-live` announcements.
 
-  **`onMapTap` and `onEventClick` can both fire for one tap on an event mark**, and which wins
-  is a contract, not an accident. Pinned before it becomes ambient behaviour: a tap on a mark
-  reports the event and **not** the map position, because a consumer handling both would
-  otherwise open an event and drop a pin at the same coordinate from a single gesture.
+  **Decision: the parallel DOM layer.** A draft is authored by hand, so its vertices number in
+  the tens rather than the thousands, and the cost that rules the DOM approach out at scale does
+  not arise. In exchange it gets real focus rings, a real tab order and real hit targets from the
+  platform rather than reimplemented by us — and it reuses the accessible wrapper T4.3 already
+  built for marks, so the machinery exists and is already tested. The roving-index shape would
+  mean owning the entire accessibility surface by hand for a saving that does not apply here.
+  The canvas vertices stay: they are what the pointer hit-tests, and what a mouse user sees.
 
-  _AC:_ a11y checks pass in the demo shell; draw-mode vertices are keyboard-operable, not
-  pointer-only; a reduced-motion preference reaches the camera, asserted through the seam rather
-  than through a stylesheet; and a tap on an event mark fires `onEventClick` alone, asserted in
-  both lanes.
+  **A tap resolves in one order, not two pairwise rules:** draft vertex, then event mark, then
+  map position. In draw mode both `draw-mode.ts`'s click handling and a controller-level
+  `onMapTap` listen to the same event, so two rules stated separately would leave the vertex
+  case undefined.
+
+  _AC:_ a reduced-motion preference **reaches the camera**, asserted through the seam in both
+  states — the query is read by the controller, not only by a stylesheet, because the camera is
+  moved from JavaScript and a media query has no say over an eased transition; the keyboard
+  handler is borrowed and restored exactly as `dragPan` is; draft vertices are focusable,
+  reachable by tab, operable by arrow keys, and announce which vertex is active; a tap on an
+  event mark fires `onEventClick` **alone**, asserted in the unit lane and not only in the
+  browser.
+
+  **That last one must be shown to fail without the implementation.** Marks are DOM elements
+  above the canvas, so a click on one may never be dispatched as a map `click` at all — in which
+  case the contract holds because the event never reached the map, not because anything
+  suppressed it, and a test would pass with nothing behind it. Mutating out the suppression must
+  turn it red; if it does not, the DOM is providing the contract and it will stop holding the day
+  a mark is rendered into a layer instead of a div.
+
+  **The a11y check runs against the browser harness page, not the demo shell.** The demo shell is
+  T4.6's `/lab` route, and T4.6 waits on the region input, so an exit criterion naming it could
+  not be satisfied in this order. T4.6 re-runs the same check against `/lab` when it exists.
 
 ## Phase 5 — `@mapatlas/react`
 - **T5.1 Hooks.** `useTrackRecorder` (live `channels`, `markLap`, `recovered`), `useEventLog`,

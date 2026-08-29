@@ -150,18 +150,19 @@ function markerContent(style: MarkerStyle): string {
   // Nothing constrains an image otherwise: a consumer's asset keeps its intrinsic size and
   // overflows a wrapper that measures correctly and reports no error.
   //
-  // Sized in percentages rather than by repeating `sizePx`. The span between wrapper and
-  // image is inline, so it establishes no containing block and the percentages resolve
-  // against the wrapper — which means they also follow a wrapper the consumer resized
-  // through `className`, where repeated pixel values would not. `contain` letterboxes rather
-  // than cropping or distorting, because the engine has no idea what the icon depicts.
+  // Percentages rather than repeated `sizePx` values, and applied **unconditionally**. The
+  // span between wrapper and image is inline, so it establishes no containing block and these
+  // resolve against the wrapper itself — which is what lets them follow a wrapper sized
+  // through `className` as well as one sized through `sizePx`. Gating them on `sizePx` would
+  // contradict that reason and leave the documented styling path unconstrained.
   //
-  // Applied only when `sizePx` gave the wrapper a definite size. Without one the consumer has
-  // said nothing about size, and `100%` of an auto-sized wrapper is not a constraint.
-  const box =
-    style.sizePx === undefined
-      ? "display:block"
-      : "display:block;width:100%;height:100%;object-fit:contain";
+  // Safe when nothing sized the wrapper at all: it shrink-wraps its content, so the
+  // percentage resolves against the image's own intrinsic size and changes nothing. A
+  // consumer who said nothing about size gets the size the asset came with.
+  //
+  // `contain` letterboxes rather than cropping or distorting, because the engine has no idea
+  // what the icon depicts.
+  const box = "display:block;width:100%;height:100%;object-fit:contain";
 
   return `<img src="${escapeAttribute(style.iconUrl)}" alt="" style="${box}" />`;
 }

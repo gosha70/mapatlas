@@ -456,8 +456,20 @@ store cannot be demonstrated at all without a source we are entitled to copy byt
 
 *Terrain has no source.* T4.2 renders 3D terrain and hillshade from a `raster-dem` source, and
 T4.3 renders contours from a vector source. Every test to date uses `tiles.invalid` — the
-geometry, ordering and lifecycle are proven, the *data* is not. Bathymetry is settled (NOAA,
-US public domain, preferred over GEBCO whose terms lean non-commercial). Elevation is not.
+geometry, ordering and lifecycle are proven, the *data* is not.
+
+Neither bathymetry nor elevation is settled, and an earlier version of this entry said
+otherwise. It carried forward a claim from `architecture.md` — NOAA bathymetry as blanket US
+public domain, preferred over GEBCO as leaning non-commercial — and both halves are wrong as
+stated. GEBCO's published terms for its gridded bathymetry place the grid in the public domain
+and explicitly permit commercial exploitation. NOAA licensing is **product- and
+source-specific**: some products incorporate third-party contributions whose terms travel with
+them, so "NOAA bathymetry" is not one dataset with one licence, and its contributor metadata
+has to be read per product.
+
+The correction matters more than the conclusion: a licensing preference recorded without
+naming a product is not evidence, and this ADR exists to stop exactly that from deciding
+anything.
 
 *The demo is the acceptance test.* T4.6 is the first artifact a human opens, and `PRD.md §6`
 requires the demo to work **fully offline**. A fixture pointing at unreachable hosts can prove
@@ -466,23 +478,29 @@ the renderer's behaviour but not that claim.
 **Criteria the decision must satisfy.** Recorded now so the choice is an evaluation rather than
 a search:
 
-1. **Redistribution and offline rights.** May we copy tiles into a PMTiles archive, host it, and
+1. **A named product, not a named agency.** Every criterion below is answered per product, and
+   several publishers ship datasets under different terms. An evaluation that says "NOAA" or
+   "GEBCO" has not started; one that names a product and reads its contributor metadata has.
+2. **Redistribution and offline rights.** May we copy tiles into a PMTiles archive, host it, and
    let a user download it to their device? This is the criterion that eliminates most options,
    and it is separate from whether the data is free to *view*.
-2. **Attribution.** What string must appear, and does it survive into `TileSource.attribution`
+3. **Attribution.** What string must appear, and does it survive into `TileSource.attribution`
    verbatim? The renderer already treats attribution as a licence obligation rather than
    decoration, and rejects a source that cannot state its own.
-3. **Vertical datum and resolution** for the DEM, and whether it matches the elevation figures
+4. **Vertical datum and resolution** for the DEM, and whether it matches the elevation figures
    `computeStats` derives from GPS altitude. A hillshade that disagrees with the recorded
    ascent is worse than no hillshade.
-4. **Encoding.** `mapbox` or `terrarium` — the `TileSource.encoding` field already carries this,
+5. **Encoding.** `mapbox` or `terrarium` — the `TileSource.encoding` field already carries this,
    but the value has to match what the chosen DEM actually publishes.
-5. **Archive size for one representative region.** Not global coverage: a single small region
+6. **Archive size for one representative region.** Not global coverage: a single small region
    sized so a demo user can download it on a phone. This bounds T6.1's `estimateSize` and the
    demo's own storage story.
-6. **Delivery.** HTTPS, permissive CORS, and **HTTP range request support** — PMTiles is
-   unusable without ranges, and a CDN that strips or rejects `Range` fails silently as a
-   partially-loaded map rather than as an error.
+7. **Delivery.** HTTPS, permissive CORS, and **HTTP range request support** — PMTiles is
+   unusable without ranges. The pinned client does not fail silently: it compares the response
+   against the requested range and throws "Check that your storage backend supports HTTP Byte
+   Serving" when a server returns the whole file. What it produces is therefore tile-load
+   errors, and a map that may still show its other layers around them — bad, but diagnosable,
+   which an earlier version of this entry got wrong by calling it silent.
 
 **What is not blocked.** T4.5 and T4.7 need no real data. T4.6 does, because it is the point at
 which a fixture stops being a unit test and starts being something a person looks at.

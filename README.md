@@ -69,6 +69,12 @@ Origin** — see [CONTRIBUTING.md](CONTRIBUTING.md). Every source file carries a
 
 ## Attribution & data licensing (downstream obligation)
 
-MAP-ATLAS renders third-party map data. Consumers must honor the source licenses:
-OpenStreetMap (ODbL), OpenSeaMap seamarks (ODbL, share-alike), NOAA charts/bathymetry
-(US public domain). See [`specs/architecture.md`](specs/architecture.md#map-data--licensing).
+MAP-ATLAS renders third-party map data. Consumers must honor the source licenses —
+OpenStreetMap (ODbL) and OpenSeaMap seamarks (ODbL, share-alike) among them.
+
+Bathymetry and elevation sources are **licensed per product, not per publisher**: terms differ
+between datasets from the same agency, and some carry third-party contributions whose terms
+travel with them. Check the specific product and its contributor metadata rather than relying
+on a publisher's general reputation — the engine bundles no tiles and takes no position on
+which sources you use. See [`specs/architecture.md`](specs/architecture.md#map-data--licensing)
+and ADR-0024 in [`specs/decisions.md`](specs/decisions.md).

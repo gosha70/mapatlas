@@ -1749,7 +1749,13 @@ describe("marker content", () => {
     expect(image?.style.objectFit).toBe("contain");
   });
 
-  it("leaves an icon at its intrinsic size when the style asks for none", () => {
+  it("constrains an icon whatever sized the mark, including a class", () => {
+    // Unconditional, because `className` is a documented styling path: gating the constraint
+    // on `sizePx` would leave a class-sized wrapper unconstrained, and would contradict the
+    // reason percentages were chosen — that they follow whatever sized the wrapper.
+    //
+    // Whether an unsized wrapper then leaves the asset at its intrinsic size is a layout
+    // question the browser lane settles; this pins that the rule is applied either way.
     const { controller, harness: rig } = mount({ sources: [OSM] });
     rig.map.fireLoad();
     controller.setPresentation({
@@ -1759,8 +1765,8 @@ describe("marker content", () => {
     controller.renderEvents([eventFixture("e1", 18.06)]);
 
     const image = placed(rig)[0]?.element.querySelector("img");
-    expect(image?.style.width).toBe("");
-    expect(image?.style.height).toBe("");
+    expect(image?.style.width).toBe("100%");
+    expect(image?.style.height).toBe("100%");
   });
 
   it("prefers supplied markup over an icon, since html is the explicit escape hatch", () => {

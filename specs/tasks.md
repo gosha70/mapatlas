@@ -694,6 +694,43 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   mean owning the entire accessibility surface by hand for a saving that does not apply here.
   The canvas vertices stay: they are what the pointer hit-tests, and what a mouse user sees.
 
+  **One tab stop, not one per vertex.** Roving `tabindex` across the vertex elements: the group
+  takes a single stop, arrows move between vertices within it. Forty vertices as forty stops
+  would put a whole draft between the map and whatever follows it, and someone tabbing *past* a
+  map should not have to traverse its geometry. This is the composite-widget pattern, and it is
+  a separate question from the fork above, which was about roving over a single canvas.
+
+  **The keyboard gesture is the pointer gesture.** Arrows are claimed three times over — map
+  pan, focus movement between vertices, and nudging the focused one — so the collision is
+  settled before any handler is written, rather than by whichever runs first. A vertex is
+  **grabbed** (Enter or Space), **nudged** while grabbed (arrows), and **dropped** (Enter or
+  Space) or **cancelled** (Escape); ungrabbed arrows move focus. That is the same shape as the
+  pointer path — press, move, release — so it reports through the same `onVertexMove`, and the
+  borrow window is the grabbed state exactly as `dragPan`'s is the drag.
+
+  What is *not* settled by reasoning is how to keep the renderer's own arrow handling out of it.
+  The vertex elements sit inside the map container, so a keydown bubbles to where
+  `KeyboardHandler` is bound; whether `stopPropagation` on the element suffices depends on how
+  the renderer binds, which is a measurement and not an inference — the same shape as the
+  `mouseout` question, which reasoning got wrong. Measure first; borrow `map.keyboard` through
+  the seam if it does not, with the same restore-what-you-found rule as `dragPan`.
+
+  **Two representations of one vertex is a new failure mode.** Deleting vertex 2 shifts every
+  index above it while a focused DOM element still holds the old one. Two contracts: the DOM
+  layer's indices match the source features after **every** `renderDraft`, including removal and
+  reorder; and when the focused vertex stops existing, focus moves somewhere defined — the
+  vertex that took its index, else the previous one, else the group — never nowhere, which is
+  what the DOM does by default and which drops the user back to the top of the page.
+
+  **`pointer-events: none` on the vertex layer needs a behavioural guard, not a stylesheet
+  line.** The pointer path is canvas hit-testing; if the DOM layer ever becomes the pointer
+  target, `queryRenderedFeatures` stops being exercised and every unit test still passes, since
+  the fake cannot see DOM. The browser drag test is that guard **provided it runs with the
+  vertex layer present** — otherwise it tests draw mode in a configuration the demo never uses.
+
+  **A held arrow key repeats.** An unthrottled live region announces every nudge, so the
+  announcement is on drop or debounced, not per move.
+
   **A tap resolves in one order, not two pairwise rules:** draft vertex, then event mark, then
   map position. In draw mode both `draw-mode.ts`'s click handling and a controller-level
   `onMapTap` listen to the same event, so two rules stated separately would leave the vertex

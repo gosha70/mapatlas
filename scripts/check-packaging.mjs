@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Does the published artifact actually work for a consumer?
+ *
+ * Every other gate runs inside this workspace, where npm hoists every dependency to one
+ * `node_modules` and any import resolves whether or not the package declared it. That is the
+ * one environment a consumer never has. This packs the real tarballs, installs them into a
+ * scratch project with **`--install-strategy=nested`** so nothing is hoisted, and asks the
+ * questions a consumer's resolver would ask.
+ *
+ * Nested is the point. Under hoisting, a transitive `maplibre-gl` sits at the application's
+ * root and `maplibre-gl/dist/maplibre-gl.css` resolves by luck; under nesting it sits inside
+ * `@mapatlas/maplibre` and does not — which is what pnpm and Yarn PnP do by design. Only a
+ * peer dependency puts it where the application can reach it.
+ */
+
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+
+/** Packed together because `@mapatlas/core` is a workspace version no registry can serve. */
+const PACKAGES = ["packages/core", "packages/maplibre"];
+
+/** What a consumer must be able to reach from their own project root. */
+const CONSUMER_IMPORTS = ["@mapatlas/maplibre", "maplibre-gl/dist/maplibre-gl.css"];
+
+function run(command, args, cwd) {
+  return execFileSync(command, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+const scratch = mkdtempSync(join(tmpdir(), "mapatlas-packaging-"));
+const failures = [];
+
+try {
+  const tarballs = PACKAGES.map((directory) => {
+    const output = run(
+      "npm",
+      ["pack", "--silent", "--pack-destination", scratch],
+      join(root, directory),
+    );
+    return join(scratch, output.trim().split("\n").at(-1));
+  });
+
+  writeFileSync(
+    join(scratch, "package.json"),
+    `${JSON.stringify({ name: "consumer", private: true, version: "0.0.0", type: "module" }, null, 2)}\n`,
+  );
+
+  run(
+    "npm",
+    ["install", "--install-strategy=nested", "--no-audit", "--no-fund", "--silent", ...tarballs],
+    scratch,
+  );
+
+  const require = createRequire(join(scratch, "consumer.js"));
+  for (const specifier of CONSUMER_IMPORTS) {
+    try {
+      require.resolve(specifier);
+    } catch (error) {
+      failures.push(
+        `cannot resolve "${specifier}" — ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`,
+      );
+    }
+  }
+
+  // The README ships, so the package has something to say on npm.
+  if (!existsSync(join(scratch, "node_modules/@mapatlas/maplibre/README.md"))) {
+    failures.push("the packed package carries no README.md");
+  }
+
+  // And the peer really is a peer: installed at the consumer's root, not nested inside us.
+  if (!existsSync(join(scratch, "node_modules/maplibre-gl/package.json"))) {
+    failures.push("maplibre-gl is not installed at the consumer root — it is not a peer");
+  }
+} finally {
+  rmSync(scratch, { recursive: true, force: true });
+}
+
+if (failures.length > 0) {
+  console.error("check:packaging — the published artifact would not work for a consumer:\n");
+  for (const failure of failures) console.error(`  ${failure}`);
+  console.error("\nSee packages/maplibre/README.md for what consumers are told to import.");
+  process.exit(1);
+}
+
+console.log(
+  `check:packaging — clean (${CONSUMER_IMPORTS.length} consumer imports, nested resolution)`,
+);

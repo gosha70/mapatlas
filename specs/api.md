@@ -838,6 +838,13 @@ export interface MapController {
 export declare function createMapController(o: MapControllerOptions): MapController;
 ```
 
+**`maplibre-gl` is a peer dependency of `@mapatlas/maplibre`**, not a bundled one. Two copies
+in one application are not merely wasteful: `addProtocol` registers a handler on a MapLibre
+*module instance*, so a nested second copy would register PMTiles on a runtime that is not
+drawing the consumer's map, and the archive would silently fail to load. Declaring it a peer
+also makes the stylesheet path below resolvable from the consumer's own project, which strict
+resolvers (pnpm, Yarn PnP) require and npm's hoisting merely happens to allow.
+
 **Consumers load the renderer's stylesheet.** `@mapatlas/maplibre` does not import
 `maplibre-gl/dist/maplibre-gl.css` on the consumer's behalf: a package that injects global CSS
 takes a decision about the host document that belongs to the application, and it breaks any

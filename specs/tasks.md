@@ -480,6 +480,15 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   map, so the browser lane loads it and asserts marks land **inside the map container** —
   bounds alone pass while a mark sits hundreds of pixels below it.
 
+  Telling a consumer to import `maplibre-gl/dist/maplibre-gl.css` obliges the engine to make
+  that path resolvable *from their project*, so `maplibre-gl` is a **peer dependency** rather
+  than a bundled one. There is a correctness reason as well as a packaging one: `addProtocol`
+  registers on a MapLibre **module instance**, so a second nested copy would register PMTiles
+  on a runtime that is not drawing the consumer's map, and an archive would silently fail to
+  load. `npm run check:packaging` packs the real tarballs and installs them with
+  `--install-strategy=nested`, which is the one environment no other gate reaches: inside this
+  workspace every dependency is hoisted and an undeclared import resolves anyway.
+
   **Marks are DOM markers**, since `MarkerStyle.html` is inserted verbatim and must be
   keyboard-reachable. Marker construction belongs to `MapEnvironment`, not `MapLike`: the
   environment owns the renderer's constructors, the map instance owns map operations. A marker

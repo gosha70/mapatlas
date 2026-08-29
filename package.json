@@ -23,6 +23,7 @@
     "test:watch": "vitest",
     "scan:isolation": "node scripts/scan-isolation.mjs",
     "scan:spdx": "node scripts/scan-spdx.mjs",
+    "check:packaging": "node scripts/check-packaging.mjs",
     "verify": "npm run build && npm run typecheck && npm run lint && npm run test:coverage && npm run scan:isolation && npm run scan:spdx && npm run format:check",
     "test:coverage": "vitest run --coverage",
     "test:browser": "playwright test",

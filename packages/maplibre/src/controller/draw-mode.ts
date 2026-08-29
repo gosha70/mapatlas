@@ -98,6 +98,12 @@ export function startDrawMode(map: MapLike, handlers: DrawModeHandlers): DrawSes
   }
 
   function onStart(event: MapPointerEvent): void {
+    // Any new press invalidates whatever the previous gesture was waiting for. This is where
+    // a completed drag's gesture is finally dropped: the renderer sends no click after one, so
+    // nothing consumes it at the time, and a gesture left waiting would be consumed by this
+    // press's click instead — swallowing the user's next tap, once per drag.
+    gesture = null;
+
     const index = vertexAt(map, event.point);
     if (index === null) return;
 
@@ -125,16 +131,24 @@ export function startDrawMode(map: MapLike, handlers: DrawModeHandlers): DrawSes
       // temporary listeners go, and the session stays live for another attempt. Rethrown
       // rather than swallowed — it is the consumer's exception and their event dispatch.
       //
-      // The gesture is deliberately *kept*, already marked as moved. Clearing it would let
-      // the click that follows fall through to the hit test and be reported as a click on
-      // the very vertex whose move just failed — a drag that failed turning into an
-      // interaction the consumer never made.
+      // The gesture is kept, for the same reason a successful one is: a click may still
+      // follow, and it must be consumed rather than reported as a click on the vertex whose
+      // move just failed. The next press discards it if no click comes.
       releaseDrag();
       throw error;
     }
   }
 
-  /** The gesture finished. The click that follows belongs to it, so the gesture is kept. */
+  /**
+   * The gesture finished, so the drag is released — but the gesture itself is **kept**.
+   *
+   * Whether a click follows cannot be decided here: the renderer sends one for a press that
+   * stayed within its movement tolerance and none for a press that passed it, and that
+   * threshold is the renderer's, not ours. So the gesture waits, and the two things that can
+   * happen to it both do the right thing — a click consumes it, and the next press discards
+   * it. Clearing here instead would let a press that drifted a couple of pixels off a vertex
+   * fall through to the hit test and be taken as an instruction to add one.
+   */
   function onEnd(): void {
     releaseDrag();
   }
@@ -149,8 +163,9 @@ export function startDrawMode(map: MapLike, handlers: DrawModeHandlers): DrawSes
     if (gesture !== null) {
       const { index, moved } = gesture;
       gesture = null;
-      // A drag is a drag and nothing else: having moved a vertex, the click that follows is
-      // not also a click on it, and never an instruction to add another.
+      // A press that went down on a vertex and did not move is a click on that vertex,
+      // wherever the pointer ended up. One that moved is a drag, and a drag is a drag and
+      // nothing else — never also a click, and never an instruction to add another vertex.
       if (!moved) handlers.onVertexClick?.(index);
       return;
     }

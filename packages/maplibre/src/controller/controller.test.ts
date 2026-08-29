@@ -1835,6 +1835,13 @@ describe("renderer-owned class names are reserved", () => {
   });
 });
 
+/** A whole tap: the renderer never sends a bare click without its own press first. */
+function tap(rig: Harness, at: { x: number; y: number; lng: number; lat: number }): void {
+  rig.map.firePointer("mousedown", at);
+  rig.map.firePointer("mouseup", at);
+  rig.map.firePointer("click", at);
+}
+
 describe("draw mode borrows interaction and gives it back", () => {
   const AT = { x: 10, y: 20, lng: 18.06, lat: 59.33 };
   const ELSEWHERE = { x: 90, y: 90, lng: 18.09, lat: 59.36 };
@@ -1870,7 +1877,7 @@ describe("draw mode borrows interaction and gives it back", () => {
     controller.enterDrawMode(h);
 
     vertexUnderPointer(rig, null);
-    rig.map.firePointer("click", AT);
+    tap(rig, AT);
 
     expect(h.added).toEqual([{ lat: 59.33, lng: 18.06 }]);
     expect(h.clicked).toEqual([]);
@@ -1883,9 +1890,7 @@ describe("draw mode borrows interaction and gives it back", () => {
     controller.enterDrawMode(h);
 
     vertexUnderPointer(rig, 2);
-    rig.map.firePointer("mousedown", AT);
-    rig.map.firePointer("mouseup", AT);
-    rig.map.firePointer("click", AT);
+    tap(rig, AT);
 
     expect(h.clicked).toEqual([2]);
     expect(h.added).toEqual([]);
@@ -1897,12 +1902,15 @@ describe("draw mode borrows interaction and gives it back", () => {
     controller.enterDrawMode(handlers());
 
     vertexUnderPointer(rig, null);
-    rig.map.firePointer("click", AT);
+    tap(rig, AT);
 
     expect(rig.map.queriedPoints.at(-1)).toEqual({ x: 10, y: 20 });
   });
 
   it("moves a vertex through a drag, and never also clicks or adds one", () => {
+    // No trailing click is fired, because the renderer does not fire one: past its movement
+    // tolerance the gesture is a drag. The fake refuses to fire it, so a test cannot pretend
+    // otherwise.
     const { controller, harness: rig } = mount({ sources: [OSM] });
     rig.map.fireLoad();
     const h = handlers();
@@ -1912,12 +1920,56 @@ describe("draw mode borrows interaction and gives it back", () => {
     rig.map.firePointer("mousedown", AT);
     rig.map.firePointer("mousemove", ELSEWHERE);
     rig.map.firePointer("mouseup", ELSEWHERE);
-    rig.map.firePointer("click", ELSEWHERE);
 
     expect(h.moved).toEqual([[1, { lat: 59.36, lng: 18.09 }]]);
-    // A drag is a drag and nothing else.
     expect(h.clicked).toEqual([]);
     expect(h.added).toEqual([]);
+  });
+
+  it("does not add a vertex when a press on one drifted off it", () => {
+    // Within the renderer's movement tolerance a click still arrives, but the pointer may no
+    // longer be over the vertex it went down on. Falling through to the hit test would find
+    // nothing there and take it as an instruction to add a vertex — a press on an existing
+    // one creating another beside it.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const h = handlers();
+    controller.enterDrawMode(h);
+
+    vertexUnderPointer(rig, 4);
+    rig.map.firePointer("mousedown", AT);
+    rig.map.firePointer("mousemove", { ...AT, x: AT.x + 2 });
+    rig.map.firePointer("mouseup", { ...AT, x: AT.x + 2 });
+    // Drifted off the vertex, so the hit test would find nothing here.
+    vertexUnderPointer(rig, null);
+    rig.map.firePointer("click", { ...AT, x: AT.x + 2 });
+
+    expect(h.added).toEqual([]);
+    // Nor a click: the pointer moved, so this was a drag — a short one, but a drag.
+    expect(h.clicked).toEqual([]);
+    expect(h.moved).toHaveLength(1);
+  });
+
+  it("does not swallow the next unrelated click after a completed drag", () => {
+    // The defect this pins. The renderer sends no click after a drag, so a gesture kept
+    // waiting for one is still waiting when the user next taps the map — and consumes that
+    // tap instead. Once per drag, the next thing the user does would do nothing.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const h = handlers();
+    controller.enterDrawMode(h);
+
+    vertexUnderPointer(rig, 1);
+    rig.map.firePointer("mousedown", AT);
+    rig.map.firePointer("mousemove", ELSEWHERE);
+    rig.map.firePointer("mouseup", ELSEWHERE);
+    expect(h.moved).toHaveLength(1);
+
+    // A later, entirely separate tap on empty map.
+    vertexUnderPointer(rig, null);
+    tap(rig, { x: 5, y: 5, lng: 18.01, lat: 59.31 });
+
+    expect(h.added).toEqual([{ lat: 59.31, lng: 18.01 }]);
   });
 
   it("stops the gesture becoming a map drag before anything else", () => {
@@ -1987,9 +2039,9 @@ describe("draw mode borrows interaction and gives it back", () => {
     rig.map.firePointer("mousedown", AT);
     rig.map.firePointer("mouseout", AT);
 
-    // A later, unrelated click on empty map still adds.
+    // A later, unrelated tap on empty map still adds.
     vertexUnderPointer(rig, null);
-    rig.map.firePointer("click", ELSEWHERE);
+    tap(rig, ELSEWHERE);
 
     expect(h.added).toEqual([{ lat: 59.36, lng: 18.09 }]);
   });
@@ -2011,7 +2063,9 @@ describe("draw mode cleanup survives a consumer failure", () => {
 
     rig.map.featuresUnderPointer = [{ properties: { kind: "draft-vertex", index: 0 } }];
     rig.map.firePointer("mousedown", AT);
-    expect(() => rig.map.firePointer("mousemove", AT)).toThrow(/consumer blew up/);
+    expect(() => rig.map.firePointer("mousemove", { ...AT, x: AT.x + 40 })).toThrow(
+      /consumer blew up/,
+    );
 
     // Panning is back and the temporary listeners are gone: one consumer bug must not leave
     // the map permanently unpannable with a drag nobody can end.
@@ -2019,15 +2073,10 @@ describe("draw mode cleanup survives a consumer failure", () => {
     expect(rig.map.listenerCount("mousemove")).toBe(0);
     expect(rig.map.listenerCount("mouseup")).toBe(0);
 
-    // The click that ends the failed gesture is still swallowed: a drag that failed must not
-    // become an interaction the consumer never made.
+    // The session is still live: a fresh tap works, and is not swallowed by the failed drag.
     rig.map.featuresUnderPointer = [];
-    rig.map.firePointer("mouseup", AT);
-    rig.map.firePointer("click", AT);
-    expect(added).toEqual([]);
-
-    // And the session is still live: a *fresh* gesture works.
-    rig.map.firePointer("click", { x: 50, y: 50, lng: 18.09, lat: 59.36 });
+    rig.map.firePointer("mouseup", { ...AT, x: AT.x + 40 });
+    tap(rig, { x: 50, y: 50, lng: 18.09, lat: 59.36 });
     expect(added).toEqual([{ lat: 59.36, lng: 18.09 }]);
 
     exit();
@@ -2047,9 +2096,13 @@ describe("draw mode cleanup survives a consumer failure", () => {
 
     rig.map.featuresUnderPointer = [{ properties: { kind: "draft-vertex", index: 3 } }];
     rig.map.firePointer("mousedown", AT);
-    expect(() => rig.map.firePointer("mousemove", AT)).toThrow();
-    rig.map.firePointer("mouseup", AT);
-    rig.map.firePointer("click", AT);
+    // Moved far enough to be a drag, so the renderer will send no click after it either.
+    expect(() => rig.map.firePointer("mousemove", { ...AT, x: AT.x + 40 })).toThrow();
+    rig.map.firePointer("mouseup", { ...AT, x: AT.x + 40 });
+
+    // And the next unrelated tap is not swallowed by the failed gesture.
+    rig.map.featuresUnderPointer = [];
+    tap(rig, { x: 5, y: 5, lng: 18.01, lat: 59.31 });
 
     expect(clicked).toEqual([]);
   });

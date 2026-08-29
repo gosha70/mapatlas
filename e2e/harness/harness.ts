@@ -17,6 +17,18 @@ import { createWebTrackRecorder } from "@mapatlas/recorder-web";
 // mark sits wherever the document happens to put it — generally outside the map entirely.
 import "maplibre-gl/dist/maplibre-gl.css";
 
+// MapLibre 6 loads its worker as a separate module, resolved relative to the *importing*
+// chunk. Under a bundler that rewrites imports — Vite's optimised dependency chunks here —
+// that resolution lands beside the rewritten chunk instead of beside the package, and the
+// request 404s. Nothing errors: the map is constructed, the style parses, sources emit
+// `sourcedata`, and then nothing is ever painted because no tile is ever built.
+//
+// `?worker&url` asks the bundler for a URL it will actually serve, and `setWorkerUrl` tells
+// MapLibre to use it. This is a **consumer** responsibility — the engine cannot do it,
+// because the correct URL depends on the consumer's bundler — and it is documented as one.
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
+import { setWorkerUrl } from "maplibre-gl";
+
 import { createBrowserMapEnvironment, createMapController } from "@mapatlas/maplibre/controller";
 import { createMapControllerInternal } from "@mapatlas/maplibre/controller-internal";
 import type {
@@ -86,6 +98,8 @@ declare global {
   }
 }
 
+setWorkerUrl(maplibreWorkerUrl);
+
 function mapContainer(): HTMLElement {
   const element = document.createElement("div");
   element.style.width = "800px";
@@ -99,6 +113,10 @@ interface MapProbe {
   getTerrain(): unknown;
   getLayer(id: string): unknown;
   dragPan: { isEnabled(): boolean };
+  queryRenderedFeatures(
+    point: { x: number; y: number },
+    layerIds: readonly string[],
+  ): readonly unknown[];
 }
 
 interface MountedProbe {
@@ -107,6 +125,8 @@ interface MountedProbe {
   hasLayer(id: string): boolean;
   /** Whether the map will pan again, which draw mode borrows and must give back. */
   dragPanEnabled(): boolean;
+  /** Whether a draft vertex is actually painted, and so hit-testable. */
+  vertexIsRendered(): boolean;
 }
 
 function mountWithProbe(options: MapControllerOptions): MountedProbe {
@@ -129,6 +149,8 @@ function mountWithProbe(options: MapControllerOptions): MountedProbe {
     // `MapLike` for a test, and a mark anchored to a coordinate is a better observable
     // anyway — it is what a user would see move.
     dragPanEnabled: () => map?.dragPan.isEnabled() ?? false,
+    vertexIsRendered: () =>
+      (map?.queryRenderedFeatures({ x: 400, y: 300 }, ["mapatlas:draft-vertex"]).length ?? 0) > 0,
   };
 }
 

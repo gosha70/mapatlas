@@ -22,11 +22,26 @@ Two MapLibre copies in one application would be worse than wasteful: `addProtoco
 drawing your map, and the archive would silently fail to load. Declaring it as a peer means
 your application resolves exactly one.
 
-## Load the stylesheet
+## Load the stylesheet, and point MapLibre at its worker
 
 ```ts
 import "maplibre-gl/dist/maplibre-gl.css";
+
+import { setWorkerUrl } from "maplibre-gl";
+import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url"; // Vite
+
+setWorkerUrl(workerUrl);
 ```
+
+MapLibre loads its worker as a separate module, resolved relative to the **importing chunk**.
+Under a bundler that rewrites imports — Vite's optimised dependency chunks, for instance — that
+resolution lands beside the rewritten chunk rather than beside the package, and the request
+404s. Nothing errors: the map is constructed, the style parses, sources emit `sourcedata`, and
+then **nothing is ever painted**, because no tile is ever built.
+
+The engine cannot do this for you: the correct URL depends on your bundler. The syntax above is
+Vite's; other bundlers have their own. If your map shows controls and markers but no map, this
+is the first thing to check.
 
 This package does **not** import it for you. Injecting global CSS is a decision about your
 document rather than ours, and it breaks any application that bundles CSS itself. Without it
@@ -46,7 +61,10 @@ the gap at runtime instead of at compile time.
 
 ## License
 
-Apache-2.0. Downstream tile and data licences (OSM/OpenSeaMap ODbL, NOAA public domain) are
-obligations you inherit when you point the renderer at those sources — see
+Apache-2.0. Downstream tile and data licences are obligations you inherit when you point the
+renderer at those sources. OpenStreetMap and OpenSeaMap seamarks are ODbL (share-alike);
+**bathymetry and elevation are licensed per product, not per publisher** — terms differ between
+datasets from the same agency, and some carry third-party contributions whose terms travel with
+them, so check the specific product and its contributor metadata. See
 [`SECURITY.md`](https://github.com/gosha70/mapatlas/blob/main/SECURITY.md) and the licensing
 rule in `specs/architecture.md`.

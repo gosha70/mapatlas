@@ -1013,29 +1013,127 @@ test("leaves an icon at its intrinsic size when nothing sized the mark", async (
   expect(boxes?.image).toEqual({ width: 200, height: 100 });
 });
 
-/**
- * The real-browser drag T4.5 asks for, and cannot yet run.
- *
- * Dragging a vertex requires hit-testing a *rendered* layer, and **nothing renders in this
- * lane**. Established by elimination rather than inference:
- *
- *   - a raw MapLibre map, built with no engine code and one inline GeoJSON source, reaches
- *     `sourcedata` and `styledata` but never `load` or `idle`, reports `loaded() === false`
- *     and `isSourceLoaded() === false`, and emits no `error`;
- *   - `queryRenderedFeatures` returns nothing, for that map and for the engine's own layers;
- *   - a screenshot of either is blank — a deliberately magenta 12px line does not appear in
- *     a single sampled pixel;
- *   - WebGL is present and working (SwiftShader via ANGLE), and the canvas is sized 800x600.
- *
- * So every browser assertion made so far is about the DOM and MapLibre's **style state** —
- * marks, attribution, classes, layer presence, terrain — all of which are true and worth
- * having, and none of which touch painting. That is a gap in the lane, not in this task, and
- * it predates it.
- *
- * Left as a failing-by-declaration test rather than deleted, so the requirement stays visible
- * and re-enables the moment the lane paints. The interaction itself is covered
- * deterministically in `controller.test.ts`, where the fake drives every gesture path.
- */
-test.fixme("drags a real vertex without panning the map, then gives panning back", () => {
-  // Re-enable with the body from this branch's history once the browser lane renders.
+test("drags a real vertex without panning the map, then gives panning back", async ({ page }) => {
+  // Three separable claims that only a real gesture settles: the vertex moved, the camera did
+  // *not* — which is what `preventDefault` plus borrowing `dragPan` exists to guarantee — and
+  // panning works again afterwards. A drag that also panned would still report a moved vertex,
+  // so the camera claim is the one that matters.
+  //
+  // The camera is observed through a mark anchored to a coordinate rather than by reading it.
+  // Reading it would mean widening the controller's seam for a test, and a mark that stays put
+  // while a vertex moves is what a user would actually see.
+  await page.goto("/");
+
+  const CENTRE = { lat: 59.33, lng: 18.06 };
+
+  await page.evaluate(
+    ([raster, attribution, centre]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        center: centre,
+        zoom: 14,
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      } as never);
+      window.mapatlas.probe = probe;
+
+      // Vertex 0 sits at the map's centre, so it is at the container's centre on screen and
+      // needs no projection to find.
+      probe.controller.renderDraft([
+        centre as { lat: number; lng: number },
+        { lat: 59.332, lng: 18.064 },
+      ]);
+      // A reference mark well away from the drag path: if the map pans, this moves with it.
+      probe.controller.renderEvents([
+        {
+          id: "reference",
+          position: { lat: 59.328, lng: 18.055 },
+          occurredAt: 1,
+          media: [],
+          tags: [],
+        },
+      ] as never);
+
+      window.mapatlas.drawLog = { moved: [], added: [], clicked: [] };
+      window.mapatlas.exitDraw = probe.controller.enterDrawMode({
+        onVertexAdd: (at) => window.mapatlas.drawLog?.added.push(at),
+        onVertexMove: (index, to) => window.mapatlas.drawLog?.moved.push([index, to]),
+        onVertexClick: (index) => window.mapatlas.drawLog?.clicked.push(index),
+      });
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, CENTRE] as const,
+  );
+
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(1);
+  // The draft has to be *painted* before a vertex can be hit-tested, which is what the
+  // harness's `setWorkerUrl` call makes possible at all.
+  await expect
+    .poll(async () => page.evaluate(() => window.mapatlas.probe?.vertexIsRendered() ?? false))
+    .toBe(true);
+
+  const start = await page.evaluate(() => {
+    const container = document.querySelector(".maplibregl-map")?.getBoundingClientRect();
+    const reference = document.querySelector(".mapatlas-marker")?.getBoundingClientRect();
+    if (container === undefined || reference === undefined) return null;
+    return {
+      vertex: { x: container.left + container.width / 2, y: container.top + container.height / 2 },
+      reference: { x: Math.round(reference.left), y: Math.round(reference.top) },
+      dragPan: window.mapatlas.probe?.dragPanEnabled() ?? false,
+    };
+  });
+  expect(start).not.toBeNull();
+  expect(start?.dragPan).toBe(true);
+
+  // A real gesture: press on the vertex, move, release.
+  await page.mouse.move(start!.vertex.x, start!.vertex.y);
+  await page.mouse.down();
+  await page.mouse.move(start!.vertex.x + 60, start!.vertex.y + 40, { steps: 8 });
+  await page.mouse.up();
+
+  const after = await page.evaluate(() => {
+    const reference = document.querySelector(".mapatlas-marker")?.getBoundingClientRect();
+    return {
+      reference:
+        reference === undefined
+          ? null
+          : { x: Math.round(reference.left), y: Math.round(reference.top) },
+      dragPan: window.mapatlas.probe?.dragPanEnabled() ?? false,
+      log: window.mapatlas.drawLog,
+    };
+  });
+
+  // The vertex moved...
+  expect(after.log?.moved.length ?? 0).toBeGreaterThan(0);
+  expect(after.log?.moved.at(-1)?.[0]).toBe(0);
+  // ...the map did not, or the reference mark would have moved with it...
+  expect(after.reference).toEqual(start?.reference);
+  // ...a drag was not also a click or an add...
+  expect(after.log?.clicked).toEqual([]);
+  expect(after.log?.added).toEqual([]);
+  // ...and panning is back.
+  expect(after.dragPan).toBe(true);
+
+  // And the map really does pan once draw mode has released it — so "panning is back" is a
+  // statement about the map, not just about a flag.
+  await page.evaluate(() => {
+    window.mapatlas.exitDraw?.();
+  });
+  await page.mouse.move(start!.vertex.x, start!.vertex.y + 150);
+  await page.mouse.down();
+  await page.mouse.move(start!.vertex.x - 90, start!.vertex.y + 150, { steps: 8 });
+  await page.mouse.up();
+
+  const panned = await page.evaluate(() => {
+    const reference = document.querySelector(".mapatlas-marker")?.getBoundingClientRect();
+    return reference === undefined ? null : { x: Math.round(reference.left) };
+  });
+  expect(panned?.x).not.toBe(start?.reference.x);
 });

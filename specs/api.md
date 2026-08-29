@@ -847,6 +847,13 @@ drawing the consumer's map, and the archive would silently fail to load. Declari
 also makes the stylesheet path below resolvable from the consumer's own project, which strict
 resolvers (pnpm, Yarn PnP) require and npm's hoisting merely happens to allow.
 
+**Consumers point the renderer at its worker.** MapLibre loads its worker as a separate module
+resolved relative to the importing chunk, so a bundler that rewrites imports resolves it beside
+the rewritten chunk and the request 404s. Nothing errors — the map is constructed, the style
+parses, sources emit `sourcedata`, and nothing is ever painted. `setWorkerUrl` with a URL the
+bundler will serve fixes it, and the engine cannot do it because the right URL depends on the
+consumer's bundler.
+
 **Consumers load the renderer's stylesheet.** `@mapatlas/maplibre` does not import
 `maplibre-gl/dist/maplibre-gl.css` on the consumer's behalf: a package that injects global CSS
 takes a decision about the host document that belongs to the application, and it breaks any

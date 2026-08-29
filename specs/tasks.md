@@ -612,6 +612,16 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   once per drag. `mouseout`/`touchcancel` clear immediately, since a cancelled gesture is
   followed by nothing.
 
+  **Ending comes from the document, not the map.** The map's `mouseup` fires only for a release
+  over its container, so a drag ending a pixel past the edge — ordinary near a map's border —
+  would never end and the borrowed pan behaviour would never come back. `mouseout` looks like
+  the answer and is not: it bubbles, so it fires when the pointer crosses a *marker inside the
+  map*, and cancelling there re-enables panning while the button is still down, leaving the rest
+  of the gesture to pan the map under the vertex being dragged. Measured before it was fixed:
+  dragging a vertex across a mark 75px away restored panning at exactly that point and lost half
+  the remaining moves. So `MapEnvironment` supplies a document-level pointer release, and
+  `touchcancel` stays on the map, where a cancellation is genuine.
+
   A consumer callback that throws cancels **only the active drag** — panning back, temporary
   listeners detached, gesture cleared, the session still live for another attempt — and
   rethrows. `exit()` and `destroy()` use the same cleanup path. One session at a time: a second

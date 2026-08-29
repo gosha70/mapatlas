@@ -31,6 +31,7 @@ import { setWorkerUrl } from "maplibre-gl";
 
 import { createBrowserMapEnvironment, createMapController } from "@mapatlas/maplibre/controller";
 import { createMapControllerInternal } from "@mapatlas/maplibre/controller-internal";
+import { ENGINE_LAYER } from "@mapatlas/maplibre/engine-layers";
 import type {
   MapControllerCore,
   MapControllerOptions,
@@ -149,8 +150,10 @@ function mountWithProbe(options: MapControllerOptions): MountedProbe {
     // `MapLike` for a test, and a mark anchored to a coordinate is a better observable
     // anyway — it is what a user would see move.
     dragPanEnabled: () => map?.dragPan.isEnabled() ?? false,
+    // The constant, not a copy of it. A duplicated string here would mean a layer-id
+    // regression passing the unit lane *and* this one.
     vertexIsRendered: () =>
-      (map?.queryRenderedFeatures({ x: 400, y: 300 }, ["mapatlas:draft-vertex"]).length ?? 0) > 0,
+      (map?.queryRenderedFeatures({ x: 400, y: 300 }, [ENGINE_LAYER.draftVertex]).length ?? 0) > 0,
   };
 }
 

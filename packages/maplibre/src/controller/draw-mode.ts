@@ -3,7 +3,12 @@
 import type { LatLng } from "@mapatlas/core";
 
 import { ENGINE_LAYER } from "./engine-layers.js";
-import type { MapEventName, MapLike, MapPointerEvent } from "./environment.js";
+import type {
+  MapEnvironment,
+  MapLike,
+  MapPointerEvent,
+  MapPointerEventName,
+} from "./environment.js";
 
 /**
  * Vertex editing over the draft geometry the renderer already draws.
@@ -33,27 +38,38 @@ export class MapDrawModeError extends Error {
 }
 
 /** Events that begin a gesture, for both pointer families. */
-const START_EVENTS: readonly MapEventName[] = ["mousedown", "touchstart"];
+const START_EVENTS: readonly MapPointerEventName[] = ["mousedown", "touchstart"];
 /** Events that continue one. */
-const MOVE_EVENTS: readonly MapEventName[] = ["mousemove", "touchmove"];
-/** Events that finish one, where a click follows and is the gesture's own. */
-const END_EVENTS: readonly MapEventName[] = ["mouseup", "touchend"];
+const MOVE_EVENTS: readonly MapPointerEventName[] = ["mousemove", "touchmove"];
 /**
- * Events where the gesture is *taken away* rather than finished: the pointer leaves the map,
- * a system gesture claims the touch, a call arrives.
+ * Where the gesture is *taken away* rather than finished: a system gesture claims the touch,
+ * a call arrives.
  *
  * Separate from ending because no click follows a cancellation, so the gesture must be
  * forgotten — a remembered one would be consumed by the next unrelated click and swallow it.
  * Both paths release the drag, since the one that does not is the one that leaves the map
  * unpannable.
+ *
+ * `mouseout` is deliberately **not** here. It bubbles, so it fires when the pointer crosses a
+ * marker inside the map, and cancelling there re-enables panning while the button is still
+ * down — the remainder of the gesture then pans the map under the vertex being dragged.
+ * Ending is handled by a document-level release instead, which also covers the case `mouseout`
+ * was standing in for: a release outside the container, which the map never reports.
  */
-const CANCEL_EVENTS: readonly MapEventName[] = ["mouseout", "touchcancel"];
+const CANCEL_EVENTS: readonly MapPointerEventName[] = ["touchcancel"];
 
 /** Which vertex, if any, is drawn under a point. */
 function vertexAt(map: MapLike, point: { x: number; y: number }): number | null {
   for (const feature of map.queryRenderedFeatures(point, [ENGINE_LAYER.draftVertex])) {
     const index = feature.properties["index"];
     if (typeof index === "number") return index;
+    // A vertex the engine drew but cannot identify. Reading it as empty map would be worse
+    // than failing: the click that follows would add a vertex on top of the one already
+    // there, which looks like the map ignoring an edit rather than like a defect.
+    throw new MapDrawModeError(
+      `a draft vertex carries no numeric index (${JSON.stringify(feature.properties)}), so the ` +
+        `vertex under the pointer cannot be identified`,
+    );
   }
   return null;
 }
@@ -70,12 +86,18 @@ export interface DrawSession {
   exit(): void;
 }
 
-export function startDrawMode(map: MapLike, handlers: DrawModeHandlers): DrawSession {
+export function startDrawMode(
+  map: MapLike,
+  environment: MapEnvironment,
+  handlers: DrawModeHandlers,
+): DrawSession {
   /** The gesture in flight, and whether it has moved. */
   let gesture: { index: number; moved: boolean } | null = null;
   /** What panning was before the engine borrowed it, so it is given back as found. */
   let panningWasEnabled: boolean | null = null;
   let dragListenersAttached = false;
+  /** Unsubscribes the document-level release, once a drag is in flight. */
+  let stopListeningForRelease: (() => void) | null = null;
 
   /**
    * End the active drag, whatever ended it — a release, a cancellation, or a consumer
@@ -85,8 +107,9 @@ export function startDrawMode(map: MapLike, handlers: DrawModeHandlers): DrawSes
   function releaseDrag(): void {
     if (dragListenersAttached) {
       for (const type of MOVE_EVENTS) map.off(type, onMove);
-      for (const type of END_EVENTS) map.off(type, onEnd);
       for (const type of CANCEL_EVENTS) map.off(type, onCancel);
+      stopListeningForRelease?.();
+      stopListeningForRelease = null;
       dragListenersAttached = false;
     }
     if (panningWasEnabled !== null) {
@@ -104,6 +127,11 @@ export function startDrawMode(map: MapLike, handlers: DrawModeHandlers): DrawSes
     // press's click instead — swallowing the user's next tap, once per drag.
     gesture = null;
 
+    // Before the hit test, not after it. A second touch landing on empty map during a drag
+    // would otherwise return early and leave the first gesture's listeners attached with
+    // panning still disabled — a live drag nobody can drive until some later release.
+    releaseDrag();
+
     const index = vertexAt(map, event.point);
     if (index === null) return;
 
@@ -111,13 +139,12 @@ export function startDrawMode(map: MapLike, handlers: DrawModeHandlers): DrawSes
     // pointer, so disabling panning inside this callback can already be too late.
     event.preventDefault();
 
-    releaseDrag();
     gesture = { index, moved: false };
     panningWasEnabled = map.dragPan.isEnabled();
     map.dragPan.disable();
     for (const type of MOVE_EVENTS) map.on(type, onMove);
-    for (const type of END_EVENTS) map.on(type, onEnd);
     for (const type of CANCEL_EVENTS) map.on(type, onCancel);
+    stopListeningForRelease = environment.onPointerRelease(onEnd);
     dragListenersAttached = true;
   }
 

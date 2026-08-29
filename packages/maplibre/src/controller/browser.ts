@@ -56,7 +56,9 @@ function adapt(map: MapLibreMap): MapLike {
     queryRenderedFeatures: (point, layerIds) =>
       map
         .queryRenderedFeatures([point.x, point.y], { layers: [...layerIds] })
-        .map((feature) => ({ properties: feature.properties })),
+        // `?? {}` because the seam promises a record and the renderer's type does not: it
+        // normalises in practice, and "in practice" is not what the seam says.
+        .map((feature) => ({ properties: feature.properties ?? {} })),
     dragPan: map.dragPan,
     addSource: (id, source) => {
       map.addSource(id, source);
@@ -134,6 +136,21 @@ export function createBrowserMapEnvironment(): MapEnvironment {
         remove: () => {
           marker.remove();
         },
+      };
+    },
+
+    onPointerRelease(listener: () => void): () => void {
+      // On the window, so a release outside the map still ends the gesture it started.
+      // `touchcancel` stays on the map, where it is genuine: the system taking a touch away
+      // is a cancellation, not a release.
+      const forward = (): void => {
+        listener();
+      };
+      globalThis.addEventListener("mouseup", forward);
+      globalThis.addEventListener("touchend", forward);
+      return () => {
+        globalThis.removeEventListener("mouseup", forward);
+        globalThis.removeEventListener("touchend", forward);
       };
     },
 

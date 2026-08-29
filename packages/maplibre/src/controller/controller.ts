@@ -872,7 +872,7 @@ export function createMapControllerInternal(
             "listeners would each claim the map's pan behaviour",
         );
       }
-      const session = startDrawMode(map, handlers);
+      const session = startDrawMode(map, environment, handlers);
       drawSession = session;
       return () => {
         session.exit();

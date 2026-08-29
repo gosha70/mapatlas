@@ -43,6 +43,9 @@ export type MapCall =
 
 export class FakeMapError extends Error {}
 
+/** Both shapes the seam's overloads accept, since one store holds listeners for each. */
+type AnyListener = ((event: MapPointerEvent) => void) & (() => void);
+
 /**
  * How far a gesture may travel and still produce a click.
  *
@@ -73,6 +76,8 @@ export interface FakeMap extends MapLike {
   featuresUnderPointer: RenderedFeature[];
   /** Points the map was asked about, so a test can check *where* it looked. */
   readonly queriedPoints: readonly { x: number; y: number }[];
+  /** Layers the map was asked about, so a test can check *what* it looked at. */
+  readonly queriedLayers: readonly (readonly string[])[];
   /** Drive a gesture. Returns whether a listener called `preventDefault`. */
   firePointer(type: MapEventName, at?: { x: number; y: number; lng: number; lat: number }): boolean;
   /** Whether panning is currently enabled, and how many times it changed. */
@@ -114,8 +119,9 @@ export function createFakeMap(
   const sourceData = new Map<string, EngineFeatureCollection>();
   /** Layer ids in draw order, which `beforeId` inserts into rather than appends to. */
   let order: string[] = (preinstalled.layers ?? []).map((layer) => layer.id);
-  const listeners = new Map<MapEventName, ((event: MapPointerEvent) => void)[]>();
+  const listeners = new Map<MapEventName, AnyListener[]>();
   const queriedPoints: { x: number; y: number }[] = [];
+  const queriedLayers: string[][] = [];
   const dragPanChanges: boolean[] = [];
   let dragPanEnabled = true;
   /** Where the pointer went down, and how far it has travelled since. */
@@ -162,6 +168,9 @@ export function createFakeMap(
     get queriedPoints() {
       return queriedPoints;
     },
+    get queriedLayers() {
+      return queriedLayers;
+    },
     get dragPanEnabled() {
       return dragPanEnabled;
     },
@@ -169,19 +178,20 @@ export function createFakeMap(
       return dragPanChanges;
     },
 
-    on(type: MapEventName, listener: (event: MapPointerEvent) => void): void {
+    // Implements both overloads. A `load` listener takes no argument and a pointer listener
+    // takes one, so the store holds the shape that satisfies both and each caller gets back
+    // exactly what it registered.
+    on(type: MapEventName, listener: AnyListener): void {
       listeners.set(type, [...(listeners.get(type) ?? []), listener]);
     },
-    off(type: MapEventName, listener: (event: MapPointerEvent) => void): void {
+    off(type: MapEventName, listener: AnyListener): void {
       listeners.set(
         type,
         (listeners.get(type) ?? []).filter((registered) => registered !== listener),
       );
     },
     fireLoad(): void {
-      for (const listener of [...(listeners.get("load") ?? [])]) {
-        (listener as unknown as () => void)();
-      }
+      for (const listener of [...(listeners.get("load") ?? [])]) listener();
     },
 
     firePointer(
@@ -208,11 +218,18 @@ export function createFakeMap(
             `${gestureTravel.toFixed(1)}px — its tolerance is ${String(CLICK_TOLERANCE_PX)}px`,
         );
       }
-      if (type === "click" || type === "mouseup" || type === "touchend") {
-        if (type === "click") {
-          gestureStart = null;
-          gestureTravel = 0;
+      if (type === "click") {
+        if (gestureStart === null) {
+          // The renderer never sends a click without its own press first, so a test firing a
+          // bare one is modelling something that cannot happen — and would be exercising the
+          // controller against an input it will never see.
+          throw new FakeMapError(
+            `the renderer would not fire "click" without a preceding press — fire mousedown ` +
+              `and mouseup first, or the gesture this click belongs to does not exist`,
+          );
         }
+        gestureStart = null;
+        gestureTravel = 0;
       }
 
       let prevented = false;
@@ -227,8 +244,15 @@ export function createFakeMap(
       return prevented;
     },
 
-    queryRenderedFeatures(point: { x: number; y: number }): readonly RenderedFeature[] {
+    queryRenderedFeatures(
+      point: { x: number; y: number },
+      layerIds: readonly string[],
+    ): readonly RenderedFeature[] {
       queriedPoints.push(point);
+      // Recorded, so a test can assert *which* layers were asked about. Answering the same
+      // way whatever was asked would leave the layer id unguarded here, and its only other
+      // guard is a browser test — one duplicated string away from silently passing.
+      queriedLayers.push([...layerIds]);
       return this.featuresUnderPointer;
     },
 

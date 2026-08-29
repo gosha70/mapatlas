@@ -2,7 +2,7 @@
 import { expect, test } from "@playwright/test";
 
 import type { ConsoleWatch } from "./fixtures/browser.js";
-import { serveMapFixtures, watchConsole } from "./fixtures/browser.js";
+import { consoleFor, serveMapFixtures, watchConsole } from "./fixtures/browser.js";
 
 /**
  * Every map test fetches tiles now that the worker runs, so the hosts these specs invent are
@@ -16,11 +16,11 @@ test.beforeEach(async ({ page }) => {
   console_ = watchConsole(page);
 });
 
-test.afterEach((_fixtures, testInfo) => {
+test.afterEach(({ page }, testInfo) => {
   // Only when the test itself passed: a test that already failed has its own diagnosis, and
   // console noise from the failure would bury it.
   if (testInfo.status === testInfo.expectedStatus) {
-    expect(console_.unexpected()).toEqual([]);
+    expect(consoleFor(page).unexpected()).toEqual([]);
   }
 });
 

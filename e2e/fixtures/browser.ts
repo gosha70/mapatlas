@@ -117,6 +117,22 @@ export interface ConsoleWatch {
   unexpected(): string[];
 }
 
+/**
+ * The watch belonging to a page.
+ *
+ * Keyed by page rather than held in a module variable: Playwright gives each test its own
+ * page, and a shared variable would leak one test's expectations into another the moment the
+ * lane runs more than one worker.
+ */
+const watches = new WeakMap<Page, ConsoleWatch>();
+
+/** The watch for a page, for an `afterEach` that only has the fixture to go on. */
+export function consoleFor(page: Page): ConsoleWatch {
+  const watch = watches.get(page);
+  if (watch === undefined) throw new Error("no console watch for this page — call watchConsole");
+  return watch;
+}
+
 export function watchConsole(page: Page): ConsoleWatch {
   const seen: string[] = [];
   const allowed: RegExp[] = [];
@@ -126,8 +142,10 @@ export function watchConsole(page: Page): ConsoleWatch {
   });
   page.on("pageerror", (error) => seen.push(error.message));
 
-  return {
+  const watch: ConsoleWatch = {
     allow: (pattern) => allowed.push(pattern),
     unexpected: () => seen.filter((line) => !allowed.some((pattern) => pattern.test(line))),
   };
+  watches.set(page, watch);
+  return watch;
 }

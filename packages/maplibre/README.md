@@ -8,11 +8,16 @@ stack, terrain, and the track, event and draft geometry the engine draws.
 ## Install
 
 ```sh
-npm install @mapatlas/maplibre maplibre-gl
+npm install @mapatlas/maplibre maplibre-gl@6.6.0
 ```
 
-`maplibre-gl` is a **peer dependency**, not a bundled one. Two copies of MapLibre in one
-application do not merely waste bytes — `addProtocol` registers a handler on a MapLibre
+`maplibre-gl` is a **peer dependency**, and the range is a single exact version rather than
+`^6.6.0`. Every browser test in this repository runs against exactly 6.6.0; a caret would let a
+fresh install resolve a 6.x release nothing here has exercised, which is the drift the pin
+exists to prevent. Renderer dependencies in MAP-ATLAS carry no ranges — the packaging gate
+enforces it.
+
+Two MapLibre copies in one application would be worse than wasteful: `addProtocol` registers a handler on a MapLibre
 *module instance*, so a second copy would register PMTiles on a runtime that is not the one
 drawing your map, and the archive would silently fail to load. Declaring it as a peer means
 your application resolves exactly one.

@@ -21,7 +21,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "maplibre-gl": "^6.6.0"
+    "maplibre-gl": "6.6.0"
   },
   "dependencies": {
     "@mapatlas/core": "0.0.0",

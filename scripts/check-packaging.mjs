@@ -17,7 +17,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,21 @@ const PACKAGES = ["packages/core", "packages/maplibre"];
 
 /** What a consumer must be able to reach from their own project root. */
 const CONSUMER_IMPORTS = ["@mapatlas/maplibre", "maplibre-gl/dist/maplibre-gl.css"];
+
+/**
+ * Renderer peers that must be pinned exactly, and the package whose devDependency says to
+ * what. T0.1 admits no ranges for renderer dependencies, and the reason is not tidiness: the
+ * browser lane exercises one version, so a range lets a consumer's fresh install resolve a
+ * release nothing here has ever run. Checked against the *packed* manifest, because that is
+ * the file a consumer's resolver reads.
+ */
+const EXACT_PEERS = [{ package: "@mapatlas/maplibre", peer: "maplibre-gl" }];
+
+const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+function manifest(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
 
 /**
  * A command whose own diagnosis survives.
@@ -120,6 +135,28 @@ try {
     }
   }
 
+  // A renderer peer must name one version, and the same one this repository tests against.
+  // Without this the whole gate passes on a `^` edit, which is exactly how the range got in.
+  for (const { package: name, peer } of EXACT_PEERS) {
+    const packed = manifest(join(scratch, "node_modules", name, "package.json"));
+    const declared = packed.peerDependencies?.[peer];
+    const tested = manifest(join(root, "packages/maplibre/package.json")).devDependencies?.[peer];
+
+    if (declared === undefined) {
+      failures.push(`${name} no longer declares "${peer}" as a peer dependency`);
+    } else if (!EXACT_VERSION.test(declared)) {
+      failures.push(
+        `${name} pins "${peer}" as "${declared}" — renderer peers take an exact version, ` +
+          `since the browser lane exercises exactly one (specs/tasks.md T0.1)`,
+      );
+    } else if (declared !== tested) {
+      failures.push(
+        `${name} pins "${peer}" at "${declared}" but this repository tests "${tested}" — ` +
+          `a consumer would install a version nothing here has run`,
+      );
+    }
+  }
+
   // The README ships, so the package has something to say on npm.
   if (!existsSync(join(scratch, "node_modules/@mapatlas/maplibre/README.md"))) {
     failures.push("the packed package carries no README.md");
@@ -150,5 +187,6 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `check:packaging — clean (${CONSUMER_IMPORTS.length} consumer imports, nested resolution)`,
+  `check:packaging — clean (${CONSUMER_IMPORTS.length} consumer imports, ` +
+    `${EXACT_PEERS.length} pinned peer, nested resolution)`,
 );

@@ -838,7 +838,9 @@ export interface MapController {
 export declare function createMapController(o: MapControllerOptions): MapController;
 ```
 
-**`maplibre-gl` is a peer dependency of `@mapatlas/maplibre`**, not a bundled one. Two copies
+**`maplibre-gl` is a peer dependency of `@mapatlas/maplibre`**, pinned to one exact version
+per T0.1 — no ranges for renderer dependencies, because the browser lane exercises exactly one
+and a range would let a consumer resolve a release nothing here has run. Two copies
 in one application are not merely wasteful: `addProtocol` registers a handler on a MapLibre
 *module instance*, so a nested second copy would register PMTiles on a runtime that is not
 drawing the consumer's map, and the archive would silently fail to load. Declaring it a peer

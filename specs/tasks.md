@@ -489,6 +489,12 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   `--install-strategy=nested`, which is the one environment no other gate reaches: inside this
   workspace every dependency is hoisted and an undeclared import resolves anyway.
 
+  That gate also enforces **T0.1's no-ranges rule on the peer itself**, against the packed
+  manifest a consumer's resolver actually reads: the peer must name one exact version and it
+  must be the version this repository tests. A caret would let a fresh install resolve a 6.x
+  release the browser lane has never run — and without the check, reintroducing one passes
+  every other gate, which is precisely how it got in.
+
   **Marks are DOM markers**, since `MarkerStyle.html` is inserted verbatim and must be
   keyboard-reachable. Marker construction belongs to `MapEnvironment`, not `MapLike`: the
   environment owns the renderer's constructors, the map instance owns map operations. A marker

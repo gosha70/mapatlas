@@ -673,12 +673,11 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   focus, `prefers-reduced-motion` respected. Completes `MapController`, so this is the task that
   puts `createMapController` on the package barrel and makes `api.md`'s declaration true.
 
-  **The renderer's keyboard handler is a second `dragPan`.** MapLibre's canvas is focusable and
-  binds the arrow keys to pan and `+`/`-` to zoom. Keyboard vertex movement will use the arrows,
-  so on a focused map the two collide — the same borrow-and-give-back problem draw mode already
-  solves for panning, and `map.keyboard` has the same `enable`/`disable`/`isEnabled` shape. It
-  goes on the seam alongside `DragPanLike`, restored to its **entry state** rather than enabled,
-  and it is borrowed only while draw mode holds the map.
+  **The renderer's keyboard handler looked like a second `dragPan`, and is not.** MapLibre's
+  canvas is focusable and binds the arrow keys to pan and `+`/`-` to zoom, and keyboard vertex
+  movement wants the arrows too — which reads as the borrow-and-give-back problem draw mode
+  already solves for panning. Measurement below shows the two never contend, so `map.keyboard`
+  does **not** go on the seam and nothing is borrowed. Focus is the whole mechanism.
 
   **Keyboard-operable vertices are an architectural fork, not an attribute.** Draft vertices are
   layer features painted into the canvas: there is nothing to focus, nothing in the tab order,
@@ -705,15 +704,47 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   settled before any handler is written, rather than by whichever runs first. A vertex is
   **grabbed** (Enter or Space), **nudged** while grabbed (arrows), and **dropped** (Enter or
   Space) or **cancelled** (Escape); ungrabbed arrows move focus. That is the same shape as the
-  pointer path — press, move, release — so it reports through the same `onVertexMove`, and the
-  borrow window is the grabbed state exactly as `dragPan`'s is the drag.
+  pointer path — press, move, release — so it reports through the same `onVertexMove`, with the
+  grabbed state playing the part the drag plays there.
 
-  What is *not* settled by reasoning is how to keep the renderer's own arrow handling out of it.
-  The vertex elements sit inside the map container, so a keydown bubbles to where
-  `KeyboardHandler` is bound; whether `stopPropagation` on the element suffices depends on how
-  the renderer binds, which is a measurement and not an inference — the same shape as the
-  `mouseout` question, which reasoning got wrong. Measure first; borrow `map.keyboard` through
-  the seam if it does not, with the same restore-what-you-found rule as `dragPan`.
+  **Measured, not reasoned: the arrow keys are already partitioned by focus.** A focusable
+  element appended to the map container, with a `keydown` listener, arrows pressed five times
+  per row, in Chromium against `maplibre-gl` 6.6.0:
+
+  | focus | `stopPropagation` | arrows pan the map | vertex element sees the key |
+  | --- | --- | --- | --- |
+  | vertex element | no | no | yes |
+  | vertex element | yes | no | yes |
+  | canvas | no | **yes** | no |
+  | canvas | yes | **yes** | no |
+  | vertex element, after `map.keyboard.disable()` | either | no | yes |
+  | canvas, after `map.keyboard.disable()` | either | no | no |
+
+  `KeyboardHandler` binds to the canvas, which is a *sibling* of the vertex layer rather than an
+  ancestor of it. A keydown at a vertex therefore never traverses it — there is nothing for
+  `stopPropagation` to stop — and a keydown at the canvas never traverses the vertex, which is
+  why the element hears nothing in the canvas rows whatever `map.keyboard` is doing. The two
+  handlers are not competing for one event stream; they are on disjoint ones, selected by focus.
+
+  **So nothing is borrowed, and `map.keyboard` stays off the seam.** The apparent hole — the
+  canvas taking focus mid-grab — closes on its own, because focus transfer is synchronous and
+  a keydown is a later task: the vertex is blurred before any arrow can reach the canvas. If
+  blur ends the grab, there is no instant at which a grab is live and the canvas is focused, so
+  disabling the pan would only be suppressing a handler that could never have fired. Shipping
+  the borrow anyway would be the same mistake as shipping `stopPropagation`: a line that looks
+  protective, is unobservable, and has to be re-reasoned every time someone reads it.
+
+  **The contract is therefore focus-scoped grab cleanup, and it has two entrances.** Blur is the
+  ordinary one — a click on the canvas, a tab away, the window losing focus — and it must cancel
+  synchronously, not on a microtask, or the guarantee above is only mostly true. The other is
+  reconciliation: when `renderDraft` removes the focused element, the DOM may move focus to the
+  body **without firing `blur` at all**, so the removal path must cancel through the same
+  cleanup rather than relying on the event. One cleanup, two callers — the shape draw mode
+  already uses for `releaseDrag`.
+
+  **Escape needs no special handling at the map.** Measured with focus on a vertex, it reaches
+  the element's own listener and focus stays put — neither MapLibre nor browser-level UI
+  consumes it — so the cancel key is an ordinary element listener.
 
   **Two representations of one vertex is a new failure mode.** Deleting vertex 2 shifts every
   index above it while a focused DOM element still holds the old one. Two contracts: the DOM
@@ -739,10 +770,10 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   _AC:_ a reduced-motion preference **reaches the camera**, asserted through the seam in both
   states — the query is read by the controller, not only by a stylesheet, because the camera is
   moved from JavaScript and a media query has no say over an eased transition; the keyboard
-  handler is borrowed and restored exactly as `dragPan` is; draft vertices are focusable,
-  reachable by tab, operable by arrow keys, and announce which vertex is active; a tap on an
-  event mark fires `onEventClick` **alone**, asserted in the unit lane and not only in the
-  browser.
+  grab is released by drop, Escape, blur **and** by a reconcile that removes the focused vertex
+  — the last two asserted, since neither is driven by the key handler under test; draft vertices
+  are focusable, reachable by tab, operable by arrow keys, and announce which vertex is active; a tap on an event mark fires `onEventClick` **alone**, asserted in the unit lane and
+  not only in the browser.
 
   **That last one must be shown to fail without the implementation.** Marks are DOM elements
   above the canvas, so a click on one may never be dispatched as a map `click` at all — in which

@@ -212,6 +212,14 @@ export function createFakeMap(
           Math.hypot(at.x - gestureStart.x, at.y - gestureStart.y),
         );
       }
+      if (type === "touchcancel") {
+        // A cancelled touch is not a finished one: the platform has stopped tracking it, and
+        // no click is dispatched for the sequence it belonged to. Modelling that here is what
+        // makes "nothing is waiting for a click after a cancel" a fact about the renderer
+        // rather than a claim in a comment.
+        gestureStart = null;
+        gestureTravel = 0;
+      }
       if (type === "click" && gestureTravel > CLICK_TOLERANCE_PX) {
         throw new FakeMapError(
           `the renderer would not fire "click" after a gesture that travelled ` +

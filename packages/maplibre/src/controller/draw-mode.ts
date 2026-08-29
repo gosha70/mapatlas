@@ -107,7 +107,7 @@ export function startDrawMode(
   function releaseDrag(): void {
     if (dragListenersAttached) {
       for (const type of MOVE_EVENTS) map.off(type, onMove);
-      for (const type of CANCEL_EVENTS) map.off(type, onCancel);
+      for (const type of CANCEL_EVENTS) map.off(type, onEnd);
       stopListeningForRelease?.();
       stopListeningForRelease = null;
       dragListenersAttached = false;
@@ -143,7 +143,7 @@ export function startDrawMode(
     panningWasEnabled = map.dragPan.isEnabled();
     map.dragPan.disable();
     for (const type of MOVE_EVENTS) map.on(type, onMove);
-    for (const type of CANCEL_EVENTS) map.on(type, onCancel);
+    for (const type of CANCEL_EVENTS) map.on(type, onEnd);
     stopListeningForRelease = environment.onPointerRelease(onEnd);
     dragListenersAttached = true;
   }
@@ -167,7 +167,8 @@ export function startDrawMode(
   }
 
   /**
-   * The gesture finished, so the drag is released — but the gesture itself is **kept**.
+   * The gesture is over — finished or taken away — so the drag is released, but the gesture
+   * itself is **kept**.
    *
    * Whether a click follows cannot be decided here: the renderer sends one for a press that
    * stayed within its movement tolerance and none for a press that passed it, and that
@@ -175,15 +176,14 @@ export function startDrawMode(
    * happen to it both do the right thing — a click consumes it, and the next press discards
    * it. Clearing here instead would let a press that drifted a couple of pixels off a vertex
    * fall through to the hit test and be taken as an instruction to add one.
+   *
+   * A taken-away touch needs nothing further: the platform stopped tracking the sequence, so
+   * it dispatches no click and there is nothing for a kept gesture to swallow. Clearing it
+   * anyway looked like prudence and was unobservable — the fake enforces the no-click rule,
+   * and removing the clearing changed no test.
    */
   function onEnd(): void {
     releaseDrag();
-  }
-
-  /** The gesture was taken away. No click follows, so nothing should be waiting for one. */
-  function onCancel(): void {
-    releaseDrag();
-    gesture = null;
   }
 
   function onClick(event: MapPointerEvent): void {

@@ -233,6 +233,17 @@ export function watchConsole(page: Page): ConsoleWatch {
             `lastIndex — matches would alternate. Declare it without the g or y flag.`,
         );
       }
+      if (count !== undefined && !Number.isSafeInteger(count)) {
+        // `NaN`, a fraction and `Infinity` all slip past a `< 1` test and then declare an
+        // expectation that can never resolve: a fraction can never be matched exactly, an
+        // infinite one can never be reached, and `NaN` compares false against everything, so
+        // the wait never settles and the shortfall can never be named. A count is a number
+        // of lines, so it is a whole, finite one.
+        throw new Error(
+          `console watch: a count of ${String(count)} is not a whole finite number of lines, ` +
+            `so nothing could ever satisfy it. Use a positive integer.`,
+        );
+      }
       if (count !== undefined && count < 1) {
         // "Match this and expect none of it" is a suppression wearing a count, and not what
         // the parameter is for: an undeclared error is already a failure, so nothing needs

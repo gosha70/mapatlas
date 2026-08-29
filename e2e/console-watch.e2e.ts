@@ -206,6 +206,25 @@ test("refuses a count that declares an error must not happen", async ({ page }) 
   }).toThrow(/must not happen/);
 });
 
+test("refuses a count that is not a whole finite number of lines", async ({ page }) => {
+  // These three pass a `< 1` test and then produce an expectation with no resolution: the
+  // fraction can never be matched exactly, the infinite one can never be reached, and `NaN`
+  // compares false against every count, so the lane waits for a settle that cannot arrive
+  // and then reports a shortfall it cannot state. Rejecting them at declaration time is the
+  // difference between a typo and a timeout nobody can read.
+  await page.goto("/");
+  const watch = watchConsole(page);
+
+  for (const count of [Number.NaN, 1.5, Number.POSITIVE_INFINITY]) {
+    expect(() => {
+      watch.expect(/tile/, "not a number of lines", count);
+    }, String(count)).toThrow(/whole finite number of lines/);
+  }
+  expect(() => {
+    watch.expect(/tile/, "a whole positive count is fine", 2);
+  }).not.toThrow();
+});
+
 test("blames the declaration that absorbed the line, not the code that ran", async ({ page }) => {
   // Declarations are first-match-wins, so a broad one declared first takes the lines a
   // narrower one was waiting for. Reporting that as "none arrived, so whatever was supposed

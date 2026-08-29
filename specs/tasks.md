@@ -572,7 +572,41 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
 - **T4.5 Draw/edit mode.** `enterDrawMode` with add/move/click vertex handlers and draggable
   vertices, over the draft geometry T4.3 already renders. Needs its own deterministic event
   seam — pointer events, vertex hit-testing and drag are what make this a separate task rather
-  than an appendix to the render surface — plus one real-browser drag. A third-party drawing library may back this **only** if it is first
+  than an appendix to the render surface — plus one real-browser drag.
+
+  **`exit()` owns interaction state only.** It removes the permanent and in-flight listeners and
+  restores the map's pan behaviour to what it found. It does **not** remove the draft source or
+  layers, and does not clear their data: `renderDraft(null)` stays the only way to clear
+  geometry, and a consumer may want the line they authored to remain after they stop editing it.
+  This supersedes the original acceptance wording, which predates T4.3's decision to make engine
+  layers persistent so their ordering could not drift.
+
+  The down event calls `preventDefault()` **before** anything else — the renderer decides at
+  gesture start whether it owns the pointer, so disabling `dragPan` inside the callback can
+  already be too late. Panning is restored to its **entry state**, not enabled, since a consumer
+  may have disabled it themselves. Every termination path releases the drag: `mouseup`/`touchend`
+  finish it and keep the gesture for the click that follows, while `mouseout`/`touchcancel` take
+  it away and forget it, since no click follows and a remembered gesture would swallow the next.
+
+  A consumer callback that throws cancels **only the active drag** — panning back, temporary
+  listeners detached, the session still live for another attempt — and rethrows. `exit()` and
+  `destroy()` use the same cleanup path. One session at a time: a second `enterDrawMode` is
+  refused rather than leaving two claims on `dragPan` that nobody could reason about. `exit()` is
+  idempotent, and a drag never also reports a vertex click or a vertex add.
+
+  _AC:_ every rule above, mutation-tested. **The real-browser drag is blocked**: it needs to
+  hit-test a rendered layer, and nothing paints in the browser lane — see the note below. It is
+  present as a declared-pending test so the requirement stays visible.
+
+  **Lane defect found here, predating this task.** A raw MapLibre map built with no engine code
+  and one inline GeoJSON source reaches `sourcedata` and `styledata` but never `load` or `idle`,
+  reports `loaded()` and `isSourceLoaded()` false, and emits no `error`;
+  `queryRenderedFeatures` returns nothing for it or for the engine's layers; a screenshot of
+  either is blank, with a deliberately magenta 12px line absent from every sampled pixel. WebGL
+  is present and working (SwiftShader via ANGLE) and the canvas is sized. So **every browser
+  assertion made so far is about the DOM and MapLibre's style state** — marks, attribution,
+  classes, layer presence, terrain — all true, all worth having, and none of them painting.
+  Fixing that is its own task; until then the lane cannot answer "is it drawn". A third-party drawing library may back this **only** if it is first
   verified against the exact pinned `maplibre-gl` version; the `TrackDraft` contract stays
   independent of it either way, so a failed spike costs only `@mapatlas/maplibre`.
   _AC:_ tapping appends a vertex, dragging moves one, the exit fn removes every listener and the

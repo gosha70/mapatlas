@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // @vitest-environment happy-dom
-import type { JSONValue, MapEvent, TileSource, Track, TrackPoint } from "@mapatlas/core";
+import type { JSONValue, LatLng, MapEvent, TileSource, Track, TrackPoint } from "@mapatlas/core";
 import type { LayerSpecification } from "maplibre-gl";
 
 import type { MarkerStyle } from "../marks/marker-style.js";
 import type { EventPresentation } from "../marks/presentation.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { DrawModeHandlers } from "./draw-mode.js";
+import { MapDrawModeError } from "./draw-mode.js";
 import { ENGINE_ID_PREFIX, ENGINE_LAYER, ENGINE_SOURCE } from "./engine-layers.js";
 import type { MapConstructorOptions, MapEnvironment } from "./environment.js";
 import type { FakeMap, FakeMarker, MapCall, PreinstalledStyleState } from "./fake-map.js";
@@ -1830,5 +1832,359 @@ describe("renderer-owned class names are reserved", () => {
     controller.renderEvents([eventFixture("e1", 18.06)]);
 
     expect(placed(rig)[0]?.element.className).toContain("catch-mark");
+  });
+});
+
+describe("draw mode borrows interaction and gives it back", () => {
+  const AT = { x: 10, y: 20, lng: 18.06, lat: 59.33 };
+  const ELSEWHERE = { x: 90, y: 90, lng: 18.09, lat: 59.36 };
+
+  /** Puts a vertex under the pointer, or clears it. */
+  function vertexUnderPointer(rig: Harness, index: number | null): void {
+    rig.map.featuresUnderPointer =
+      index === null ? [] : [{ properties: { kind: "draft-vertex", index } }];
+  }
+
+  function handlers(): DrawModeHandlers & {
+    added: LatLng[];
+    moved: [number, LatLng][];
+    clicked: number[];
+  } {
+    const added: LatLng[] = [];
+    const moved: [number, LatLng][] = [];
+    const clicked: number[] = [];
+    return {
+      added,
+      moved,
+      clicked,
+      onVertexAdd: (at) => added.push(at),
+      onVertexMove: (index, to) => moved.push([index, to]),
+      onVertexClick: (index) => clicked.push(index),
+    };
+  }
+
+  it("appends a vertex where the map was tapped", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const h = handlers();
+    controller.enterDrawMode(h);
+
+    vertexUnderPointer(rig, null);
+    rig.map.firePointer("click", AT);
+
+    expect(h.added).toEqual([{ lat: 59.33, lng: 18.06 }]);
+    expect(h.clicked).toEqual([]);
+  });
+
+  it("clicks a vertex rather than adding one when a vertex is under the pointer", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const h = handlers();
+    controller.enterDrawMode(h);
+
+    vertexUnderPointer(rig, 2);
+    rig.map.firePointer("mousedown", AT);
+    rig.map.firePointer("mouseup", AT);
+    rig.map.firePointer("click", AT);
+
+    expect(h.clicked).toEqual([2]);
+    expect(h.added).toEqual([]);
+  });
+
+  it("only hit-tests the draft vertex layer, and at the pointer", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.enterDrawMode(handlers());
+
+    vertexUnderPointer(rig, null);
+    rig.map.firePointer("click", AT);
+
+    expect(rig.map.queriedPoints.at(-1)).toEqual({ x: 10, y: 20 });
+  });
+
+  it("moves a vertex through a drag, and never also clicks or adds one", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const h = handlers();
+    controller.enterDrawMode(h);
+
+    vertexUnderPointer(rig, 1);
+    rig.map.firePointer("mousedown", AT);
+    rig.map.firePointer("mousemove", ELSEWHERE);
+    rig.map.firePointer("mouseup", ELSEWHERE);
+    rig.map.firePointer("click", ELSEWHERE);
+
+    expect(h.moved).toEqual([[1, { lat: 59.36, lng: 18.09 }]]);
+    // A drag is a drag and nothing else.
+    expect(h.clicked).toEqual([]);
+    expect(h.added).toEqual([]);
+  });
+
+  it("stops the gesture becoming a map drag before anything else", () => {
+    // Disabling panning inside the callback can already be too late: the renderer decides at
+    // gesture start whether it owns the pointer.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.enterDrawMode(handlers());
+
+    vertexUnderPointer(rig, 0);
+    expect(rig.map.firePointer("mousedown", AT)).toBe(true);
+  });
+
+  it("leaves a gesture that started on empty map alone", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.enterDrawMode(handlers());
+
+    vertexUnderPointer(rig, null);
+
+    expect(rig.map.firePointer("mousedown", AT)).toBe(false);
+    expect(rig.map.dragPanEnabled).toBe(true);
+  });
+
+  it("restores panning to what it found, not to enabled", () => {
+    // A consumer may have turned panning off themselves; handing it back on would be the
+    // engine overriding them.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    rig.map.dragPan.disable();
+    controller.enterDrawMode(handlers());
+
+    vertexUnderPointer(rig, 0);
+    rig.map.firePointer("mousedown", AT);
+    rig.map.firePointer("mouseup", AT);
+
+    expect(rig.map.dragPanEnabled).toBe(false);
+  });
+
+  it("releases the drag on every path a gesture can end", () => {
+    // A gesture does not only finish; it is also taken away. The path that forgets to
+    // release is the one that leaves the map permanently unpannable.
+    for (const ending of ["mouseup", "mouseout", "touchend", "touchcancel"] as const) {
+      const { controller, harness: rig } = mount({ sources: [OSM] });
+      rig.map.fireLoad();
+      controller.enterDrawMode(handlers());
+
+      vertexUnderPointer(rig, 0);
+      rig.map.firePointer(ending === "touchend" ? "touchstart" : "mousedown", AT);
+      expect(rig.map.dragPanEnabled).toBe(false);
+
+      rig.map.firePointer(ending, AT);
+
+      expect(rig.map.dragPanEnabled).toBe(true);
+      expect(rig.map.listenerCount("mousemove")).toBe(0);
+      expect(rig.map.listenerCount("touchmove")).toBe(0);
+    }
+  });
+
+  it("forgets a cancelled gesture, so it cannot swallow the next click", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const h = handlers();
+    controller.enterDrawMode(h);
+
+    vertexUnderPointer(rig, 0);
+    rig.map.firePointer("mousedown", AT);
+    rig.map.firePointer("mouseout", AT);
+
+    // A later, unrelated click on empty map still adds.
+    vertexUnderPointer(rig, null);
+    rig.map.firePointer("click", ELSEWHERE);
+
+    expect(h.added).toEqual([{ lat: 59.36, lng: 18.09 }]);
+  });
+});
+
+describe("draw mode cleanup survives a consumer failure", () => {
+  const AT = { x: 10, y: 20, lng: 18.06, lat: 59.33 };
+
+  it("cancels only the active drag when onVertexMove throws, and stays live", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const added: LatLng[] = [];
+    const exit = controller.enterDrawMode({
+      onVertexAdd: (at) => added.push(at),
+      onVertexMove: () => {
+        throw new Error("consumer blew up");
+      },
+    });
+
+    rig.map.featuresUnderPointer = [{ properties: { kind: "draft-vertex", index: 0 } }];
+    rig.map.firePointer("mousedown", AT);
+    expect(() => rig.map.firePointer("mousemove", AT)).toThrow(/consumer blew up/);
+
+    // Panning is back and the temporary listeners are gone: one consumer bug must not leave
+    // the map permanently unpannable with a drag nobody can end.
+    expect(rig.map.dragPanEnabled).toBe(true);
+    expect(rig.map.listenerCount("mousemove")).toBe(0);
+    expect(rig.map.listenerCount("mouseup")).toBe(0);
+
+    // The click that ends the failed gesture is still swallowed: a drag that failed must not
+    // become an interaction the consumer never made.
+    rig.map.featuresUnderPointer = [];
+    rig.map.firePointer("mouseup", AT);
+    rig.map.firePointer("click", AT);
+    expect(added).toEqual([]);
+
+    // And the session is still live: a *fresh* gesture works.
+    rig.map.firePointer("click", { x: 50, y: 50, lng: 18.09, lat: 59.36 });
+    expect(added).toEqual([{ lat: 59.36, lng: 18.09 }]);
+
+    exit();
+  });
+
+  it("does not treat the failed drag as a click", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const clicked: number[] = [];
+    controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: () => {
+        throw new Error("consumer blew up");
+      },
+      onVertexClick: (index) => clicked.push(index),
+    });
+
+    rig.map.featuresUnderPointer = [{ properties: { kind: "draft-vertex", index: 3 } }];
+    rig.map.firePointer("mousedown", AT);
+    expect(() => rig.map.firePointer("mousemove", AT)).toThrow();
+    rig.map.firePointer("mouseup", AT);
+    rig.map.firePointer("click", AT);
+
+    expect(clicked).toEqual([]);
+  });
+});
+
+describe("draw-mode ownership", () => {
+  it("refuses a second session rather than sharing the map's pan behaviour", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.enterDrawMode({ onVertexAdd: () => undefined, onVertexMove: () => undefined });
+
+    expect(() =>
+      controller.enterDrawMode({ onVertexAdd: () => undefined, onVertexMove: () => undefined }),
+    ).toThrow(MapDrawModeError);
+  });
+
+  it("allows a new session once the previous one exited", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const exit = controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: () => undefined,
+    });
+    exit();
+
+    expect(() =>
+      controller.enterDrawMode({ onVertexAdd: () => undefined, onVertexMove: () => undefined }),
+    ).not.toThrow();
+  });
+
+  it("detaches every listener it attached, and only those", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const before = rig.map.listenerCount();
+
+    const exit = controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: () => undefined,
+    });
+    expect(rig.map.listenerCount()).toBeGreaterThan(before);
+
+    exit();
+
+    expect(rig.map.listenerCount()).toBe(before);
+  });
+
+  it("has an idempotent exit, even mid-drag and even over disabled panning", () => {
+    // The state a repeated exit could corrupt is the consumer's: panning they turned off
+    // themselves, handed back on by a second release that thought it still held it.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    rig.map.dragPan.disable();
+    const exit = controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: () => undefined,
+    });
+    rig.map.featuresUnderPointer = [{ properties: { kind: "draft-vertex", index: 0 } }];
+    rig.map.firePointer("mousedown", { x: 1, y: 1, lng: 0, lat: 0 });
+
+    exit();
+    const afterFirst = rig.map.dragPanChanges.length;
+    exit();
+    exit();
+
+    expect(rig.map.dragPanEnabled).toBe(false);
+    expect(rig.map.dragPanChanges.length).toBe(afterFirst);
+    expect(rig.map.listenerCount()).toBe(1);
+  });
+
+  it("a later exit does not undo panning the consumer turned off afterwards", () => {
+    // What a non-idempotent release actually costs, rather than a call count: the session
+    // remembers that panning was on when it borrowed it, so a second release that still
+    // believes it holds the loan hands panning back — overriding a consumer decision made
+    // after draw mode was already over.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    expect(rig.map.dragPanEnabled).toBe(true);
+    const exit = controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: () => undefined,
+    });
+    rig.map.featuresUnderPointer = [{ properties: { kind: "draft-vertex", index: 0 } }];
+    rig.map.firePointer("mousedown", { x: 1, y: 1, lng: 0, lat: 0 });
+    exit();
+    expect(rig.map.dragPanEnabled).toBe(true);
+
+    // The consumer's own decision, made after the session ended.
+    rig.map.dragPan.disable();
+    exit();
+
+    expect(rig.map.dragPanEnabled).toBe(false);
+  });
+
+  it("leaves the draft alone: interaction is temporary, drawn state is desired state", () => {
+    // Superseding the original acceptance wording. T4.3 made engine layers persistent so
+    // ordering could not drift, and `renderDraft(null)` is the only way to clear geometry —
+    // a consumer may want the line they authored to stay after they stop editing it.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.renderDraft([
+      { lat: 59.33, lng: 18.06 },
+      { lat: 59.34, lng: 18.07 },
+    ]);
+    const exit = controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: () => undefined,
+    });
+
+    exit();
+
+    expect(rig.map.data(ENGINE_SOURCE.draft)?.features).toHaveLength(3);
+    expect(rig.map.layerIds).toContain(ENGINE_LAYER.draftLine);
+    expect(rig.map.layerIds).toContain(ENGINE_LAYER.draftVertex);
+  });
+
+  it("releases interaction when the controller is destroyed mid-session", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.enterDrawMode({ onVertexAdd: () => undefined, onVertexMove: () => undefined });
+    rig.map.featuresUnderPointer = [{ properties: { kind: "draft-vertex", index: 0 } }];
+    rig.map.firePointer("mousedown", { x: 1, y: 1, lng: 0, lat: 0 });
+    expect(rig.map.dragPanEnabled).toBe(false);
+
+    controller.destroy();
+
+    expect(rig.map.dragPanEnabled).toBe(true);
+    expect(rig.map.listenerCount("mousedown")).toBe(0);
+    expect(rig.map.listenerCount("click")).toBe(0);
+  });
+
+  it("rejects entering after destroy", () => {
+    const { controller } = mount({ sources: [OSM] });
+    controller.destroy();
+    expect(() =>
+      controller.enterDrawMode({ onVertexAdd: () => undefined, onVertexMove: () => undefined }),
+    ).toThrow(MapControllerDestroyedError);
   });
 });

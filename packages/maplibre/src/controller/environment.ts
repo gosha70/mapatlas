@@ -27,9 +27,70 @@ import type { ProtocolRegistrar } from "../protocols/pmtiles.js";
  * `addLayer` before the style is ready, so the controller's whole install path hangs off
  * that one event. A fake without it could only test the easy half.
  */
+/**
+ * Pointer events draw mode listens to.
+ *
+ * Both families, because both terminate differently: a mouse gesture ends at `mouseup` or
+ * leaves at `mouseout`, a touch gesture ends at `touchend` or is taken away at `touchcancel`
+ * — by a system gesture, an incoming call, a second finger. Every one of those paths has to
+ * release the drag, so every one of them is on the seam.
+ */
+export type MapPointerEventName =
+  | "mousedown"
+  | "mousemove"
+  | "mouseup"
+  | "mouseout"
+  | "touchstart"
+  | "touchmove"
+  | "touchend"
+  | "touchcancel"
+  | "click";
+
+export type MapEventName = "load" | MapPointerEventName;
+
+/** Where a pointer is, in both spaces, and the one thing a handler can do about it. */
+export interface MapPointerEvent {
+  /** Screen space, for hit-testing what is under the pointer. */
+  point: { x: number; y: number };
+  /** Map space, for telling a consumer where a vertex went. */
+  lngLat: { lng: number; lat: number };
+  /**
+   * Stop this gesture becoming a map drag.
+   *
+   * Called on the down event, before anything else. Disabling `dragPan` inside the callback
+   * is not enough on its own — the renderer decides at gesture start whether it owns the
+   * pointer, and by the time a handler runs that decision may already be made.
+   */
+  preventDefault(): void;
+}
+
+/** What a hit test returns: only enough to recover which vertex is under the pointer. */
+export interface RenderedFeature {
+  properties: Record<string, unknown>;
+}
+
+/**
+ * Map interaction the engine borrows and gives back.
+ *
+ * `isEnabled` is not decoration. Dragging a vertex has to stop the map panning under it, but
+ * a consumer may have disabled panning themselves — so the engine restores the state it
+ * found rather than enabling something nobody asked for.
+ */
+export interface DragPanLike {
+  enable(): void;
+  disable(): void;
+  isEnabled(): boolean;
+}
+
 export interface MapLike {
-  on(type: "load", listener: () => void): void;
-  off(type: "load", listener: () => void): void;
+  on(type: MapEventName, listener: (event: MapPointerEvent) => void): void;
+  off(type: MapEventName, listener: (event: MapPointerEvent) => void): void;
+  /** What is drawn at a point, restricted to the layers asked about. */
+  queryRenderedFeatures(
+    point: { x: number; y: number },
+    layerIds: readonly string[],
+  ): readonly RenderedFeature[];
+  readonly dragPan: DragPanLike;
   addSource(id: string, source: SourceSpecification): void;
   removeSource(id: string): void;
   /**

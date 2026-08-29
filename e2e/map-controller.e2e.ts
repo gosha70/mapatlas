@@ -1,6 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 import { expect, test } from "@playwright/test";
 
+import type { ConsoleWatch } from "./fixtures/browser.js";
+import { serveMapFixtures, watchConsole } from "./fixtures/browser.js";
+
+/**
+ * Every map test fetches tiles now that the worker runs, so the hosts these specs invent are
+ * served with real fixtures, and anything unexpected on the console fails the test that
+ * produced it. A lane that always prints errors cannot fail on one.
+ */
+let console_: ConsoleWatch;
+
+test.beforeEach(async ({ page }) => {
+  await serveMapFixtures(page);
+  console_ = watchConsole(page);
+});
+
+test.afterEach((_fixtures, testInfo) => {
+  // Only when the test itself passed: a test that already failed has its own diagnosis, and
+  // console noise from the failure would bury it.
+  if (testInfo.status === testInfo.expectedStatus) {
+    expect(console_.unexpected()).toEqual([]);
+  }
+});
+
 /**
  * The map controller against a real MapLibre runtime.
  *
@@ -185,6 +208,10 @@ test("registers the real PMTiles protocol on the real MapLibre runtime", async (
   // ran, a real `Protocol` was constructed and `maplibregl.addProtocol` accepted its tile
   // handler. A break at either version fails here rather than at a consumer's first archive.
   await page.goto("/");
+  // The host answers, but with bytes that are not an archive — deliberately, since this
+  // proves the handler is *registered and reached*, not that it can read one. So exactly one
+  // error is expected, from the client rejecting them.
+  console_.allow(/pmtiles|archive|magic number/i);
 
   expect(await page.evaluate(() => window.mapatlas.isPmtilesProtocolRegistered())).toBe(false);
 

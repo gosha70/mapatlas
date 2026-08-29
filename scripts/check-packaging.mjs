@@ -45,6 +45,42 @@ function manifest(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+/** The three maps a lockfile records per workspace package, and must keep in step. */
+const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "peerDependencies"];
+
+/**
+ * Does the lockfile still say what the manifests say?
+ *
+ * `npm ci` does **not** answer this. It validates that the resolution graph can be satisfied,
+ * and a peer range is not part of that graph — so editing a manifest and forgetting to
+ * reinstall leaves a lockfile contradicting the package it locks, and every gate stays green.
+ * Verified rather than assumed: reverting the lockfile's peer to `^6.6.0` passes `npm ci`.
+ *
+ * Cheap and offline, so it runs before anything is packed: a lockfile that disagrees with the
+ * manifests makes every result after it a statement about the wrong dependency graph.
+ */
+function lockfileDrift() {
+  const lock = manifest(join(root, "package-lock.json"));
+  const drift = [];
+
+  for (const [location, locked] of Object.entries(lock.packages ?? {})) {
+    if (!location.startsWith("packages/") && !location.startsWith("apps/")) continue;
+    const declared = manifest(join(root, location, "package.json"));
+
+    for (const field of DEPENDENCY_FIELDS) {
+      const inLock = JSON.stringify(locked[field] ?? {});
+      const inManifest = JSON.stringify(declared[field] ?? {});
+      if (inLock !== inManifest) {
+        drift.push(
+          `package-lock.json records ${location} ${field} as ${inLock}, ` +
+            `but its package.json declares ${inManifest} — run \`npm install\``,
+        );
+      }
+    }
+  }
+  return drift;
+}
+
 /**
  * A command whose own diagnosis survives.
  *
@@ -97,6 +133,10 @@ const scratch = mkdtempSync(join(tmpdir(), "mapatlas-packaging-"));
 const failures = [];
 
 try {
+  // Before packing: everything below describes a dependency graph, and a lockfile that
+  // disagrees with the manifests means it is describing the wrong one.
+  failures.push(...lockfileDrift());
+
   const tarballs = PACKAGES.map((directory) => {
     const output = run(
       "npm",
@@ -180,9 +220,13 @@ try {
 if (process.exitCode === 1) process.exit(1);
 
 if (failures.length > 0) {
-  console.error("check:packaging — the published artifact would not work for a consumer:\n");
+  console.error(
+    "check:packaging — the dependency graph this repository would publish is not the one it declares:\n",
+  );
   for (const failure of failures) console.error(`  ${failure}`);
-  console.error("\nSee packages/maplibre/README.md for what consumers are told to import.");
+  console.error(
+    "\nConsumers resolve against exactly this; packages/maplibre/README.md says what they are told to import.",
+  );
   process.exit(1);
 }
 

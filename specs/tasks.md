@@ -607,6 +607,15 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   the camera did not, and panning was restored — the camera observed through a mark anchored to
   a coordinate rather than by widening the seam to read it.
 
+  The browser lane serves the hosts these specs invent — a real 256×256 PNG for raster and DEM
+  templates, a TileJSON pointing back at it, an empty vector tile — and **fails on any console
+  error a test has not declared**. Before the worker was wired up nothing was ever requested, so
+  the invented hosts cost nothing; with it working, a green run printed several hundred lines of
+  `AJAXError`. Noise on that scale is where a real failure hides, and a lane that always prints
+  errors cannot fail on one. The archive host answers too, with bytes that are not an archive,
+  so the PMTiles cases see exactly the one error they are about rather than that plus a
+  name-resolution failure underneath it.
+
   **Consumers must call `setWorkerUrl`.** MapLibre loads its worker as a separate module
   resolved relative to the importing chunk, so a bundler that rewrites imports resolves it
   beside the rewritten chunk and the request 404s. Nothing errors: the map is constructed, the

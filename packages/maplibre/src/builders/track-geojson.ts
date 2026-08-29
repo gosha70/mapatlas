@@ -21,7 +21,13 @@ export interface LineStringFeature {
 export interface PointFeature {
   type: "Feature";
   geometry: { type: "Point"; coordinates: Position2D };
-  properties: { kind: "track-start" | "track-finish" | "track-lap"; trackId: Id; label?: string };
+  properties: {
+    kind: "track-start" | "track-finish" | "track-lap";
+    trackId: Id;
+    /** `track-lap` only. Identity that survives translation, so a mark can be keyed on it. */
+    lapId?: Id;
+    label?: string;
+  };
 }
 
 export interface FeatureCollection<F> {
@@ -125,6 +131,7 @@ export function buildLapFeatures(track: Track): FeatureCollection<PointFeature> 
       properties: {
         kind: "track-lap",
         trackId: track.id,
+        lapId: lap.id,
         ...(lap.label === undefined ? {} : { label: lap.label }),
       },
     });

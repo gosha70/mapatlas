@@ -46,6 +46,12 @@ jobs:
       - name: Scan — SPDX headers
         run: npm run scan:spdx
 
+      # Packs the real tarballs and installs them unhoisted, which is the one environment
+      # every other gate cannot reach: inside this workspace an undeclared dependency
+      # resolves anyway, and a consumer's would not.
+      - name: Check — packaged artifact
+        run: npm run check:packaging
+
   browser:
     # Parallel with `gates`, never behind it: the fast lane must stay fast, and this lane
     # exists for what a fake cannot reach — a real WebGL context, real platform APIs, and

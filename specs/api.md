@@ -838,10 +838,32 @@ export interface MapController {
 export declare function createMapController(o: MapControllerOptions): MapController;
 ```
 
+**`maplibre-gl` is a peer dependency of `@mapatlas/maplibre`**, pinned to one exact version
+per T0.1 — no ranges for renderer dependencies, because the browser lane exercises exactly one
+and a range would let a consumer resolve a release nothing here has run. Two copies
+in one application are not merely wasteful: `addProtocol` registers a handler on a MapLibre
+*module instance*, so a nested second copy would register PMTiles on a runtime that is not
+drawing the consumer's map, and the archive would silently fail to load. Declaring it a peer
+also makes the stylesheet path below resolvable from the consumer's own project, which strict
+resolvers (pnpm, Yarn PnP) require and npm's hoisting merely happens to allow.
+
+**Consumers load the renderer's stylesheet.** `@mapatlas/maplibre` does not import
+`maplibre-gl/dist/maplibre-gl.css` on the consumer's behalf: a package that injects global CSS
+takes a decision about the host document that belongs to the application, and it breaks any
+consumer bundling CSS themselves. Without it MapLibre's own controls are unstyled and — the
+part that looks like an engine bug rather than a missing import — **markers lay out in normal
+document flow instead of absolutely against the map**, so marks appear outside it. Consumers
+import it once, alongside the engine.
+
 **Delivery:** `createMapController` is built across Phase 4 and is **not yet on the package
 barrel**. T4.1 delivers construction plus `setSources`/`destroy`; T4.2 adds `setTerrain`; T4.3
-adds the track, event, draft and camera methods. The factory is exported from the barrel — and
-this declaration becomes true — when the returned object satisfies the whole interface.
+adds `renderTrack`, `renderEvents`, `renderDraft`, `showLivePosition` and the camera methods;
+T4.4 adds `setPresentation`; T4.5 adds `enterDrawMode`; T4.7 adds `onMapTap` and `onEventClick`.
+
+The factory is exported from the barrel — and this declaration becomes true — only when the
+returned object provides **every** method above. Until then it provides none of them as
+placeholders: a method that exists and throws "not supported yet" is worse than one that is
+absent, because a consumer discovers the gap at runtime instead of at compile time.
 
 **Contract:** MapLibre rejects `addSource`/`addLayer` until its style has loaded, so
 `createMapController` returns synchronously while installation waits for that event. The

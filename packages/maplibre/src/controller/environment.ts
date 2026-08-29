@@ -3,6 +3,8 @@
 import type { JSONValue } from "@mapatlas/core";
 import type { LayerSpecification, SourceSpecification, TerrainSpecification } from "maplibre-gl";
 
+import type { EngineFeatureCollection } from "./engine-layers.js";
+import type { DocumentLike } from "../marks/marker-element.js";
 import type { ProtocolRegistrar } from "../protocols/pmtiles.js";
 
 /**
@@ -30,9 +32,31 @@ export interface MapLike {
   off(type: "load", listener: () => void): void;
   addSource(id: string, source: SourceSpecification): void;
   removeSource(id: string): void;
-  /** Draw order is add order, which is why the controller installs in declared order. */
-  addLayer(layer: LayerSpecification): void;
+  /**
+   * Draw order is add order, which is why the controller installs in declared order.
+   *
+   * `beforeId` inserts below an existing layer instead of on top. Consumer layers use it to
+   * stay under the engine's persistent overlays: without it, replacing the source stack
+   * would put a fresh basemap above the track it is supposed to sit beneath.
+   */
+  addLayer(layer: LayerSpecification, beforeId?: string): void;
   removeLayer(id: string): void;
+  /**
+   * Whether a layer is in the style.
+   *
+   * Engine layers are installed once, and "once" is decided by asking the map rather than by
+   * a flag the controller keeps — the same reasoning that removed the mirrored terrain
+   * state. A flag says what the controller did; the map says what is true.
+   */
+  getLayer(id: string): unknown;
+  /**
+   * Replace what a GeoJSON source holds.
+   *
+   * Narrower than exposing `getSource`, and the reason engine layers are installed once and
+   * updated rather than rebuilt: a live position arriving every second must not churn the
+   * layer stack.
+   */
+  setSourceData(id: string, data: EngineFeatureCollection): void;
   /**
    * Terrain is another consumer of the source stack, exactly as layers are, so it appears
    * on the same seam. `null` disables it — and must be sent before the DEM source it names
@@ -47,6 +71,10 @@ export interface MapLike {
    * start wrong in exactly that case and stay wrong, so the map is asked instead.
    */
   getTerrain(): TerrainSpecification | null;
+  /** Frame a bounding box, in `[west, south, east, north]` degrees. */
+  fitBounds(bounds: [number, number, number, number], paddingPx: number): void;
+  /** Move the camera without animating — motion policy is T4.7's to decide. */
+  jumpTo(camera: { center: [lng: number, lat: number]; zoom?: number }): void;
   remove(): void;
 }
 
@@ -67,7 +95,41 @@ export interface MapConstructorOptions {
   attributionControl: { customAttribution: string[] };
 }
 
+/**
+ * Renderer options fixed when a marker is constructed.
+ *
+ * `anchor` says which part of the element sits on the coordinate — a pin's tip, a dot's
+ * centre — and MapLibre takes it at construction and never after. So it belongs here rather
+ * than in the element styling, and a mark whose anchor changes is rebuilt rather than
+ * updated.
+ */
+export interface MarkerOptions {
+  anchor: "center" | "bottom";
+}
+
+/** A placed marker, from the renderer's own marker implementation. */
+export interface MarkerHandle {
+  setLngLat(lng: number, lat: number): void;
+  addTo(map: MapLike): void;
+  remove(): void;
+}
+
 export interface MapEnvironment {
   createMap(options: MapConstructorOptions): MapLike;
+  /**
+   * Construct the renderer's marker around an engine-owned element.
+   *
+   * Construction belongs here rather than on `MapLike` for the same reason `createMap` does:
+   * the environment owns the renderer's constructors, and the map instance owns operations
+   * on a map. A `MapLike` that could build markers would be two things at once.
+   */
+  createMarker(element: HTMLElement, options: MarkerOptions): MarkerHandle;
+  /**
+   * Where engine-owned marker elements come from.
+   *
+   * On the seam rather than reached for as a global, so the accessibility contract those
+   * elements carry can be asserted without a browser.
+   */
+  document: DocumentLike;
   protocolRegistrar: ProtocolRegistrar;
 }

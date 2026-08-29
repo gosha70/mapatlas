@@ -466,3 +466,265 @@ test("takes ownership of terrain a base style declared", async ({ page }) => {
     .poll(async () => page.evaluate(() => window.mapatlas.probe?.getTerrain() ?? null))
     .toBeNull();
 });
+
+/** A short track with two points, so it has a line, a start mark and a finish mark. */
+const TRACK = {
+  id: "trk-1",
+  startedAt: 1_700_000_000_000,
+  status: "finalized",
+  origin: "recorded",
+  points: [
+    { lat: 59.33, lng: 18.06, t: 1_700_000_000_000 },
+    { lat: 59.34, lng: 18.07, t: 1_700_000_060_000 },
+  ],
+  segments: [{ id: "seg-1", startIndex: 0, endIndex: 1, startedAt: 1_700_000_000_000 }],
+};
+
+test("renders a track through layers MapLibre actually accepts", async ({ page }) => {
+  // The engine's own layers carry filter expressions — `["==", ["geometry-type"], "Point"]` —
+  // and MapLibre validates those. It can report a validation error and return *without*
+  // adding the layer rather than throwing, so their presence has to be asked of the library.
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, track]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.renderTrack(track as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, TRACK] as const,
+  );
+
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
+  const layers = await page.evaluate(() => ({
+    track: window.mapatlas.probe?.hasLayer("mapatlas:track-line") ?? false,
+    draftLine: window.mapatlas.probe?.hasLayer("mapatlas:draft-line") ?? false,
+    draftVertex: window.mapatlas.probe?.hasLayer("mapatlas:draft-vertex") ?? false,
+  }));
+  expect(layers).toEqual({ track: true, draftLine: true, draftVertex: true });
+  expect(errors).toEqual([]);
+});
+
+test("places real, accessible marks in the page", async ({ page }) => {
+  // The accessibility contract asserted against a real browser's DOM rather than an
+  // implementation of one: a name, a role, and a tab stop on an element the engine owns,
+  // with the consumer's markup hidden inside it.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, track]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.renderTrack(track as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, TRACK] as const,
+  );
+
+  const marks = page.locator(".mapatlas-marker");
+  await expect(marks).toHaveCount(2);
+  await expect(marks.first()).toHaveAttribute("role", "img");
+  await expect(marks.first()).toHaveAttribute("aria-label", /Track (start|finish)/);
+  // The consumer's markup is inside the wrapper and hidden, so a mark is announced once by
+  // its name rather than twice by its name and its contents.
+  await expect(marks.first().locator("[aria-hidden='true']")).toHaveCount(1);
+
+  // Laid out with real dimensions, *and inside the map*. Size alone is not enough: a mark
+  // that lost its absolute positioning has perfectly good dimensions and sits hundreds of
+  // pixels down the document, outside the container it belongs to. Only a real layout engine
+  // with the renderer's stylesheet loaded can settle either question.
+  const layout = await page.evaluate(() => {
+    const container = document.querySelector(".maplibregl-map")?.getBoundingClientRect();
+    return {
+      container: container === undefined ? null : { ...container.toJSON() },
+      marks: [...document.querySelectorAll(".mapatlas-marker")].map((node) => ({
+        ...node.getBoundingClientRect().toJSON(),
+        // The wrapper *is* the marker element — MapLibre takes it via the `element` option
+        // and puts its own class and positioning on it directly.
+        position: getComputedStyle(node).position,
+      })),
+    };
+  });
+
+  expect(layout.container).not.toBeNull();
+  expect(layout.marks).toHaveLength(2);
+  for (const mark of layout.marks) {
+    expect(mark.width).toBeGreaterThan(0);
+    expect(mark.height).toBeGreaterThan(0);
+    // MapLibre positions its markers absolutely; normal flow means the stylesheet is absent
+    // or its class was clobbered.
+    expect(mark.position).toBe("absolute");
+    expect(mark.top).toBeGreaterThanOrEqual(layout.container!.top);
+    expect(mark.bottom).toBeLessThanOrEqual(layout.container!.bottom);
+    expect(mark.left).toBeGreaterThanOrEqual(layout.container!.left);
+    expect(mark.right).toBeLessThanOrEqual(layout.container!.right);
+  }
+
+  // And anchored at the tip, not the middle: the anchor has to reach MapLibre's constructor,
+  // or a pin sits half above the place it points at. MapLibre stamps its own class for this.
+  await expect(page.locator(".maplibregl-marker-anchor-bottom")).toHaveCount(2);
+  await expect(page.locator(".maplibregl-marker-anchor-center")).toHaveCount(0);
+});
+
+test("anchors the live position at its centre, not its base", async ({ page }) => {
+  // The other half of the anchor claim: a dot marks a position rather than a place, so it is
+  // centred on the coordinate. Two marks with the same anchor would prove nothing about
+  // whether the value is forwarded at all.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.showLivePosition({ lat: 59.33, lng: 18.06, t: 1_700_000_000_000 });
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION] as const,
+  );
+
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(1);
+  await expect(page.locator(".maplibregl-marker-anchor-center")).toHaveCount(1);
+  await expect(page.locator(".maplibregl-marker-anchor-bottom")).toHaveCount(0);
+});
+
+test("keeps its own layers when the consumer stack is replaced", async ({ page }) => {
+  // MapLibre throws on an unknown `beforeId`, so a broken anchor surfaces here as a page
+  // error rather than as a track quietly drawn beneath a fresh basemap.
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution, track]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.renderTrack(track as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, TRACK] as const,
+  );
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
+
+  await page.evaluate(
+    ([raster]) => {
+      window.mapatlas.probe?.controller.setSources([
+        {
+          id: "replacement",
+          kind: "raster",
+          transport: "template",
+          url: raster as string,
+          attribution: "Replacement basemap",
+        },
+      ]);
+    },
+    [RASTER_TEMPLATE] as const,
+  );
+
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText("Replacement basemap");
+  expect(await page.evaluate(() => window.mapatlas.probe?.hasLayer("mapatlas:track-line"))).toBe(
+    true,
+  );
+  // The marks survive too: they are DOM, not layers, and nothing about the basemap changing
+  // should disturb where the user's track began and ended.
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(2);
+  expect(errors).toEqual([]);
+});
+
+test("a mark keeps the renderer's own classes across a re-render", async ({ page }) => {
+  // Refreshing a mark's style must not assign `className`: MapLibre adds its own classes
+  // after construction — `maplibregl-marker`, the anchor class, terrain visibility state —
+  // and assigning wipes them. Losing `maplibregl-marker` costs the mark its absolute
+  // positioning, so it drops into normal flow and lands outside the map. A live position
+  // re-renders on every fix, which makes it the fastest way to reach the bug.
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.probe = probe;
+      probe.controller.showLivePosition({ lat: 59.33, lng: 18.06, t: 1 });
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION] as const,
+  );
+  await expect(page.locator(".mapatlas-marker")).toHaveCount(1);
+
+  // Three more fixes, each one a refresh of the same element.
+  await page.evaluate(() => {
+    for (const lat of [59.34, 59.35, 59.36]) {
+      window.mapatlas.probe?.controller.showLivePosition({ lat, lng: 18.06, t: 2 });
+    }
+  });
+
+  const mark = page.locator(".mapatlas-marker");
+  await expect(mark).toHaveCount(1);
+  await expect(mark).toHaveClass(/maplibregl-marker/);
+  await expect(mark).toHaveClass(/maplibregl-marker-anchor-center/);
+  await expect(mark).toHaveClass(/mapatlas-mark--live/);
+
+  const stillPlaced = await page.evaluate(() => {
+    const node = document.querySelector(".mapatlas-marker");
+    const container = document.querySelector(".maplibregl-map");
+    if (node === null || container === null) return null;
+    const mark = node.getBoundingClientRect();
+    const box = container.getBoundingClientRect();
+    return {
+      position: getComputedStyle(node).position,
+      inside: mark.top >= box.top && mark.bottom <= box.bottom,
+    };
+  });
+  expect(stillPlaced).toEqual({ position: "absolute", inside: true });
+});

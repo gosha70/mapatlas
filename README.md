@@ -55,6 +55,11 @@ the same `specs/`. Any other harness should read `specs/` directly.
   a native adapter for background tracking in a Capacitor/Cordova shell).
 - **AI is optional and pluggable**: a `MediaAnalyzer` interface (photo → labels/summary).
   No model is bundled; consumers provide on-device or remote analyzers.
+- **Consumers load the renderer's stylesheet.** `@mapatlas/maplibre` does not import
+  `maplibre-gl/dist/maplibre-gl.css` on your behalf — injecting global CSS is a decision about
+  your document, not ours, and it breaks anyone bundling CSS themselves. Import it once
+  alongside the engine. Without it MapLibre's controls are unstyled and map marks lose their
+  absolute positioning, so they render outside the map.
 
 ## License
 

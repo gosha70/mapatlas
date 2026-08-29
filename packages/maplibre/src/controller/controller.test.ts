@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { JSONValue, TileSource } from "@mapatlas/core";
+// @vitest-environment happy-dom
+import type { JSONValue, MapEvent, TileSource, Track } from "@mapatlas/core";
+import type { LayerSpecification } from "maplibre-gl";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ENGINE_ID_PREFIX, ENGINE_LAYER, ENGINE_SOURCE } from "./engine-layers.js";
 import type { MapConstructorOptions, MapEnvironment } from "./environment.js";
-import type { FakeMap } from "./fake-map.js";
-import { createFakeMap } from "./fake-map.js";
+import type { FakeMap, FakeMarker, MapCall, PreinstalledStyleState } from "./fake-map.js";
+import { createFakeMap, createFakeMarker } from "./fake-map.js";
 import type * as ControllerModule from "./controller.js";
 import type { MapControllerOptions } from "./controller.js";
 import {
   EMPTY_STYLE,
   MapControllerDestroyedError,
+  MapNamespaceCollisionError,
   MapTerrainError,
   createMapControllerInternal,
 } from "./controller.js";
@@ -41,25 +45,97 @@ const ARCHIVE: TileSource = {
   attribution: "© OpenStreetMap contributors",
 };
 
+/** A short two-point track, enough to have a line, a start and a finish. */
+function trackFixture(): Track {
+  return {
+    id: "trk-1",
+    startedAt: 1_700_000_000_000,
+    status: "finalized",
+    origin: "recorded",
+    points: [
+      { lat: 59.33, lng: 18.06, t: 1_700_000_000_000 },
+      { lat: 59.34, lng: 18.07, t: 1_700_000_060_000 },
+    ],
+    segments: [
+      {
+        id: "seg-1",
+        startIndex: 0,
+        endIndex: 1,
+        startedAt: 1_700_000_000_000,
+        endedAt: 1_700_000_060_000,
+      },
+    ],
+  };
+}
+
+/** Two active spans with a pause between, so a connecting line would be visible if drawn. */
+function twoSegmentFixture(): Track {
+  return {
+    ...trackFixture(),
+    points: [
+      { lat: 59.33, lng: 18.06, t: 1_700_000_000_000 },
+      { lat: 59.34, lng: 18.07, t: 1_700_000_060_000 },
+      { lat: 59.35, lng: 18.08, t: 1_700_000_600_000 },
+      { lat: 59.36, lng: 18.09, t: 1_700_000_660_000 },
+    ],
+    segments: [
+      {
+        id: "seg-1",
+        startIndex: 0,
+        endIndex: 1,
+        startedAt: 1_700_000_000_000,
+        endedAt: 1_700_000_060_000,
+      },
+      {
+        id: "seg-2",
+        startIndex: 2,
+        endIndex: 3,
+        startedAt: 1_700_000_600_000,
+        endedAt: 1_700_000_660_000,
+      },
+    ],
+  };
+}
+
+function eventFixture(id: string, lng: number): MapEvent {
+  return {
+    id,
+    position: { lat: 59.33, lng },
+    occurredAt: 1_700_000_030_000,
+    media: [],
+    tags: [],
+  };
+}
+
 /** A container the controller only ever forwards; no DOM behaviour is exercised. */
 const CONTAINER = {} as HTMLElement;
 
 interface Harness {
   readonly map: FakeMap;
+  readonly markers: FakeMarker[];
   readonly environment: MapEnvironment;
   readonly addProtocol: ReturnType<typeof vi.fn>;
   readonly createProtocol: ReturnType<typeof vi.fn>;
 }
 
-function harness(): Harness {
+function harness(preinstalled: PreinstalledStyleState = {}): Harness {
   let map: FakeMap | undefined;
   const addProtocol = vi.fn();
   const createProtocol = vi.fn(() => ({ tile: () => undefined }));
+  const markers: FakeMarker[] = [];
   const environment: MapEnvironment = {
     createMap(options: MapConstructorOptions): FakeMap {
-      map = createFakeMap(options);
+      map = createFakeMap(options, preinstalled);
       return map;
     },
+    createMarker(element: HTMLElement, options) {
+      const marker = createFakeMarker(element, options);
+      markers.push(marker);
+      return marker;
+    },
+    // A real DOM, so the accessibility contract is asserted against an implementation of it
+    // rather than against a stand-in that agrees with whatever the code does.
+    document: globalThis.document,
     protocolRegistrar: { addProtocol, createProtocol },
   };
   return {
@@ -67,17 +143,26 @@ function harness(): Harness {
       if (map === undefined) throw new Error("no map was constructed");
       return map;
     },
+    markers,
     environment,
     addProtocol,
     createProtocol,
   };
 }
 
-function mount(options: Partial<MapControllerOptions> = {}): {
+/** Markers that are still on the map, in creation order. */
+function placed(rig: Harness): FakeMarker[] {
+  return rig.markers.filter((marker) => marker.attached && !marker.removed);
+}
+
+function mount(
+  options: Partial<MapControllerOptions> = {},
+  preinstalled: PreinstalledStyleState = {},
+): {
   controller: ReturnType<typeof createMapControllerInternal>;
   harness: Harness;
 } {
-  const rig = harness();
+  const rig = harness(preinstalled);
   const controller = createMapControllerInternal(
     { container: CONTAINER, sources: [], ...options },
     rig.environment,
@@ -85,9 +170,48 @@ function mount(options: Partial<MapControllerOptions> = {}): {
   return { controller, harness: rig };
 }
 
-/** Layer ids in the order they were added, which is the order MapLibre draws them. */
+/**
+ * Calls about consumer state only.
+ *
+ * Engine sources, layers and their data updates interleave with the consumer's, and a test
+ * about what `setSources` did should not have to know how many layers the engine happens to
+ * install. Filtering here keeps those assertions about one registry at a time.
+ */
+function consumerCalls(map: FakeMap): readonly MapCall[] {
+  return map.calls.filter((call) => {
+    if (call.op === "setSourceData") return false;
+    if ("id" in call && call.id.startsWith(ENGINE_ID_PREFIX)) return false;
+    if ("source" in call && typeof call.source === "string") {
+      return !call.source.startsWith(ENGINE_ID_PREFIX);
+    }
+    return true;
+  });
+}
+
+/** Consumer layer ids in the order they were added, which is the order MapLibre draws them. */
 function addedLayers(map: FakeMap): string[] {
-  return map.calls.filter((call) => call.op === "addLayer").map((call) => call.id);
+  return consumerCalls(map)
+    .filter((call) => call.op === "addLayer")
+    .map((call) => call.id);
+}
+
+/**
+ * The two registries, kept apart in the assertions as they are in the controller.
+ *
+ * Engine sources and layers are installed once and survive every stack replacement, so a
+ * test about what `setSources` did has no business seeing them — and one about the engine's
+ * own state has no business seeing the consumer's.
+ */
+function consumerSourceIds(map: FakeMap): string[] {
+  return map.sourceIds.filter((id) => !id.startsWith(ENGINE_ID_PREFIX));
+}
+
+function consumerLayerIds(map: FakeMap): string[] {
+  return map.layerIds.filter((id) => !id.startsWith(ENGINE_ID_PREFIX));
+}
+
+function engineLayerIds(map: FakeMap): string[] {
+  return map.layerIds.filter((id) => id.startsWith(ENGINE_ID_PREFIX));
 }
 
 describe("installation waits for the style to load", () => {
@@ -97,7 +221,7 @@ describe("installation waits for the style to load", () => {
     const { harness: rig } = mount({ sources: [OSM] });
 
     expect(rig.map.calls).toEqual([]);
-    expect(rig.map.sourceIds).toEqual([]);
+    expect(consumerSourceIds(rig.map)).toEqual([]);
   });
 
   it("installs the stack when load fires", () => {
@@ -105,7 +229,7 @@ describe("installation waits for the style to load", () => {
 
     rig.map.fireLoad();
 
-    expect(rig.map.sourceIds).toEqual(["osm"]);
+    expect(consumerSourceIds(rig.map)).toEqual(["osm"]);
     expect(addedLayers(rig.map)).toEqual(["osm__raster"]);
   });
 
@@ -120,11 +244,11 @@ describe("installation waits for the style to load", () => {
     controller.setSources([SEAMARKS]);
     rig.map.fireLoad();
 
-    expect(rig.map.sourceIds).toEqual(["seamarks"]);
-    expect(rig.map.calls.filter((call) => call.op === "addSource")).toHaveLength(1);
+    expect(consumerSourceIds(rig.map)).toEqual(["seamarks"]);
+    expect(consumerCalls(rig.map).filter((call) => call.op === "addSource")).toHaveLength(1);
     // Not "added then removed": A was never installed at all.
-    expect(rig.map.calls.some((call) => call.op === "removeSource")).toBe(false);
-    expect(rig.map.calls.some((call) => "id" in call && call.id === "osm")).toBe(false);
+    expect(consumerCalls(rig.map).some((call) => call.op === "removeSource")).toBe(false);
+    expect(consumerCalls(rig.map).some((call) => "id" in call && call.id === "osm")).toBe(false);
   });
 
   it("rejects an invalid stack at the call, not from inside the load callback", () => {
@@ -140,7 +264,7 @@ describe("installation waits for the style to load", () => {
     rig.map.fireLoad();
 
     // The rejected stack never became the desired one.
-    expect(rig.map.sourceIds).toEqual(["osm"]);
+    expect(consumerSourceIds(rig.map)).toEqual(["osm"]);
   });
 
   it("installs the state it was handed, not what the caller mutated afterwards", () => {
@@ -163,7 +287,9 @@ describe("installation waits for the style to load", () => {
     paint["line-width"] = 20;
     rig.map.fireLoad();
 
-    expect(rig.map.layerSpecs[0]).toMatchObject({
+    expect(
+      rig.map.layerSpecs.find((layer) => !layer.id.startsWith(ENGINE_ID_PREFIX)),
+    ).toMatchObject({
       id: "contours__lines",
       paint: { "line-width": 1 },
     });
@@ -189,7 +315,7 @@ describe("installation waits for the style to load", () => {
     rig.map.fireLoad();
     rig.map.fireLoad();
 
-    expect(rig.map.calls.filter((call) => call.op === "addSource")).toHaveLength(1);
+    expect(consumerCalls(rig.map).filter((call) => call.op === "addSource")).toHaveLength(1);
   });
 
   it("does not install for a controller destroyed before its style loaded", () => {
@@ -198,7 +324,7 @@ describe("installation waits for the style to load", () => {
     controller.destroy();
     rig.map.fireLoad();
 
-    expect(rig.map.sourceIds).toEqual([]);
+    expect(consumerSourceIds(rig.map)).toEqual([]);
   });
 });
 
@@ -221,7 +347,7 @@ describe("the stack is installed in declared order", () => {
 
     rig.map.fireLoad();
 
-    expect(rig.map.sourceIds).toEqual(["osm", "seamarks", "contours"]);
+    expect(consumerSourceIds(rig.map)).toEqual(["osm", "seamarks", "contours"]);
     expect(addedLayers(rig.map)).toEqual([
       "osm__raster",
       "seamarks__raster",
@@ -240,12 +366,12 @@ describe("replacing the stack after load", () => {
 
     controller.setSources([{ ...OSM, id: "replacement" }]);
 
-    const ops = rig.map.calls.map((call) => call.op);
+    const ops = consumerCalls(rig.map).map((call) => call.op);
     const lastRemovedLayer = ops.lastIndexOf("removeLayer");
     const firstRemovedSource = ops.indexOf("removeSource");
     expect(lastRemovedLayer).toBeLessThan(firstRemovedSource);
-    expect(rig.map.sourceIds).toEqual(["replacement"]);
-    expect(rig.map.layerIds).toEqual(["replacement__raster"]);
+    expect(consumerSourceIds(rig.map)).toEqual(["replacement"]);
+    expect(consumerLayerIds(rig.map)).toEqual(["replacement__raster"]);
   });
 
   it("adds the new stack only after the old one is gone", () => {
@@ -254,7 +380,7 @@ describe("replacing the stack after load", () => {
 
     controller.setSources([SEAMARKS]);
 
-    const ops = rig.map.calls.map((call) => call.op);
+    const ops = consumerCalls(rig.map).map((call) => call.op);
     expect(ops.lastIndexOf("removeSource")).toBeLessThan(ops.indexOf("addSource", 1));
   });
 
@@ -267,7 +393,7 @@ describe("replacing the stack after load", () => {
     expect(() => {
       controller.setSources([{ ...OSM, url: "https://other.invalid/{z}/{x}/{y}.png" }]);
     }).not.toThrow();
-    expect(rig.map.sourceIds).toEqual(["osm"]);
+    expect(consumerSourceIds(rig.map)).toEqual(["osm"]);
   });
 
   it("leaves the visible map intact when the new stack is invalid", () => {
@@ -283,7 +409,7 @@ describe("replacing the stack after load", () => {
     }).toThrow(/attribution/);
 
     expect(rig.map.calls).toEqual(before);
-    expect(rig.map.sourceIds).toEqual(["osm"]);
+    expect(consumerSourceIds(rig.map)).toEqual(["osm"]);
   });
 });
 
@@ -400,7 +526,9 @@ describe("the PMTiles protocol is realm infrastructure", () => {
         return {
           ...map,
           addSource: (id: string, source: never) => {
-            order.push("addSource");
+            // Engine sources are installed in the same pass; only the PMTiles one is what
+            // this ordering claim is about.
+            if (!id.startsWith(ENGINE_ID_PREFIX)) order.push("addSource");
             map.addSource(id, source);
           },
         };
@@ -451,7 +579,7 @@ describe("terrain is prepared desired state over the source stack", () => {
 
     rig.map.fireLoad();
 
-    const ops = rig.map.calls.map((call) => call.op);
+    const ops = consumerCalls(rig.map).map((call) => call.op);
     expect(ops.indexOf("setTerrain")).toBeGreaterThan(ops.lastIndexOf("addSource"));
     expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 1 });
   });
@@ -633,12 +761,16 @@ describe("a stack replacement is atomic with respect to terrain", () => {
     const { controller, harness: rig } = mount({ sources: [OSM, DEM] });
     rig.map.fireLoad();
     controller.setTerrain({ sourceId: "dem", exaggeration: 2 });
-    const from = rig.map.calls.length;
+    const fromConsumer = consumerCalls(rig.map).length;
 
     controller.setSources([SEAMARKS, DEM]);
 
     // One layer each way, not two: the DEM is `role: "terrain"`, so it draws nothing itself.
-    expect(rig.map.calls.slice(from).map((call) => call.op)).toEqual([
+    expect(
+      consumerCalls(rig.map)
+        .slice(fromConsumer)
+        .map((call) => call.op),
+    ).toEqual([
       "setTerrain",
       "removeLayer",
       "removeSource",
@@ -648,12 +780,16 @@ describe("a stack replacement is atomic with respect to terrain", () => {
       "addSource",
       "setTerrain",
     ]);
-    expect(rig.map.calls.slice(from).filter((call) => call.op === "setTerrain")).toEqual([
+    expect(
+      consumerCalls(rig.map)
+        .slice(fromConsumer)
+        .filter((call) => call.op === "setTerrain"),
+    ).toEqual([
       { op: "setTerrain", source: null },
       { op: "setTerrain", source: "dem" },
     ]);
     expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 2 });
-    expect(rig.map.sourceIds).toEqual(["seamarks", "dem"]);
+    expect(consumerSourceIds(rig.map)).toEqual(["seamarks", "dem"]);
   });
 
   it("rejects a stack that would orphan terrain, touching nothing", () => {
@@ -667,7 +803,7 @@ describe("a stack replacement is atomic with respect to terrain", () => {
     }).toThrow(/no source "dem" in the stack/);
 
     expect(rig.map.calls).toEqual(before);
-    expect(rig.map.sourceIds).toEqual(["osm", "dem"]);
+    expect(consumerSourceIds(rig.map)).toEqual(["osm", "dem"]);
     expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 1 });
   });
 
@@ -686,7 +822,7 @@ describe("a stack replacement is atomic with respect to terrain", () => {
 
     rig.map.fireLoad();
 
-    expect(rig.map.sourceIds).toEqual(["osm", "dem"]);
+    expect(consumerSourceIds(rig.map)).toEqual(["osm", "dem"]);
     expect(rig.map.terrain).toEqual({ source: "dem", exaggeration: 1 });
   });
 
@@ -721,5 +857,560 @@ describe("a stack replacement is atomic with respect to terrain", () => {
     expect(() => {
       controller.setTerrain({ sourceId: "dem" });
     }).toThrow(MapControllerDestroyedError);
+  });
+});
+
+describe("engine state is namespaced, persistent, and out of the consumer's way", () => {
+  it("rejects a consumer source claiming the reserved prefix, before anything changes", () => {
+    // Same treatment a duplicate id gets: MapLibre keys by id, so a collision means one of
+    // them silently wins — and here the loser would be the user's own track.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const before = [...rig.map.calls];
+
+    expect(() => {
+      controller.setSources([{ ...OSM, id: `${ENGINE_ID_PREFIX}track` }]);
+    }).toThrow(/reserved for engine-owned/);
+
+    expect(rig.map.calls).toEqual(before);
+    expect(consumerSourceIds(rig.map)).toEqual(["osm"]);
+  });
+
+  it("rejects it at construction too, before a map exists", () => {
+    const rig = harness();
+    expect(() =>
+      createMapControllerInternal(
+        { container: CONTAINER, sources: [{ ...OSM, id: `${ENGINE_ID_PREFIX}anything` }] },
+        rig.environment,
+      ),
+    ).toThrow(/reserved for engine-owned/);
+    expect(() => rig.map).toThrow(/no map was constructed/);
+  });
+
+  it("installs its own sources and layers once, at load", () => {
+    const { harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+
+    expect(rig.map.sourceIds).toContain(ENGINE_SOURCE.track);
+    expect(rig.map.sourceIds).toContain(ENGINE_SOURCE.draft);
+    expect(engineLayerIds(rig.map)).toEqual([
+      ENGINE_LAYER.trackLine,
+      ENGINE_LAYER.draftLine,
+      ENGINE_LAYER.draftVertex,
+    ]);
+  });
+
+  it("keeps consumer layers below every engine layer, across a replacement", () => {
+    // The ordering trap: MapLibre draws in add order, so a basemap added after a persistent
+    // track layer lands on top of it and hides the track. Consumer layers go in *before* the
+    // engine anchor instead, which also means the engine's layers are never torn down.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    expect(rig.map.layerIds).toEqual(["osm__raster", ...Object.values(ENGINE_LAYER)]);
+
+    controller.setSources([SEAMARKS, { ...OSM, id: "labels" }]);
+
+    expect(rig.map.layerIds).toEqual([
+      "seamarks__raster",
+      "labels__raster",
+      ...Object.values(ENGINE_LAYER),
+    ]);
+  });
+
+  it("leaves engine sources and layers untouched when the consumer stack is replaced", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const from = rig.map.calls.length;
+
+    controller.setSources([SEAMARKS]);
+
+    const touched = rig.map.calls
+      .slice(from)
+      .filter((call) => call.op === "removeLayer" || call.op === "removeSource")
+      .map((call) => call.id);
+    expect(touched.filter((id) => id.startsWith(ENGINE_ID_PREFIX))).toEqual([]);
+    expect(rig.map.sourceIds).toContain(ENGINE_SOURCE.track);
+  });
+});
+
+describe("rendering a track", () => {
+  const TRACK = trackFixture();
+
+  it("waits for load, then fills the persistent source", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+
+    controller.renderTrack(TRACK);
+    expect(rig.map.calls.some((call) => call.op === "setSourceData")).toBe(false);
+
+    rig.map.fireLoad();
+
+    expect(rig.map.data(ENGINE_SOURCE.track)?.features).toHaveLength(1);
+  });
+
+  it("applies only the last track asked for before load", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+
+    controller.renderTrack(TRACK);
+    controller.renderTrack(null);
+    rig.map.fireLoad();
+
+    expect(rig.map.data(ENGINE_SOURCE.track)?.features).toEqual([]);
+  });
+
+  it("clears with an empty collection rather than removing the source", () => {
+    // Removing and reinstating would churn the layer stack and drift the draw order — and a
+    // track that comes back would have to reinstate everything under it.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.renderTrack(TRACK);
+
+    controller.renderTrack(null);
+
+    expect(rig.map.data(ENGINE_SOURCE.track)).toEqual({ type: "FeatureCollection", features: [] });
+    expect(rig.map.sourceIds).toContain(ENGINE_SOURCE.track);
+    expect(rig.map.layerIds).toContain(ENGINE_LAYER.trackLine);
+  });
+
+  it("emits one line per segment and no geometry across a pause", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+
+    controller.renderTrack(twoSegmentFixture());
+
+    const features = rig.map.data(ENGINE_SOURCE.track)?.features ?? [];
+    expect(features).toHaveLength(2);
+    for (const feature of features) {
+      expect(feature.geometry.type).toBe("LineString");
+      expect((feature.geometry as { coordinates: unknown[] }).coordinates.length).toBeGreaterThan(
+        1,
+      );
+    }
+  });
+
+  it("places start and finish marks, and moves them rather than rebuilding on re-render", () => {
+    // Rebuilding the element would drop focus, which is exactly what a keyboard user would
+    // be holding when the track updates underneath them.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+
+    controller.renderTrack(TRACK);
+    const first = placed(rig);
+    expect(first).toHaveLength(2);
+
+    controller.renderTrack(TRACK);
+
+    expect(placed(rig)).toEqual(first);
+    expect(rig.markers).toHaveLength(2);
+  });
+
+  it("removes marks when the track goes", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.renderTrack(TRACK);
+
+    controller.renderTrack(null);
+
+    expect(placed(rig)).toEqual([]);
+    expect(rig.markers.every((marker) => marker.removed)).toBe(true);
+  });
+});
+
+describe("rendering events", () => {
+  it("places one mark per event and keeps the track's own marks", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.renderTrack(trackFixture());
+
+    controller.renderEvents([eventFixture("e1", 18.06), eventFixture("e2", 18.07)]);
+
+    // Two track marks plus two event marks: rendering events must not strand the marks the
+    // track contributed to the same marker set.
+    expect(placed(rig)).toHaveLength(4);
+  });
+
+  it("clears them with an empty list", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.renderEvents([eventFixture("e1", 18.06)]);
+
+    controller.renderEvents([]);
+
+    expect(placed(rig)).toEqual([]);
+  });
+});
+
+describe("every mark the engine places is accessible", () => {
+  it("carries a name, a role, and a tab stop, with the consumer's markup inside", () => {
+    // A marker is not accessible for having an aria-label. The engine owns the wrapper so a
+    // consumer cannot ship a mark with no accessible name, and so the markup it does supply —
+    // inserted verbatim, and consumer-trusted — is hidden from assistive tech rather than
+    // read out twice.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+
+    controller.renderTrack(trackFixture());
+
+    for (const marker of placed(rig)) {
+      expect(marker.element.getAttribute("aria-label")).toBeTruthy();
+      expect(marker.element.getAttribute("role")).toBe("img");
+      expect(marker.element.className).toContain("mapatlas-marker");
+      expect(marker.element.querySelector("[aria-hidden='true']")).not.toBeNull();
+    }
+  });
+
+  it("names start and finish distinctly, so they are not two identical stops", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+
+    controller.renderTrack(trackFixture());
+
+    const labels = placed(rig).map((marker) => marker.element.getAttribute("aria-label"));
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+});
+
+describe("rendering a draft", () => {
+  it("draws a line and a vertex per point", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+
+    controller.renderDraft([
+      { lat: 59.33, lng: 18.06 },
+      { lat: 59.34, lng: 18.07 },
+      { lat: 59.35, lng: 18.08 },
+    ]);
+
+    const features = rig.map.data(ENGINE_SOURCE.draft)?.features ?? [];
+    expect(features.filter((f) => f.geometry.type === "LineString")).toHaveLength(1);
+    expect(features.filter((f) => f.geometry.type === "Point")).toHaveLength(3);
+  });
+
+  it("draws a single point as a vertex and no line", () => {
+    // Same rule as a singleton segment: a LineString needs two positions, and an invalid one
+    // is either rejected or drawn as nothing.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+
+    controller.renderDraft([{ lat: 59.33, lng: 18.06 }]);
+
+    const features = rig.map.data(ENGINE_SOURCE.draft)?.features ?? [];
+    expect(features.filter((f) => f.geometry.type === "LineString")).toEqual([]);
+    expect(features).toHaveLength(1);
+  });
+
+  it("clears with an empty collection", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.renderDraft([{ lat: 59.33, lng: 18.06 }]);
+
+    controller.renderDraft(null);
+
+    expect(rig.map.data(ENGINE_SOURCE.draft)?.features).toEqual([]);
+    expect(rig.map.layerIds).toContain(ENGINE_LAYER.draftLine);
+  });
+});
+
+describe("live position", () => {
+  const FIX = { lat: 59.33, lng: 18.06, t: 1_700_000_000_000 };
+
+  it("moves one marker rather than creating a new one per fix", () => {
+    // A fix arrives every second or two. Creating a marker each time would leak DOM nodes
+    // and listeners for the length of the trip.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+
+    controller.showLivePosition(FIX);
+    controller.showLivePosition({ ...FIX, lat: 59.34 });
+    controller.showLivePosition({ ...FIX, lat: 59.35 });
+
+    expect(rig.markers).toHaveLength(1);
+    expect(rig.markers[0]?.lngLat).toEqual([18.06, 59.35]);
+  });
+
+  it("removes it when there is no position", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.showLivePosition(FIX);
+
+    controller.showLivePosition(null);
+
+    expect(placed(rig)).toEqual([]);
+  });
+
+  it("says nothing before load, then places once", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+
+    controller.showLivePosition(FIX);
+    expect(rig.markers).toEqual([]);
+
+    rig.map.fireLoad();
+
+    expect(placed(rig)).toHaveLength(1);
+  });
+});
+
+describe("the camera", () => {
+  it("frames a track's extent", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+
+    controller.fitTrack(twoSegmentFixture());
+
+    const call = rig.map.calls.find((entry) => entry.op === "fitBounds");
+    expect(call?.bounds).toEqual([18.06, 59.33, 18.09, 59.36]);
+  });
+
+  it("does not move for a track with no points", () => {
+    // Moving to an invented extent is worse than leaving the camera where the user put it.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+
+    controller.fitTrack({ ...trackFixture(), points: [], segments: [] });
+
+    expect(rig.map.calls.some((call) => call.op === "fitBounds")).toBe(false);
+  });
+
+  it("frames an explicit bbox and recenters, without waiting for load", () => {
+    // A map has a transform from the moment it exists, and a consumer who recenters before
+    // the style resolves means now, not eventually.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+
+    controller.fitBounds([1, 2, 3, 4]);
+    controller.recenter({ lat: 59.33, lng: 18.06 }, 12);
+
+    const framed = rig.map.calls.find((call) => call.op === "fitBounds");
+    expect(framed?.bounds).toEqual([1, 2, 3, 4]);
+    // A default rather than zero, so endpoints are not flush against the viewport edge.
+    expect(framed?.paddingPx).toBeGreaterThan(0);
+    expect(rig.map.calls.find((call) => call.op === "jumpTo")?.center).toEqual([18.06, 59.33]);
+  });
+});
+
+describe("destroy takes the markers with it", () => {
+  it("removes every placed marker, since they live outside MapLibre's container", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.renderTrack(trackFixture());
+    controller.showLivePosition({ lat: 59.33, lng: 18.06, t: 1 });
+
+    controller.destroy();
+
+    expect(rig.markers.every((marker) => marker.removed)).toBe(true);
+  });
+
+  it("rejects every render call afterwards", () => {
+    const { controller } = mount({ sources: [OSM] });
+    controller.destroy();
+
+    expect(() => {
+      controller.renderTrack(null);
+    }).toThrow(MapControllerDestroyedError);
+    expect(() => {
+      controller.renderEvents([]);
+    }).toThrow(MapControllerDestroyedError);
+    expect(() => {
+      controller.renderDraft(null);
+    }).toThrow(MapControllerDestroyedError);
+    expect(() => {
+      controller.showLivePosition(null);
+    }).toThrow(MapControllerDestroyedError);
+    expect(() => {
+      controller.recenter({ lat: 0, lng: 0 });
+    }).toThrow(MapControllerDestroyedError);
+  });
+});
+
+describe("built-in marks are actually visible", () => {
+  it("carries size and content, not just a colour", () => {
+    // A wrapper with no size and no content lays out at zero by zero: positioned correctly,
+    // in the accessibility tree, and invisible. Nothing reports it, because nothing is wrong
+    // — there is simply nothing to draw.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+
+    controller.renderTrack(trackFixture());
+
+    for (const marker of placed(rig)) {
+      expect(marker.element.style.width).not.toBe("");
+      expect(marker.element.style.height).not.toBe("");
+      expect(marker.element.querySelector("svg")).not.toBeNull();
+    }
+  });
+
+  it("anchors a pin at its tip and a live dot at its centre", () => {
+    // The anchor reaches the renderer's constructor, or every mark is centred on its
+    // coordinate and a pin sits half above the place it points at.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+
+    controller.renderTrack(trackFixture());
+    expect(placed(rig).map((marker) => marker.anchor)).toEqual(["bottom", "bottom"]);
+
+    controller.renderTrack(null);
+    controller.showLivePosition({ lat: 59.33, lng: 18.06, t: 1 });
+    expect(placed(rig).map((marker) => marker.anchor)).toEqual(["center"]);
+  });
+});
+
+describe("a reused mark is brought up to date, not merely moved", () => {
+  it("refreshes the accessible name when a lap is renamed", () => {
+    // Keeping the element is what preserves focus; keeping what it *says* would make the
+    // mark look maintained while announcing something untrue.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const withLap = (label: string): Track => ({
+      ...trackFixture(),
+      laps: [
+        { id: "lap-1", index: 0, startIndex: 0, endIndex: 1, startedAt: 1, endedAt: 2, label },
+      ],
+    });
+
+    controller.renderTrack(withLap("Original"));
+    const lapMark = placed(rig).find((marker) =>
+      marker.element.getAttribute("aria-label")?.includes("Original"),
+    );
+    expect(lapMark).toBeDefined();
+
+    controller.renderTrack(withLap("Renamed"));
+
+    expect(lapMark?.element.getAttribute("aria-label")).toBe("Lap: Renamed");
+    // Still the same element, so focus survived the rename.
+    expect(placed(rig)).toContain(lapMark);
+  });
+
+  it("keys laps by id, so inserting one does not hand its element to another", () => {
+    // Array position is not identity: with index keys, adding a lap in front would move the
+    // focused element to a different lap and — through the reuse path — keep its old label.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const lap = (id: string, label: string) => ({
+      id,
+      index: 0,
+      startIndex: 0,
+      endIndex: 1,
+      startedAt: 1,
+      endedAt: 2,
+      label,
+    });
+
+    controller.renderTrack({ ...trackFixture(), laps: [lap("lap-2", "Second")] });
+    const second = placed(rig).find((marker) =>
+      marker.element.getAttribute("aria-label")?.includes("Second"),
+    );
+
+    controller.renderTrack({
+      ...trackFixture(),
+      laps: [lap("lap-1", "First"), lap("lap-2", "Second")],
+    });
+
+    // The element that was showing "Second" still is.
+    expect(second?.element.getAttribute("aria-label")).toBe("Lap: Second");
+    expect(placed(rig).map((marker) => marker.element.getAttribute("aria-label"))).toEqual(
+      expect.arrayContaining(["Lap: First", "Lap: Second"]),
+    );
+  });
+});
+
+describe("desired render state is a snapshot of what was handed over", () => {
+  it("does not reread a track a later call would have re-derived marks from", () => {
+    // renderTrack takes the line and the marks in one pass. Keeping the track and rebuilding
+    // marks on the next renderEvents would read the caller's object again, and a mutation in
+    // between would leave marks disagreeing with the line beside them.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const track = trackFixture();
+
+    controller.renderTrack(track);
+    const before = placed(rig).map((marker) => marker.lngLat);
+    track.points[0] = { lat: 0, lng: 0, t: 1 };
+    controller.renderEvents([]);
+
+    expect(placed(rig).map((marker) => marker.lngLat)).toEqual(before);
+  });
+
+  it("does not reread events a later renderTrack would have re-derived marks from", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const events = [eventFixture("e1", 18.06)];
+
+    controller.renderEvents(events);
+    const before = placed(rig).map((marker) => marker.lngLat);
+    events[0] = eventFixture("e1", 99);
+    controller.renderTrack(null);
+
+    expect(placed(rig).map((marker) => marker.lngLat)).toEqual(before);
+  });
+
+  it("copies a live fix rather than holding the caller's point", () => {
+    // A recorder that reuses one point object per update would otherwise move a mark that
+    // was never asked to move.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    const fix = { lat: 59.33, lng: 18.06, t: 1 };
+
+    controller.showLivePosition(fix);
+    fix.lat = 0;
+    fix.lng = 0;
+    rig.map.fireLoad();
+
+    expect(placed(rig)[0]?.lngLat).toEqual([18.06, 59.33]);
+  });
+});
+
+describe("the engine does not assume it owns a map because one id is present", () => {
+  it("rejects a base style document that declares a reserved id", () => {
+    // Reading "the anchor exists" as "the engine owns this map" would skip every source and
+    // layer, leaving a map with no track and nothing to say why.
+    const rig = harness();
+    expect(() =>
+      createMapControllerInternal(
+        {
+          container: CONTAINER,
+          sources: [OSM],
+          style: { version: 8, sources: {}, layers: [{ id: `${ENGINE_ID_PREFIX}track-line` }] },
+        },
+        rig.environment,
+      ),
+    ).toThrow(/reserved for the engine/);
+
+    expect(() =>
+      createMapControllerInternal(
+        {
+          container: CONTAINER,
+          sources: [OSM],
+          style: { version: 8, sources: { [`${ENGINE_ID_PREFIX}track`]: {} }, layers: [] },
+        },
+        rig.environment,
+      ),
+    ).toThrow(/reserved for the engine/);
+  });
+
+  it("refuses to adopt a reserved layer a style URL brought", () => {
+    // The case a style *document* check cannot reach: the renderer fetches a URL, so nothing
+    // can inspect it beforehand. Skipping installation because the id is present would adopt
+    // it — the reserved id would count as installed while the layer behind it draws
+    // something else, and track geometry would go to a source nothing renders. A blank map,
+    // reported by nobody. Ownership is tracked, not inferred from presence.
+    const anchorFromStyle = {
+      id: ENGINE_LAYER.trackLine,
+      type: "background",
+    } as unknown as LayerSpecification;
+    const { harness: rig } = mount(
+      { sources: [OSM], style: "https://styles.invalid/brings-a-reserved-id.json" },
+      { layers: [anchorFromStyle] },
+    );
+
+    expect(() => {
+      rig.map.fireLoad();
+    }).toThrow(MapNamespaceCollisionError);
+  });
+
+  it("installs every engine layer, not just the ones after a missing anchor", () => {
+    const { harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    expect(engineLayerIds(rig.map)).toEqual([
+      ENGINE_LAYER.trackLine,
+      ENGINE_LAYER.draftLine,
+      ENGINE_LAYER.draftVertex,
+    ]);
+    expect(rig.map.sourceIds).toContain(ENGINE_SOURCE.track);
+    expect(rig.map.sourceIds).toContain(ENGINE_SOURCE.draft);
   });
 });

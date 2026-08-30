@@ -233,19 +233,67 @@ on a two-quantisation-unit grid (0.125 px at extent 4096, well below the recorde
 assembled into a graph. One closed cycle requires every vertex at degree two, one connected
 component, and nonzero shoelace area.
 
-**What this does not establish.** The evaluation exercises the *tiling stage* with hand-authored
-geometry, chosen because exact input coordinates make the decoded comparison decisive. Explicitly
-outstanding: `d3-contour`'s own output, which was never run; real DEM-derived geometry; fixture
-scale; adoption of any of these packages as dependencies, which has not happened and is not
-proposed here; and integration into the build, where the contour source remains unwritten. The
-status table above is unchanged, and none of these move to *discharged* on this evidence.
+**[2026-08-30] Both bars hold on real `d3-contour` geometry from the declared crop — Bar 1
+author-verified, Bar 2 independently verified.** Only the loop-topology question was handed over:
+a frozen harness with raw decoded fragments, adjudicated by a second oracle — Shapely 2.1.1 /
+GEOS 3.13.1, polygon union over global integer extent coordinates, using none of this probe's
+graph, snapping grid or vertex keys. Bar 1's seam figures below come from this probe and remain
+author verification.
 
-It is also **author verification**: the chain was selected and the test that judges it was
-written by the same author. Three successive versions of that test reported false failures —
-identifying rings by measured width rather than by tag, searching for a shared seam vertex that
-simplification had legitimately removed, and stitching that dropped the buffer box while keeping
-the buffer overlap — each time the instrument rather than the chain. That history is the reason
-to treat this as evidence needing an independent look, not as a settled result.
+*Real-data controls:* the crop reproduces exactly — 51,840 samples, 0 non-finite,
+2,560.8–4,810.7 m. `d3-contour` 4.0.2 over 23 predeclared thresholds (2600–4800 by 100,
+probe-only) yields 31 exterior rings, no holes.
+
+*Bar 1 on real geometry:* **0** crossing-count mismatches across every internal seam at z10–z14
+(52 to 298 crossings per zoom), mean gap 0.006–0.098 quantisation units, max 2.085 ≈ 0.13 px.
+
+*Bar 2 on real geometry:* **0 topology failures across all 128 perceptible feature/zoom cases**,
+every one reconstructing as a single valid, nonzero Polygon with one component and no unexpected
+holes — **with a repair step that is part of the result, not a detail of it.** The oracle
+classified MVT ring winding and applied GEOS `make_valid` to 41 invalid decoded rings *before*
+clipping to the tile core and unioning. Without that step, direct clipping and union produces six
+apparent topology failures, while the area-fidelity count is inflated from ten to eighteen — the
+repair affects the two predicates differently, and stating one number for both would make it look
+as though repair erased the area finding. It does not: the topology zero is a property of
+ring-classification-then-repair-then-union rather than of union alone, and ten genuine
+area-fidelity breaches survive the repair. GEOS reported each of those 41 rings' invalidity at a point on the ±64 buffer
+boundary, outside the tile core; that is one reported location per ring, not an enumeration of
+every self-intersection, and no source contour was invalid.
+
+The case this probe had flagged, `t3000_p0`, needed **no** repair — its 19 fragments were already
+valid — and reconstructs with an area error of **−0.000064%**, symmetric difference 0.01064%,
+Hausdorff distance 0.293 px.
+
+**A qualification that must not be dropped when this is summarised.** The synthetic evaluation's
+≤0.8% area agreement is *not* a universal property of real data: 10 of the 128 cases exceed it,
+to a maximum of 6.54%. Those are small contours, 4.11–12.06 px wide, topologically intact, with
+maximum boundary displacement across the whole set of 0.303 px. So the accurate record is
+**real-geometry loop topology passes; universal ≤0.8% real-data area fidelity does not.** Bar 2
+is discharged as presently specified — one connected degree-two cycle with nonzero area — and
+would not be if area fidelity were promoted into the requirement.
+
+**Five instrument faults, and the last one is the transferable lesson.** This probe's own
+measurements produced false failures five times: rings identified by measured width; seam
+continuity sought as a shared vertex that simplification had legitimately removed; a stitch that
+dropped the buffer box while keeping the buffer overlap; two different snapping resolutions
+between edge dedup and the cycle graph; and finally — **a grid key is not a proximity test**.
+Two points 1.672 units apart in a two-unit grid round into adjacent cells and never merge, which
+is why coarsening the grid made matters worse rather than better. Rounding-to-a-cell and
+distance-within-a-tolerance are different predicates, and this probe used the first while
+reasoning about the second. Every one of the five produced the same signature — an open chain
+with negative area error — which is why the residual could not be attributed from inside.
+
+**What this does not establish.** The evaluation exercises the *tiling stage*. Explicitly
+outstanding: fixture scale; adoption of any of these packages as dependencies, which has not
+happened and is not proposed here; and integration into the build, where the contour source
+remains unwritten. `d3-contour`'s output and real DEM-derived geometry were outstanding until
+the real-geometry probe above and are no longer. The status table is unchanged regardless: an
+evaluated tiling stage is not a built contour source, and nothing here moves an obligation to
+*discharged*.
+
+The **synthetic** evaluation described in this subsection is author verification: the chain was
+selected and the test that judges it was written by the same author. Its real-geometry successor
+above was adjudicated independently for Bar 2, and the five instrument faults are recorded there.
 
 **[verified: negative] `pmtiles` 4.5.0 cannot write.** Its published type surface carries no
 write, serialize, or encode entry point — `bytesToHeader` parses a header and nothing emits one;
@@ -356,17 +404,23 @@ regression visible, and a threshold picked now would be invented.
 
 Ordered by what gates what.
 
-1. **The contour toolchain beyond its tiling stage.** The GeoJSON→MVT candidate evaluation is
-   done: `geojson-vt` → `vt-pbf` passes both bars under author verification, recorded in the
-   contours section above with the measurements. What remains open is everything that
-   evaluation deliberately did not touch — **adopting any of those packages as dependencies**,
-   which has not happened and is a separate decision; **`d3-contour`'s own output**, which was
-   never run; **real DEM-derived geometry** rather than hand-authored squares and lines;
-   **fixture scale**; and **integration into the build**, where the contour source is still
-   unwritten and `writeArchive` has nothing behind it.
+1. **The contour toolchain beyond its tiling stage.** The candidate evaluation is done, on
+   synthetic geometry under author verification and then on real `d3-contour` output from the
+   declared crop, with Bar 2 of the latter adjudicated independently — both bars pass, recorded
+   in the contours section above with the measurements. What remains open is what neither run touched:
+   **adopting any of those packages as dependencies**, which has not happened and is a separate
+   decision; **fixture scale**; and **integration into the build**, where the contour source is
+   still unwritten and `writeArchive` has nothing behind it.
 
-   The two bars stay recorded because they still have to be met by the real chain, not only by
-   the tiling stage in isolation:
+   Carried forward as a constraint rather than a result: the synthetic run's ≤0.8% area
+   agreement does **not** hold universally on real data — 10 of 128 cases reach 6.54%, all small
+   contours 4.11–12.06 px wide and all topologically intact. Bar 2 is discharged as specified,
+   on topology; it would not be if area fidelity were promoted into the requirement, and that
+   decision should be made deliberately rather than inherited from the synthetic figure.
+
+   The two bars stay recorded because the measured behaviour **must be preserved by the
+   integrated build** — adopting these packages and wiring a real contour source into
+   `build.mjs` are where it could be lost:
 
    - **Seam continuity.** Coordinate quantization at tile boundaries leaves contour lines that
      do not meet across the seam. A single tile renders perfectly; the defect exists only
@@ -390,7 +444,7 @@ Ordered by what gates what.
    So the check crosses the boundary deliberately — adjacent tiles reconstructed together and
    compared at the seam, closed cycles counted per zoom rather than one tile eyeballed. Deciding
    that before a candidate's output was on screen is what stopped the output from setting the
-   bar, and it is why three successive false failures were legible as instrument faults rather
+   bar, and it is why five successive false failures were legible as instrument faults rather
    than as results.
 2. **Archive size** — answerable only from a real assembled archive, so it waits on full-chain
    integration: the writer adopted, the contour source written, real tiles cut. ADR-0024

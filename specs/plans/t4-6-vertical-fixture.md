@@ -8,7 +8,8 @@ recollection.
 
 ## What ships
 
-1. `scripts/build-fixture-archive.mjs` — cuts a PMTiles archive from Copernicus DEM GLO-30
+1. `scripts/fixture/` — the build and its four obligations, each module injectable so the
+   ordering is testable without a network. `build.mjs` cuts a PMTiles archive from Copernicus DEM GLO-30
    Public for one declared region: terrarium-encoded elevation, plus a vector contour layer
    derived from the same grid.
 2. `fixtures/vertical/` — the region declaration, the licence artifacts, and the recorded track.
@@ -22,10 +23,57 @@ an obligation whose failure is unreadable gets debugged as something else.
 
 | # | Obligation | Check | Failure names |
 | --- | --- | --- | --- |
-| 1 | Licence strings carried verbatim | Attribution and liability strings compared byte-for-byte against the checked-in licence document, then written into the archive and a `LICENSE` inside it | which string drifted, and both values |
+| 1 | Licence strings checked **and** written into the archive | Two halves, as `specs/tasks.md` states them. Every declared string must occur verbatim in the checked-in licence document; and every declared string must be emitted into the archive, alongside the document itself carried as `LICENSE` | the role, where it diverged, and what the archive held instead |
 | 2 | Released coverage, per tile | Every tile in the cut is read; a read that finds nothing is a gap | the tile: `no published tile at N45E007` |
 | 3 | A gap fails rather than fills | No fill path exists in the encoder — the absence of a branch, not a guarded one | as (2) |
 | 4 | Region is above the treeline | The cut's lowest decoded sample is compared against the region's declared `minElevationM` | the sample, its tile, and the declared floor |
+
+### Obligation 1 is built; its inputs are blocked upstream
+
+**Two changes to this obligation are recorded here rather than quietly absorbed**, because both
+were made while writing the code and would otherwise read as the original intent.
+
+*The bar was loosened from byte-for-byte to verbatim-modulo-whitespace-runs.* An earlier version
+of the row above said byte-for-byte; `normaliseWhitespace` collapses whitespace runs on both
+sides. The reason is good — a licence document wraps its lines, so a sentence spanning a break
+would never match a single-line declaration, and requiring the declaration to reproduce the
+source's line breaks would make it fail on reflowing rather than on meaning — but it is a
+loosening, decided during implementation, and calling it "verbatim" without saying so would let
+the plan track the code. Case, punctuation and wording remain exact.
+
+*The archive half was briefly dropped and is restored.* A rewrite of the row above narrowed it to
+the `LICENSE` file alone, which left half the obligation unbuilt **and** unnamed — the worst
+combination, since nothing was left to notice the gap. `specs/tasks.md` is authoritative and
+names both halves.
+
+The rule is implemented and tested: every declared string must occur verbatim in the licence
+document, all four roles the ADR names must be declared, and the archive must carry the document
+itself. Whitespace runs collapse on both sides — a licence wraps its lines, and requiring a
+declaration to reproduce those breaks would fail on reflowing rather than on meaning — and
+nothing else is normalised, case included, since lower-casing an organisation's name changes who
+a notice names. A failure reports where the string stopped matching rather than only that it
+did, because "not found" sends a reader to compare two documents by eye.
+
+The archive half asserts that every declared string is emitted **outside** the `LICENSE` entry.
+That exclusion is the check: the strings are drawn from the licence, so scanning an archive that
+carries the licence would find all of them inside it and pass with no credit emitted at all —
+satisfied by the presence of the very thing it is meant to be independent of. It was written the
+vacuous way first and caught by a test that expected a failure and got none. It says nothing
+about *where* attribution lives, since that is metadata layout and belongs to the undecided
+writer; it asserts over the same `entries()` surface the licence check already uses.
+
+**[blocked 2026-08-30]** The strings themselves are inputs and are deliberately absent. ADR-0024
+quotes the derived-works notice verbatim but only *describes* the liability and
+downstream-binding sentences, and the authoritative document is currently unreachable:
+`spacedata.copernicus.eu` failed to connect at 45 s and again at 90 s while the AWS bucket
+answered 200 in the same session, so it is the licence host rather than connectivity. The bucket
+carries no `LICENSE` object (404) and its `readme.html` defers to that page rather than
+reproducing the terms.
+
+Writing those sentences from memory is the exact failure this obligation exists to catch, so
+they stay unwritten. The suite tests the rule against a synthetic licence for a second reason
+beyond the blockage: a checker tested against the text it will check would be asserting that a
+constant equals itself.
 
 ### Obligation 3 is a different category of assurance from the other three
 

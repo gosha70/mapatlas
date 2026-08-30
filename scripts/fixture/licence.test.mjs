@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, it } from "vitest";
 
+import { readFileSync } from "node:fs";
+
 import {
   LicenceError,
+  NOT_FOR_DISTRIBUTION_PATH,
   assertArchiveCarriesAttribution,
+  assertNotForDistribution,
   REQUIRED_ROLES,
   assertArchiveCarriesLicence,
   assertStringsBackedByLicence,
@@ -197,6 +201,39 @@ describe("attribution must reach the archive, in addition to the licence", () =>
     }
     expect(message).toContain("noEndorsement");
     expect(message).toContain("metadata.json");
+  });
+});
+
+describe("the checked-in licence and declaration", () => {
+  it("backs all four declared roles verbatim against the real document", () => {
+    // The declaration was sliced from this document rather than typed, so this passing is not
+    // a surprise — its value is guarding the pair from here on, and confirming the extraction
+    // landed. The document's own provenance is in fixtures/vertical/licence/manifest.json.
+    const licence = readFileSync("fixtures/vertical/licence/COP-DEM-GLO-30.txt", "utf8");
+    const declared = JSON.parse(readFileSync("fixtures/vertical/attribution.json", "utf8"));
+    expect(assertStringsBackedByLicence(declared, licence, "COP-DEM-GLO-30.txt")).toEqual(
+      REQUIRED_ROLES,
+    );
+  });
+
+  it("carries the Article 6(b) adapted-data notice, which is the one ADR-0024 quotes", () => {
+    const declared = JSON.parse(readFileSync("fixtures/vertical/attribution.json", "utf8"));
+    expect(declared.derivedWorksNotice).toContain("produced using Copernicus WorldDEM-30");
+    expect(declared.derivedWorksNotice).toContain("all rights reserved");
+  });
+});
+
+describe("a development archive says what it is", () => {
+  it("accepts one carrying the marker", () => {
+    expect(() =>
+      assertNotForDistribution(archiveOf([{ path: NOT_FOR_DISTRIBUTION_PATH, text: "" }])),
+    ).not.toThrow();
+  });
+
+  it("refuses one without it, since nothing else separates it from a shipped archive", () => {
+    expect(() => assertNotForDistribution(archiveOf([{ path: "dem.pmtiles", text: "" }]))).toThrow(
+      /must carry NOT-FOR-DISTRIBUTION/,
+    );
   });
 });
 

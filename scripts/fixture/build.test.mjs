@@ -255,6 +255,49 @@ describe("the codec and the floor are actually wired together", () => {
   });
 });
 
+describe("the licence gate is on distribution, not on execution", () => {
+  it("builds without licence inputs when the output is not distributable", () => {
+    // The design correction: the obligation is about redistributing a derived work, so it
+    // belongs where an archive becomes downloadable. Gating execution meant a missing legal
+    // string blocked the writer, the tile reader and the contour source, none of which
+    // redistribute anything.
+    const { deps, calls } = harness({
+      files: { "LICENCE.txt": undefined, "attribution.json": undefined },
+      writeArchive: () => ({ entries: () => [{ path: "NOT-FOR-DISTRIBUTION", text: "" }] }),
+    });
+    withSnapshot(deps, ["N45E006"]);
+
+    const report = runBuild(PATHS, deps, { distributable: false });
+
+    expect(report.distributable).toBe(false);
+    expect(report.roles).toEqual([]);
+    expect(report.outputPath).toBe("out.pmtiles.dev");
+    expect(calls.finalised).toEqual([["out.pmtiles.dev.partial", "out.pmtiles.dev"]]);
+  });
+
+  it("refuses a development archive that does not say it is one", () => {
+    // Not an exemption but a trade: no licence, but a marker, and the build fails without it
+    // exactly as a distributable build fails without the notices.
+    const { deps } = harness({ writeArchive: () => ({ entries: () => [] }) });
+    withSnapshot(deps, ["N45E006"]);
+
+    const error = catchBuild(() => runBuild(PATHS, deps, { distributable: false }));
+
+    expect(error.stage).toBe("archive");
+    expect(error.message).toContain("must carry NOT-FOR-DISTRIBUTION");
+  });
+
+  it("still enforces the licence when the output is distributable", () => {
+    const { deps } = harness({
+      files: { "attribution.json": JSON.stringify({ ...ATTRIBUTION, noEndorsement: "Invented." }) },
+    });
+    withSnapshot(deps, ["N45E006"]);
+
+    expect(catchBuild(() => runBuild(PATHS, deps, { distributable: true })).stage).toBe("licence");
+    expect(catchBuild(() => runBuild(PATHS, deps)).stage).toBe("licence");
+  });
+});
+
 describe("the archive must carry what it was built under", () => {
   it("fails when the writer omits the LICENSE", () => {
     const { deps } = harness({ writeArchive: () => ({ entries: () => [] }) });

@@ -18,7 +18,7 @@ injected fakes.
 | Terrarium codec | yes | yes | **no** | never run on a real COG's pixels |
 | Region declaration + floor (ob. 4) | yes | yes | **no** | never run on decoded real tiles |
 | Coverage + gap classification (ob. 2, 3) | yes | yes | **no** | probe is injected; never run against S3 |
-| Licence rule (ob. 1) | yes | yes | **no** | its strings are blocked upstream |
+| Licence rule (ob. 1) | yes | yes | **no** | strings now sourced; never run on a real archive |
 | Build ordering | yes | — | **no** | no writer and no tile reader behind the seams |
 
 **Remaining T4.6 implementation scope**, none of it implemented or integrated — investigation
@@ -89,7 +89,25 @@ vacuous way first and caught by a test that expected a failure and got none. It 
 about *where* attribution lives, since that is metadata layout and belongs to the undecided
 writer; it asserts over the same `entries()` surface the licence check already uses.
 
-**[blocked 2026-08-30]** The strings themselves are inputs and are deliberately absent. ADR-0024
+**[resolved 2026-08-30] The strings are sourced, and the blockage was partly my own design.**
+The authoritative text is Article 6 of *Licence for Copernicus DEM instance COP-DEM-GLO-30-F*,
+fetched from `documentation.dataspace.copernicus.eu` — a different host from the one this plan
+had recorded as unreachable. Three probes of a single URL supported a claim about a host and
+were written up as a claim about the document; the licence was reachable the whole time by
+another route. `fixtures/vertical/licence/` holds the extracted text with its manifest (source
+URL, PDF sha256, retrieval date, extraction command, text sha256), and
+`fixtures/vertical/attribution.json` holds the four roles **sliced from that text by script,
+never typed**, so no transcription error is possible at creation.
+
+**The licence gate has moved from execution to distribution**, which is the more important
+correction. The obligation is about redistributing a derived work, so it belongs where an
+archive becomes downloadable. Gating every run on it meant a missing legal string blocked the
+writer, the tile reader and the contour source, none of which redistribute anything. A
+`distributable: false` build now skips the licence stage, writes to a `.dev` path and must carry
+a `NOT-FOR-DISTRIBUTION` marker; a distributable build cannot skip it by any flag. That is a
+trade of one obligation for another, not an escape hatch.
+
+Superseded, retained for the record: the strings were previously absent. ADR-0024
 quotes the derived-works notice verbatim but only *describes* the liability and
 downstream-binding sentences, and the authoritative document is currently unreachable:
 `spacedata.copernicus.eu` failed to connect at 45 s and again at 90 s while the AWS bucket

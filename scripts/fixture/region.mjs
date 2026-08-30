@@ -38,6 +38,35 @@ function isRecord(value) {
 }
 
 /**
+ * Validate a `[west, south, east, north]` box.
+ *
+ * Exported so coverage checking uses the *same* rule rather than a second copy of it. A box is
+ * the input to both obligations, and two validators would drift — the one that drifted being
+ * whichever is exercised less.
+ *
+ * @param {unknown} bounds
+ * @param {string} source
+ * @returns {[west: number, south: number, east: number, north: number]}
+ */
+export function parseBounds(bounds, source) {
+  if (!Array.isArray(bounds) || bounds.length !== 4 || !bounds.every(Number.isFinite)) {
+    throw new RegionDeclarationError(
+      `${source}: bounds must be four finite numbers in [west, south, east, north] order`,
+    );
+  }
+  const [west, south, east, north] = bounds;
+  if (west < -180 || east > 180 || south < -90 || north > 90) {
+    throw new RegionDeclarationError(`${source}: bounds must lie within WGS84 longitude/latitude`);
+  }
+  if (west >= east || south >= north) {
+    throw new RegionDeclarationError(
+      `${source}: west must precede east and south must precede north`,
+    );
+  }
+  return [west, south, east, north];
+}
+
+/**
  * Validate the checked-in boundary between the region-selection decision and the build.
  *
  * The justification is data, not a comment: changing the box without reconsidering why its
@@ -56,21 +85,7 @@ export function parseRegionDeclaration(value, source = "region declaration") {
   if (typeof id !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) {
     throw new RegionDeclarationError(`${source}: id must be a non-empty kebab-case string`);
   }
-  if (!Array.isArray(bounds) || bounds.length !== 4 || !bounds.every(Number.isFinite)) {
-    throw new RegionDeclarationError(
-      `${source}: bounds must be four finite numbers in [west, south, east, north] order`,
-    );
-  }
-
-  const [west, south, east, north] = bounds;
-  if (west < -180 || east > 180 || south < -90 || north > 90) {
-    throw new RegionDeclarationError(`${source}: bounds must lie within WGS84 longitude/latitude`);
-  }
-  if (west >= east || south >= north) {
-    throw new RegionDeclarationError(
-      `${source}: west must precede east and south must precede north`,
-    );
-  }
+  const [west, south, east, north] = parseBounds(bounds, source);
   if (!Number.isFinite(minElevationM)) {
     throw new RegionDeclarationError(`${source}: minElevationM must be a finite number`);
   }

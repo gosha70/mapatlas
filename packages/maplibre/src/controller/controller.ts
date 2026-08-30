@@ -735,15 +735,13 @@ export function createMapControllerInternal(
             // Pointer taps obey one priority order. An overlapping draft vertex claims the
             // activation first; otherwise this event mark claims it. The wrapper stops the
             // native click before MapLibre can also synthesize a map tap from it.
-            if (
-              event.type === "click" &&
-              drawSession?.activateVertexAt({
-                lat: activation.lngLat[1],
-                lng: activation.lngLat[0],
-              }) === true
-            ) {
-              return;
-            }
+            //
+            // The vertex question is asked at the *pointer*, not at this mark's anchor, so
+            // both lanes hit-test the same place with the same radius. Keyboard activation
+            // has no pointer and skips the question entirely: priority-by-overlap is a
+            // pointer concept, and Enter on a focused mark names the mark unambiguously.
+            const point = event.type === "click" ? pointerPoint(event) : null;
+            if (point !== null && drawSession?.activateVertexAt(point) === true) return;
             if (activation.eventId === null) return;
             for (const listener of eventClickListeners) listener(activation.eventId);
           },
@@ -799,6 +797,21 @@ export function createMapControllerInternal(
     if (loaded || destroyed) return;
     loaded = true;
     reconcile();
+  }
+
+  /**
+   * A DOM event's position in the map's own pixel space.
+   *
+   * The renderer measures from its container's top-left corner, so this reproduces that
+   * rather than inventing a second convention. Returns null for anything that is not a
+   * positioned pointer event, which is how a synthetic activation opts out of the hit test
+   * instead of being tested at the origin.
+   */
+  function pointerPoint(event: Event): { x: number; y: number } | null {
+    const { clientX, clientY } = event as MouseEvent;
+    if (typeof clientX !== "number" || typeof clientY !== "number") return null;
+    const rect = options.container.getBoundingClientRect();
+    return { x: clientX - rect.left, y: clientY - rect.top };
   }
 
   function onMapClick(event: MapPointerEvent): void {

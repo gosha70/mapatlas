@@ -5,7 +5,7 @@ import type { LayerSpecification } from "maplibre-gl";
 
 import type { MarkerStyle } from "../marks/marker-style.js";
 import type { EventPresentation } from "../marks/presentation.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DrawModeHandlers } from "./draw-mode.js";
 import { MapDrawModeError } from "./draw-mode.js";
@@ -1885,7 +1885,6 @@ function tap(rig: Harness, at: { x: number; y: number; lng: number; lat: number 
   rig.map.firePointer("mousedown", at);
   rig.map.firePointer("mouseup", at);
   rig.releasePointer();
-  rig.releasePointer();
   rig.map.firePointer("click", at);
 }
 
@@ -1965,10 +1964,17 @@ describe("map and event activation", () => {
       marker.element.classList.contains("mapatlas-mark--event"),
     );
 
-    eventMark?.element.dispatchEvent(new globalThis.MouseEvent("click", { bubbles: true }));
+    eventMark?.element.dispatchEvent(
+      new globalThis.MouseEvent("click", { bubbles: true, clientX: 12, clientY: 34 }),
+    );
 
     expect(vertices).toEqual([0]);
     expect(events).toEqual([]);
+    // Asked at the pointer, not at the mark's anchor. Both lanes have to hit-test the same
+    // place with the same radius, or a vertex a few pixels off would win by pointer and lose
+    // by DOM click. The fake projects a degree to a hundred units, so the mark's own anchor
+    // would have been queried at x 1806 — nowhere near where the user actually pressed.
+    expect(rig.map.queriedPoints.at(-1)).toEqual({ x: 12, y: 34 });
   });
 
   it("lets draw mode own an empty-map tap rather than reporting it twice", () => {
@@ -2300,9 +2306,22 @@ describe("draw mode's keyboard vertex layer", () => {
     { lat: 59.35, lng: 18.08 },
   ];
 
+  // Focus only moves to an element that is in the document, so these tests attach their
+  // container — and take it out again afterwards. Left behind, every test's focusable
+  // vertices accumulate in one shared document, and `activeElement` assertions start
+  // depending on which tests ran before them.
+  afterEach(() => {
+    for (const attached of attachedContainers) attached.remove();
+    attachedContainers.length = 0;
+  });
+  const attachedContainers: HTMLElement[] = [];
+
   function vertexElements(rig: Harness): HTMLElement[] {
     const container = rig.map.options.container;
-    if (!container.isConnected) globalThis.document.body.append(container);
+    if (!container.isConnected) {
+      globalThis.document.body.append(container);
+      attachedContainers.push(container);
+    }
     return [...container.querySelectorAll<HTMLElement>(".mapatlas-draft-vertex")];
   }
 
@@ -2368,6 +2387,34 @@ describe("draw mode's keyboard vertex layer", () => {
     expect(moved[1]?.[1].lng).toBeCloseTo(18.09);
     expect(vertices[1]?.getAttribute("aria-pressed")).toBe("false");
     expect(rig.map.options.container.textContent).toContain("Dropped draft vertex 2");
+  });
+
+  it("leaves vertical arrows alone until a vertex is grabbed", () => {
+    // Array order is not screen order for a hand-drawn line, so mapping Up and Down to
+    // previous and next would move focus against the direction pressed. They are left
+    // unhandled rather than swallowed, so the page still scrolls — hence the assertion on
+    // `defaultPrevented`, not only on where focus ended up. Grabbed, both axes are geometric
+    // and both are handled, which the nudge tests cover.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    const moved: [number, LatLng][] = [];
+    controller.renderDraft(DRAFT);
+    controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: (index, to) => moved.push([index, to]),
+    });
+    const vertices = vertexElements(rig);
+    vertices[1]?.focus();
+
+    const down = press(vertices[1]!, "ArrowDown");
+
+    expect(globalThis.document.activeElement).toBe(vertices[1]);
+    expect(down.defaultPrevented).toBe(false);
+    expect(moved).toEqual([]);
+
+    // Grabbed, the same key moves the vertex.
+    press(vertices[1]!, "Enter");
+    expect(press(vertices[1]!, "ArrowDown").defaultPrevented).toBe(true);
+    expect(moved.map(([index]) => index)).toEqual([1]);
   });
 
   it("nudges ten screen pixels with Shift, as MapLibre's own draggable marker does", () => {

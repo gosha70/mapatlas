@@ -11,9 +11,16 @@
  * becomes a breaking change here — and would invite consumers to hand-assemble a style the
  * controller is responsible for.
  *
- * Nothing exported here needs a browser, a map, or a registered PMTiles protocol at import
- * time. Runtime capability lives at the controller boundary, which is where its lifecycle
- * is.
+ * Runtime capability lives at the controller boundary, which is where its lifecycle is — but
+ * note what publishing `createMapController` here changed: importing this module now
+ * **evaluates the renderer**, because `./controller/browser.js` imports `maplibre-gl` and
+ * `pmtiles` as values at module scope. Two things follow for a consumer. A server-side import
+ * of the package root evaluates MapLibre in an environment with no `window`; `maplibre-gl`
+ * 6.6.0 tolerates that — `index.test.ts` imports this module in Node with no DOM and passes,
+ * which is the assertion holding the claim up — but the evaluation is real, and a future
+ * version need not tolerate it. And a consumer who wants only the *types* pays nothing extra
+ * only if tree-shaking honours this package's `sideEffects: false`, which is accurate: no
+ * module here runs anything at import time beyond declaring bindings.
  */
 
 export type { MapController, MapControllerOptions } from "./controller/controller.js";

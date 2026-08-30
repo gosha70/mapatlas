@@ -703,7 +703,11 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   pan, focus movement between vertices, and nudging the focused one — so the collision is
   settled before any handler is written, rather than by whichever runs first. A vertex is
   **grabbed** (Enter or Space), **nudged** while grabbed (arrows), and **dropped** (Enter or
-  Space) or **cancelled** (Escape); ungrabbed arrows move focus. A nudge is one screen pixel,
+  Space) or **cancelled** (Escape); ungrabbed, Left and Right move focus by index and Up and
+  Down do nothing at all — array order is not screen order for a hand-drawn line, so a vertical
+  key would move focus against the direction pressed, and a key a control does not act on
+  should reach the page rather than be swallowed. Both axes return once a vertex is grabbed,
+  where the movement genuinely is geometric. A nudge is one screen pixel,
   and ten with Shift — the renderer's own draggable marker offers both, and shipping only the
   fine one would leave the keyboard path an order of magnitude slower than the pointer path in
   the task whose whole point is that they are equals. That is the same shape as the
@@ -756,6 +760,14 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   vertex that took its index, else the previous one, else the group — never nowhere, which is
   what the DOM does by default and which drops the user back to the top of the page.
 
+  **The focus ring's colour belongs to the consumer.** It is drawn over whatever the basemap
+  shows, so no fixed value can satisfy WCAG's non-text contrast requirement against satellite
+  imagery — and an inline style cannot be overridden without `!important`, which would make the
+  styling decision on the application's behalf in a package that argues that decision is
+  theirs. The colour goes behind `--mapatlas-focus-ring-color` with the default as its
+  fallback; the geometry stays fixed, being what makes the ring perceivable rather than what a
+  contrast problem is about.
+
   **`pointer-events: none` on the vertex layer needs a behavioural guard, not a stylesheet
   line.** The pointer path is canvas hit-testing; if the DOM layer ever becomes the pointer
   target, `queryRenderedFeatures` stops being exercised and every unit test still passes, since
@@ -769,7 +781,10 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   says which vertex is active and where it sits in the set.
 
   **A tap resolves in one order, not two pairwise rules:** draft vertex, then event mark, then
-  map position. In draw mode both `draw-mode.ts`'s click handling and a controller-level
+  map position — and both lanes must ask the vertex question the *same* way, at the pointer
+  with the renderer's hit radius. Asking the DOM lane at the mark's own anchor instead would
+  let a vertex a few pixels away win by pointer and lose by click, so the one order would mean
+  two different things depending on which lane delivered the activation. In draw mode both `draw-mode.ts`'s click handling and a controller-level
   `onMapTap` listen to the same event, so two rules stated separately would leave the vertex
   case undefined.
 

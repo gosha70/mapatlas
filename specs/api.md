@@ -954,14 +954,23 @@ markup and must never be built from untrusted input** (see `SECURITY.md`). Every
 **Contract (activation):** a pointer activation resolves once, in this order: draft vertex,
 event mark, map position. Event marks are real keyboard controls and Enter/Space report their
 `Id` through `onEventClick`; their native click is stopped before it can also become an
-`onMapTap`. While draw mode is active, it owns canvas taps, so a vertex click or vertex add is
-never also a general map tap. Both subscription methods return idempotent unsubscribe functions.
+`onMapTap`. While draw mode is active it owns canvas taps outright: `onMapTap` subscribers
+receive **nothing** for the duration — not the taps that add a vertex, and not the ones that
+land on empty map — and start receiving again when draw mode exits. This is stronger than
+deprioritising, and deliberately so, since an add is an edit rather than a tap; a consumer
+wiring `onMapTap` to something like a context menu should expect it to go quiet while the user
+is drawing. The vertex hit test is performed at the pointer with the renderer's own hit radius
+in both lanes, so an overlapping vertex resolves identically whether the activation arrived
+through the canvas or through a mark's DOM click. Both subscription methods return idempotent unsubscribe functions.
 
 **Contract (keyboard draw mode):** the painted draft vertices remain the pointer hit-test
 surface. Draw mode adds a parallel DOM layer with one roving tab stop, visible focus, accessible
 names, and a polite live announcement of each grab, drop and cancellation — not of focus,
-which the accessible name already carries. Ungrabbed arrows move focus; Enter/Space grabs and
-drops; grabbed arrows report moves through `onVertexMove`, one screen pixel at a time and ten
+which the accessible name already carries. Ungrabbed, Left and Right move focus to the previous
+and next vertex **by index**, while Up and Down are inert and left for the page to handle: a
+hand-drawn line's array order is not its screen order, so a vertical key would move focus
+against the direction pressed. Both axes are live while grabbed, where movement is geometric.
+Enter/Space grabs and drops; grabbed arrows report moves through `onVertexMove`, one screen pixel at a time and ten
 with Shift, matching the renderer's own draggable marker; Escape cancels. Blur cancels synchronously, and draft reconciliation also
 cancels before removing a focused vertex because DOM removal is not required to emit blur.
 

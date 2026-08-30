@@ -73,7 +73,25 @@ const KEYBOARD_NUDGE_PX = 1;
 const KEYBOARD_NUDGE_LARGE_PX = 10;
 /** Large enough to expose a platform focus ring without covering the painted vertex. */
 const KEYBOARD_VERTEX_SIZE_PX: readonly [number, number] = [24, 24];
-const FOCUS_OUTLINE = "3px solid #0969da";
+/**
+ * The focus ring, with its colour behind a custom property.
+ *
+ * A fixed blue cannot be right by default: the ring is drawn over whatever the basemap is,
+ * and a focus indicator over satellite imagery is exactly where WCAG's non-text contrast
+ * requirement bites. An inline style also beats a consumer stylesheet without `!important`,
+ * so hard-coding it would make the styling decision on the application's behalf in a package
+ * whose README argues that decision is the application's.
+ *
+ * The colour is therefore `var(--mapatlas-focus-ring-color, …)`: the default still applies
+ * with nothing configured, and one custom property anywhere above the map replaces it. The
+ * geometry stays fixed, since width and offset are what make the ring perceivable at all and
+ * are not what a contrast problem is about.
+ */
+const FOCUS_RING_COLOR_PROPERTY = "--mapatlas-focus-ring-color";
+const FOCUS_RING_COLOR_DEFAULT = "#0969da";
+const FOCUS_RING_GEOMETRY = "3px solid";
+const FOCUS_OUTLINE = `${FOCUS_RING_GEOMETRY} ${FOCUS_RING_COLOR_DEFAULT}`;
+const FOCUS_OUTLINE_COLOR = `var(${FOCUS_RING_COLOR_PROPERTY}, ${FOCUS_RING_COLOR_DEFAULT})`;
 
 const ARROW_DELTA: Readonly<Record<string, readonly [dx: number, dy: number]>> = Object.freeze({
   ArrowLeft: [-1, 0],
@@ -126,8 +144,17 @@ function vertexAt(map: MapLike, point: { x: number; y: number }): number | null 
 export interface DrawSession {
   /** Reconcile the keyboard layer to the same indexed points as the painted source. */
   renderDraft(points: readonly DraftTrackPoint[] | null): void;
-  /** Give an overlapping draft vertex first claim on a DOM event-mark activation. */
-  activateVertexAt(at: LatLng): boolean;
+  /**
+   * Give an overlapping draft vertex first claim on a DOM event-mark activation.
+   *
+   * Takes the **pointer's** position in map pixels, not the mark's anchor. Both lanes must
+   * answer one question — "is a draft vertex under this pointer?" — and the pointer path
+   * answers it with `queryRenderedFeatures` at the pointer, with the renderer's hit radius.
+   * Asking at the mark's anchor instead would let a vertex a few pixels away win by pointer
+   * and lose by DOM click, so "draft vertex beats event mark" would mean two different things
+   * depending on which lane happened to deliver the activation.
+   */
+  activateVertexAt(point: { x: number; y: number }): boolean;
   /** Idempotent: releases interaction, removes the keyboard layer, restores panning. */
   exit(): void;
 }
@@ -224,13 +251,25 @@ export function startDrawMode(
     }
     if (event.altKey || event.ctrlKey || event.metaKey) return;
 
-    event.preventDefault();
     if (grabbedIndex !== index) {
-      const direction = delta[0] + delta[1];
-      focusVertex(index + (direction < 0 ? -1 : 1));
+      // Ungrabbed, only the horizontal pair moves focus, and it moves along the *index*:
+      // previous and next in the array, which is the model the label announces ("Draft vertex
+      // 2 of 3") and the one someone listening rather than looking is working from.
+      //
+      // Up and Down are deliberately inert here. A hand-drawn line's array order is not its
+      // screen order, so mapping them to previous and next would send focus somewhere
+      // unrelated to the direction pressed — unremarkable to a screen-reader user, plainly
+      // wrong to anyone watching it happen. They are left unhandled rather than swallowed, so
+      // the page scrolls as it otherwise would: a control should not `preventDefault` a key it
+      // does nothing with. Both axes come back the moment a vertex is grabbed, where the
+      // movement genuinely is geometric.
+      if (delta[1] !== 0) return;
+      event.preventDefault();
+      focusVertex(index + (delta[0] < 0 ? -1 : 1));
       return;
     }
 
+    event.preventDefault();
     const point = draft[index];
     if (point === undefined) return;
     const step = event.shiftKey ? KEYBOARD_NUDGE_LARGE_PX : KEYBOARD_NUDGE_PX;
@@ -280,6 +319,10 @@ export function startDrawMode(
       rovingIndex = indexRef.current;
       syncTabStops();
       element.style.outline = FOCUS_OUTLINE;
+      // Applied after the shorthand, which sets the default: in a browser this replaces the
+      // colour with the custom property, and where `var()` is not understood the shorthand's
+      // own colour is what remains. Either way the ring is drawn.
+      element.style.outlineColor = FOCUS_OUTLINE_COLOR;
       element.style.outlineOffset = "2px";
       // No announcement here. The element's own accessible name already says which vertex it
       // is, and `aria-posinset`/`aria-setsize` say where it sits, so a live message on focus
@@ -289,6 +332,7 @@ export function startDrawMode(
     });
     element.addEventListener("blur", () => {
       element.style.removeProperty("outline");
+      element.style.removeProperty("outline-color");
       element.style.removeProperty("outline-offset");
       if (grabbedIndex === indexRef.current) {
         // Synchronous by design: focus reaches the canvas before a later keydown can, so the
@@ -345,7 +389,14 @@ export function startDrawMode(
     if (vertices.length === 0) {
       group.tabIndex = 0;
       rovingIndex = 0;
-      if (focusedIndex >= 0) group.focus();
+      if (focusedIndex >= 0) {
+        // The one place focus lands somewhere with nothing to operate. `group` carries no
+        // interaction semantics, so without this a screen-reader user is told the group's
+        // name and nothing about why there is nothing in it. Announced from the reconcile
+        // that emptied the draft — a state change, not an echo of focus.
+        group.focus();
+        announce("No draft vertices");
+      }
       return;
     }
 
@@ -477,8 +528,8 @@ export function startDrawMode(
     renderDraft(points): void {
       reconcileDraft(points);
     },
-    activateVertexAt(at): boolean {
-      return activateVertex(map.project([at.lng, at.lat]));
+    activateVertexAt(point): boolean {
+      return activateVertex(point);
     },
     /**
      * Idempotent by composition rather than by a flag: `releaseDrag` already returns early

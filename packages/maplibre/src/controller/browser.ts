@@ -145,17 +145,25 @@ export function createBrowserMapEnvironment(): MapEnvironment {
     },
 
     onPointerRelease(listener: () => void): () => void {
-      // On the window, so a release outside the map still ends the gesture it started.
+      // On the document, so a release outside the map still ends the gesture it started.
       // `touchcancel` stays on the map, where it is genuine: the system taking a touch away
       // is a cancellation, not a release.
+      //
+      // In the **capture** phase, which is the whole point. A bubble-phase listener sits at
+      // the end of the chain, so anything in front of it — the renderer's own handlers, or
+      // consumer code on the container — calling `stopPropagation` on a `mouseup` means the
+      // release never arrives, the drag never ends, and panning never comes back. That is
+      // exactly the failure `mouseout` used to mask, reachable again by another route.
+      // Capture runs before anything can suppress it.
       const forward = (): void => {
         listener();
       };
-      globalThis.addEventListener("mouseup", forward);
-      globalThis.addEventListener("touchend", forward);
+      const options = { capture: true } as const;
+      globalThis.document.addEventListener("mouseup", forward, options);
+      globalThis.document.addEventListener("touchend", forward, options);
       return () => {
-        globalThis.removeEventListener("mouseup", forward);
-        globalThis.removeEventListener("touchend", forward);
+        globalThis.document.removeEventListener("mouseup", forward, options);
+        globalThis.document.removeEventListener("touchend", forward, options);
       };
     },
 

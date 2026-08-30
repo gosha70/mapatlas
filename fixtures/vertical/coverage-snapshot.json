@@ -1,0 +1,11 @@
+{
+  "source": "https://copernicus-dem-30m.s3.amazonaws.com/tileList.txt",
+  "sourceEtag": "637fe75ddf7615ba853dd83caf05cd82",
+  "sourceBytes": 1110900,
+  "retrievedAt": "2026-08-30",
+  "maxAgeDays": 365,
+  "normalization": "tr -d '\\r' | sed -E 's/^Copernicus_DSM_COG_10_([NS][0-9]{2})_00_([EW][0-9]{3})_00_DEM$/\\1\\2/' | grep -E '^[NS][0-9]{2}[EW][0-9]{3}$' | sort -u",
+  "tileListFile": "glo30-published-tiles.txt",
+  "tileListSha256": "e61d279a4590004a380fdf8857380fe117a12b2f3120afd7a468ef16c14a1a8c",
+  "tileCount": 26450
+}

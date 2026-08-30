@@ -62,12 +62,17 @@ tile list is a checked-in snapshot that is advisory.** The reasoning:
 
 - The build range-reads S3 already (ADR-0024, criterion 7), so a withheld tile is discovered for
   free as a read that finds nothing. Detection never needed a list.
-- What a list adds is **classification**, and classification is not optional. Withheld-by-policy
-  and something-broke produce the *same* absent read. A build that cannot tell them apart has
-  only two behaviours available, and both are wrong: fail on a legitimate gap that means "choose
-  another region", or pass over a real fetch failure that means "retry". The snapshot is what
-  makes the two distinguishable — so detection being free does not make the list optional, it
-  moves what the list is for.
+- What a list adds is **classification** — and measurement on 2026-08-30 narrowed what that
+  means, because the first version of this bullet was too strong. Absence presents as an HTTP
+  **404** (`N90E000` and `N00E000` both 404; `N45E006`, `N45E007`, `N46E006`, `S90W180` all 200),
+  and a 404 is already distinguishable from a 5xx or a timeout. So the transport layer separates
+  "not there" from "the fetch broke" without any list.
+
+  What it cannot separate is an **expected** 404 from an **unexpected** one, and those demand
+  opposite actions: a tile GLO-30 Public never published means "choose another region", while a
+  404 for a tile the snapshot says exists means the URL scheme, the bucket layout or the release
+  has changed — retrying is futile and re-picking the region is wrong. That distinction is what
+  the snapshot buys, and it is why detection being free does not make the list optional.
 - So the snapshot records a **decision input** (was this region viable when it was chosen?)
   rather than caching a dependency the build's correctness rests on. A stale snapshot yields a
   less helpful failure, never a wrong archive.
@@ -86,14 +91,27 @@ floor sits above the top of that reported range rather than choosing a threshold
 it is meant to judge.
 
 The public 2021 GLO-30 COG existed at selection time (42,310,635 bytes; ETag
-`72c5ebd9d8a7e37b8843109b5a40978b`). A full-resolution crop over the declared bounds measured
+`72c5ebd9d8a7e37b8843109b5a40978b`; a one-byte range GET answers **206**, which is why coverage
+accepts 200 and 206 and nothing else). A full-resolution crop over the declared bounds measured
 2,560.8–4,810.7 m: it clears the floor with a deliberately finite margin, is inland and has enough
 relief to make terrain, hillshade and contours visible. A `HEAD` on that object returned 200, which is
 direct evidence that the one tile this cut needs is published — but it is **selection evidence,
 not a discharge of obligation 2**. The build repeats the coverage check every run, because a
 tile published at selection time is a fact about then, and the snapshot remains necessary
-regardless: it is what classifies a future absence as withheld-by-policy rather than as a
-transport failure, which detection alone cannot do.
+regardless: it is what separates an **expected** 404 from an **unexpected** one. Transport
+failures need no list — a 5xx, a timeout or a thrown probe is already distinct from a 404 — so
+the snapshot's job is narrower than an earlier version of this paragraph claimed, and it is the
+job detection genuinely cannot do.
+
+**Coverage snapshot provenance**, so the derivation is checkable rather than asserted. Upstream
+`https://copernicus-dem-30m.s3.amazonaws.com/tileList.txt`, read 2026-08-30: **1,110,900 bytes**,
+ETag `637fe75ddf7615ba853dd83caf05cd82`, 26,450 lines of the form
+`Copernicus_DSM_COG_10_N45_00_E006_00_DEM`. The checked-in list is that file normalised — CRs
+stripped, each line reduced to its eight-character cell id by
+`s/^Copernicus_DSM_COG_10_([NS][0-9]{2})_00_([EW][0-9]{3})_00_DEM$/\1\2/`, non-matching lines
+dropped, then `sort -u` — giving 26,450 ids in 211,600 bytes. The manifest's sha256 proves the
+local pair agrees with itself; these three figures are what tie it to upstream, since a digest
+of the normalised file cannot.
 
 "Inland" is discharged here too, and by these same checks rather than a fourth: the cut requires
 only published tiles and every sample clears a 2,500 m floor, so no ocean pixel can be present.

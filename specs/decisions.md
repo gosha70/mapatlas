@@ -440,18 +440,20 @@ correction added: a renderer-specific encoding of a value is the renderer's to a
 something the neutral contract carries on its behalf.
 
 ## ADR-0024 — Demo elevation data and hosting
-**Status.** Decided, pending one input: **whether the representative region is US-only.** If it
-is, the decision is USGS 3DEP; otherwise it is Copernicus. Everything else below is settled.
+**Status.** Decided, unconditionally. Superseded the earlier "pending one input: whether the
+representative region is US-only" — that input turned out to gate on a premise the engine does
+not satisfy. See **Amendment: the substitution is unreachable** at the end.
 
 **Decision.** **Copernicus DEM GLO-30 Public** — specifically `COP-DEM_GLO-30-DGED`, 2021
 release, read from the `s3://copernicus-dem-30m` mirror at build time and **terrarium-encoded by
 us into the PMTiles archive**. Nothing is fetched from a third party at runtime.
 
-**If the representative region is US-only, take USGS 3DEP 1/3 arc-second instead.** It is a
-cleaner single-product answer on six of the seven criteria: public domain, so redistribution is
-trivially satisfied and attribution nearly vanishes; and **bare-earth**, which removes the one
-real defect in the Copernicus choice. Copernicus is right only if the region is non-US or the
-demo must generalise globally.
+**The USGS 3DEP substitution recorded here originally is withdrawn**, for the reason set out in
+the amendment below: it was conditional on the engine sampling elevation from the DEM, which it
+does not do. What it said, for the record: *if the representative region is US-only, take USGS
+3DEP 1/3 arc-second instead — public domain, so redistribution is trivially satisfied and
+attribution nearly vanishes; and bare-earth, which removes the one real defect in the Copernicus
+choice.* Both statements remain true about 3DEP. Neither is a reason to prefer it here.
 
 **Against the criteria.**
 
@@ -494,9 +496,23 @@ demo must generalise globally.
      the equator and not elsewhere.
 
    **The real cost: it is a DSM, not a DTM.** It represents the surface including buildings and
-   vegetation, so over forest the elevation reads high by the canopy height. If the product ever
-   shows trail profiles that is a visible defect, and it is the strongest argument against this
-   choice — and the reason a US-only region should take 3DEP instead.
+   vegetation, so over forest the elevation reads high by the canopy height. The distinction
+   bites wherever a DEM value becomes a **statement about ground**, and there are two places to
+   look for that, not one — a check scoped to runtime sampling misses the nearer of them.
+
+   - *At runtime:* nothing. The amendment below establishes that no code path reads elevation
+     off the terrain, so a profile or a snapped vertex altitude cannot be wrong because nothing
+     produces one. Latent, and the trigger is precise: **a call that samples the DEM**, not a
+     field that could hold the result. Adding altitude to a draft vertex changes nothing here.
+   - *At build time:* **the contour layer**, and this one is live. The engine only styles
+     contours — `styleLayers` is an opaque passthrough (ADR-0011) — so it never generates the
+     geometry, which means this fixture's build script must. Contours are where a DSM looks
+     worst: a contour line is read as a claim about ground, and canopy enters as closed loops
+     around woodland and buildings that survive every zoom level and every restyle. Unlike
+     shading, it is not arguable as texture.
+
+   The resolution is a constraint on **where the fixture's region may be**, not a change of
+   source: see the amendment.
 
 5. **Encoding: terrarium.** Copernicus ships COG GeoTIFF, so we encode either way, and encoding
    ourselves is a benefit under criterion 2: the runtime then depends on no third party's
@@ -531,4 +547,84 @@ the archive design, alongside the OSM tile policy and offline operation.
 Two things become build-script obligations rather than prose: the attribution and liability
 strings must be **checked against the licence document at build time and written into the
 archive**, and the region must be verified as released coverage before tiles are cut.
+
+**Amendment: the substitution is unreachable, so the region question is moot.**
+
+The 3DEP branch rested on one sentence in criterion 4 — *"if the product ever shows trail
+profiles that is a visible defect"* — and that condition is not met. Three checks, each
+independently sufficient:
+
+- `computeStats` is declared as `(t: Pick<Track, "points" | "segments" | "channels">, policy?)`.
+  Its entire input is track data. It is handed no map, no controller and no DEM, so it cannot
+  read a terrain value even if it wanted one.
+- `TrackPoint.altitudeM` is *"WGS84 ellipsoidal metres, when the fix provides it"* — it comes
+  from the geolocation fix. Criterion 4 above says the same thing when it works through the
+  ellipsoid-versus-geoid mismatch "for the statistics `computeStats` derives from GPS".
+- No terrain-sampling call exists anywhere in `specs/` or `packages/` — no
+  `queryTerrainElevation`, no equivalent on `MapController` — so there is no way to read a
+  value off the terrain at all. This is the load-bearing check, and it is deliberately *not*
+  argued from what the geometry carries: a profile along a drawn line needs something to sample
+  a DEM at those coordinates, not an altitude field on the vertices, so adding one to
+  `DraftTrackPoint` would not make this condition live. Only a sampling call would. The word
+  "profile" appears in none of `PRD.md`, `roadmap.md` or `architecture.md`.
+
+**The decisive argument is not the canopy one, and holds even if the premise had been true.**
+Choosing 3DEP binds the engine's own reference fixture to a single country. The fixture is the
+thing consumers copy, so a US-shaped one teaches a US-shaped setup — in an engine whose entire
+premise is that it carries no domain and no place. That alone settles it. The premise check
+below matters because it removes the only counter-argument that could have justified the
+narrowing, not because it is the reason for the choice.
+
+**Where the DEM's values are consumed, and what remains live.** Runtime: nothing, per the three
+checks below. Build time: the contour layer, per criterion 4 — live, and resolved by region
+selection rather than by source, in the constraint stated at the end of this amendment.
+Hillshade sits between the two and is a caveat rather than a defect: at 30 m a treeline is a
+one- or two-pixel step of twenty-odd metres, which shades as an escarpment. The surface is
+real, but it renders as terrain and can read as a cliff. Worth knowing; not worth changing the
+decision over.
+
+**Region constraint, which is where the live criterion is discharged.** The fixture's region
+must be **above the treeline and inland**. Above the treeline there is no canopy, so the DSM and
+a DTM converge to within the product's own vertical error and the contour geometry is a claim
+about ground after all — the criterion-4 defect is not tolerated, it is arranged not to arise.
+Inland avoids the coast, and with it the second trap: GLO-30 Public ships **no ocean tiles**,
+terrarium has **no no-data sentinel** — every RGB triple decodes to a valid elevation, and the
+natural fill of zero decodes to sea level, indistinguishable from real sea level. A coastal
+fixture would therefore need an explicit choice about absent tiles, made rather than inherited
+from whatever the encoder does by default. The constraint also happens to select for the relief
+that makes terrain, hillshade and contours worth demonstrating at all, so it costs the fixture
+nothing.
+
+**Every obligation below fails the build; none warns.** A warning is an obligation with an
+opt-out that nobody records taking, and these fail on the day a region changes or an upstream
+release does rather than on a day someone is watching.
+
+**The constraint is enforced, not described.** "Above the treeline" is not a property a script
+can read off a bounding box: a region can satisfy it in aggregate and still include a forested
+valley floor in one corner, which is precisely where a reader would go looking for the artifact.
+Left as prose it is a premise that was true when written and stops being true, silently, the
+first time someone widens the bounds by half a degree. So the region declaration carries a
+**minimum-elevation floor** alongside its bounds, and the build script checks the cut region's
+lowest sample against it — from the DEM it already has open, since every tile is read to encode
+it. The floor is declared per region rather than fixed, because the treeline is a function of
+latitude and no single number is right from the Alps to Scandinavia; what is fixed is that a
+number must be given, justified, and met.
+
+Absent tiles remain a build-script obligation even inland, because withholding is at **tile**
+granularity: a region can be partially covered with no country-level list saying so. Coverage is
+therefore verified per tile, not per country, and the script fails on a gap rather than filling
+one silently. The failure **names the tile** — "no published tile at N45E007" rather than "gap
+in coverage", since the second sends whoever reads it to debug the fetcher for a file that was
+never going to arrive.
+
+**How this was reached is the point.** The conditional had stood for two review rounds and read
+as a deferred decision awaiting an input. It was in fact a decision awaiting a *premise check* —
+and the check was cheaper than the decision it gated. Two general forms worth carrying. Before
+answering the question a conditional poses, confirm the condition can occur at all. And when
+checking whether a data property has a consumer, the distinction that matters is not build time
+versus runtime but whether the value is **recomputable**: a runtime sample can be wrong today
+and right tomorrow when the source changes, while a value baked into shipped geometry is wrong
+for as long as the artifact exists and leaves no code path pointing back at where it came from.
+That is why the baked consumer is both the more permanent and the easier to miss — it stops
+looking like a consumer the moment its output ships.
 

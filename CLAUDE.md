@@ -17,6 +17,8 @@ knowledge** (no fish, plants, mushrooms, products, users, or database). Read
 
 ## Read in this order
 
+0. [`specs/CONTINUE.md`](specs/CONTINUE.md) — where the work is, and the specific mistakes a
+   previous session made repeatedly. Read it before planning anything.
 1. [`specs/PRD.md`](specs/PRD.md) — what and for whom; scope and non-goals.
 2. [`specs/architecture.md`](specs/architecture.md) — packages, module boundaries, data model, seams.
 3. [`specs/api.md`](specs/api.md) — the public API contract to build against.

@@ -6,6 +6,33 @@ dependency's source this session, and **[to verify]** when they are expectations
 confirmed before they are built on. Nothing here is marked verified on the strength of
 recollection.
 
+## Status — read this before any progress claim
+
+Four levels, because collapsing them is how a series of true green reports adds up to a false
+impression. **Nothing below has been run against real data end to end**: the build orchestrator
+has never touched a network or a filesystem, and every integration test drives it through
+injected fakes.
+
+| | unit-tested | wired into `build.mjs` | discharged end-to-end | notes |
+| --- | --- | --- | --- | --- |
+| Terrarium codec | yes | yes | **no** | never run on a real COG's pixels |
+| Region declaration + floor (ob. 4) | yes | yes | **no** | never run on decoded real tiles |
+| Coverage + gap classification (ob. 2, 3) | yes | yes | **no** | probe is injected; never run against S3 |
+| Licence rule (ob. 1) | yes | yes | **no** | its strings are blocked upstream |
+| Build ordering | yes | — | **no** | no writer and no tile reader behind the seams |
+
+**Remaining T4.6 implementation scope**, none of it implemented or integrated — investigation
+has happened, which is why the writer and toolchain sections below carry evidence: the
+GeoJSON→MVT contour toolchain; the PMTiles writer (`s2-pmtiles` is well-evidenced but
+uncommitted and unconfirmed at fixture scale); a real tile reader; producing an actual
+archive; measuring its size (ADR-0024 criterion 6); the fixture track (≥5k points, two-segment
+pause, two event marks); the `/lab` route; simulated GPS; the offline Playwright scenario; and
+the frame-time and memory baseline. That is most of the task by volume.
+
+**On verification claims in this plan and in commit messages:** gate runs and mutation results
+are *author verification* — real and reproducible, but run by whoever wrote the code, not an
+independent check. Where a claim was confirmed by someone else, it says so.
+
 ## What ships
 
 1. `scripts/fixture/` — the build and its four obligations, each module injectable so the

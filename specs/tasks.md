@@ -654,11 +654,38 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   about the DOM and MapLibre's style state. The harness now sets it, and the lane paints;
   documented in `api.md` and the package README as the consumer requirement it is.
 
-- **T4.6 Vertical acceptance fixture.** ADR-0024 has settled the elevation source; **one input
-  remains** — whether the representative region is US-only, which selects between Copernicus DEM
-  GLO-30 Public and USGS 3DEP. The build script inherits two obligations from that ADR: the
-  attribution and liability strings are checked against the licence document and written into
-  the archive, and the region is verified as released coverage before tiles are cut. Two additions beyond the
+- **T4.6 Vertical acceptance fixture.** ADR-0024 has settled the elevation source outright:
+  **Copernicus DEM GLO-30 Public**, whatever region is chosen. The input that used to remain —
+  whether the region is US-only, selecting 3DEP instead — was gated on the engine sampling
+  elevation from the DEM, which it does not do anywhere; the ADR's amendment records the three
+  checks. The region is therefore an ordinary fixture choice rather than a decision the source
+  depends on — but a **constrained** one: **above the treeline and inland**. The contour geometry
+  this script generates is the one live consumer of the DSM/DTM difference, and above the
+  treeline the two converge; inland keeps the fixture off the coast, where GLO-30 Public ships no
+  ocean tiles and terrarium has no no-data value to tell an absent tile from sea level.
+
+  **Four build-script obligations, each of which makes something checked rather than trusted.**
+  Every one of them **fails the build**; none of them warns. An obligation that logs is an
+  obligation someone walks past, and three of these four first fail on the day a region changes
+  or an upstream release does — which is to say, not on the day anyone is watching for them.
+
+  1. The attribution and liability strings are checked against the licence document and written
+     into the archive.
+  2. Released coverage is verified **per tile, not per country** — withholding is at tile
+     granularity, so a region can be partially covered with no country-level list saying so.
+  3. A gap **fails the build** rather than being filled, since terrarium has no no-data value:
+     any fill decodes as a real elevation and a zero fill decodes as sea level. The failure
+     **names the tile** — "no published tile at N45E007", not "gap in coverage", which sends a
+     reader to debug the fetcher for a file that was never going to arrive.
+  4. The region declares a **minimum-elevation floor** beside its bounds, and the cut region's
+     lowest sample is checked against it, from the DEM already open for encoding. This is what
+     makes "above the treeline" enforced rather than described: a box can satisfy it in
+     aggregate and still hold a forested valley floor in one corner, and left as prose it is a
+     premise that stops being true the first time someone widens the bounds. Declared per region
+     because the treeline is a function of latitude; what is fixed is that a number must be
+     given, justified and met.
+
+  Two additions beyond the
   original scope: it is reachable as a human-openable `/lab` route in `apps/demo` — through the
   packages' public entry points, sharing one fixture with the Playwright scenario, while
   `e2e/harness` stays automation-only — and it carries a **simulated GPS mode**, so the demo can

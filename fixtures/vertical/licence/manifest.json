@@ -1,0 +1,10 @@
+{
+  "title": "Licence for Copernicus DEM instance COP-DEM-GLO-30-F Global 30m Full, Free & Open",
+  "sourceUrl": "https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Data/DEM/resources/license/License-COPDEM-30.pdf",
+  "retrievedAt": "2026-08-30",
+  "sourcePdfBytes": 113786,
+  "sourcePdfSha256": "9cd37d37ea654bbcaf0a2e059e6a3a5b5f76072824d8dd860ccf274ada8951bd",
+  "extraction": "pdftotext -layout -enc UTF-8 License-COPDEM-30.pdf COP-DEM-GLO-30.txt",
+  "textFile": "COP-DEM-GLO-30.txt",
+  "textSha256": "058dfc85eca8419acbe0595bc9a13eda9de0083599d41020cea8d5cd71a49350"
+}

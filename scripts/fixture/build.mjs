@@ -4,6 +4,7 @@ import { assertCoverage, assertSnapshotFresh, loadCoverageSnapshot } from "./cov
 import {
   LICENCE_ENTRY_PATH,
   assertArchiveCarriesAttribution,
+  assertNotForDistribution,
   assertArchiveCarriesLicence,
   assertStringsBackedByLicence,
 } from "./licence.mjs";
@@ -25,9 +26,15 @@ import { decodeElevation } from "./terrarium.mjs";
  *                   it, and only then names it as the archive.
  *
  * A build that spends twenty minutes encoding and then fails comparing a string is correct and
- * infuriating; every check that *can* run before the expensive stage does. Note that this puts
- * the licence check first even though its inputs are the ones most likely to be missing — that
- * is the point, not an accident: the cheapest failure should be the earliest.
+ * infuriating; every check that *can* run before the expensive stage does.
+ *
+ * **The licence gate is on distribution, not on execution.** The obligation is about
+ * redistributing a derived work, so it belongs at the boundary where an archive becomes
+ * downloadable — not in front of every local run. A `distributable: false` build skips the
+ * licence stage, writes to a `.dev` path and must carry a not-for-distribution marker instead;
+ * a distributable build cannot skip it by any flag. Gating execution on a legal input meant a
+ * missing string blocked the writer, the tile reader and the contour source, none of which
+ * redistribute anything. That was a design mistake, corrected here.
  *
  * Nothing here performs I/O directly. The probe, the tile reader, the clock and the writer are
  * injected, so the assembled ordering is testable without a network — which matters because the
@@ -96,16 +103,22 @@ function at(stage, work) {
  * `discardArchive` must tolerate a path that was never created: it is called whenever the
  * archive stage fails, including when the writer itself threw before producing anything.
  */
-export function runBuild(paths, deps) {
-  const licenceText = at("licence", () => deps.readText(paths.licencePath));
-  const attribution = at("licence", () => deps.readJson(paths.attributionPath));
-  const roles = at("licence", () =>
-    assertStringsBackedByLicence(
-      /** @type {Record<string, string>} */ (attribution),
-      licenceText,
-      paths.licencePath,
-    ),
-  );
+export function runBuild(paths, deps, options = {}) {
+  const distributable = options.distributable ?? true;
+  let licenceText = "";
+  let attribution = {};
+  let roles = [];
+  if (distributable) {
+    licenceText = at("licence", () => deps.readText(paths.licencePath));
+    attribution = at("licence", () => deps.readJson(paths.attributionPath));
+    roles = at("licence", () =>
+      assertStringsBackedByLicence(
+        /** @type {Record<string, string>} */ (attribution),
+        licenceText,
+        paths.licencePath,
+      ),
+    );
+  }
 
   // `parseRegionDeclaration` rather than `loadRegionDeclaration`: the latter reads the file
   // itself, which would put I/O inside a stage this module promises to keep injectable. Reading
@@ -141,7 +154,11 @@ export function runBuild(paths, deps) {
   // fails its licence checks after writing leaves a licence-violating archive on disk, which
   // `/lab` or the browser scenario would then pick up — a failed build producing a usable-looking
   // artifact is worse than one producing nothing.
-  const partialPath = `${paths.archivePath}.partial`;
+  // A development archive is named so it cannot be mistaken for a shippable one, and the name
+  // is not cosmetic: it is what stops a local run's output being picked up by `/lab` or the
+  // browser scenario, which read the distributable path.
+  const outputPath = distributable ? paths.archivePath : `${paths.archivePath}.dev`;
+  const partialPath = `${outputPath}.partial`;
   try {
     // The writer is inside the `try` too: one that fails midway leaves a partial behind just as
     // a failing check does. The `.partial` suffix already keeps `/lab` and the browser scenario
@@ -150,24 +167,28 @@ export function runBuild(paths, deps) {
     const archive = at("archive", () =>
       deps.writeArchive(partialPath, tiles, licenceText, attribution),
     );
-    at("archive", () => assertArchiveCarriesLicence(archive, licenceText, LICENCE_ENTRY_PATH));
-    // The second half of obligation 1: the strings were checked against the document above, and
-    // this is where they are confirmed to have reached the archive rather than stopping at the
-    // validation.
-    at("archive", () =>
-      assertArchiveCarriesAttribution(
-        archive,
-        /** @type {Record<string, string>} */ (attribution),
-        LICENCE_ENTRY_PATH,
-      ),
-    );
-    at("archive", () => deps.finaliseArchive(partialPath, paths.archivePath));
+    if (distributable) {
+      at("archive", () => assertArchiveCarriesLicence(archive, licenceText, LICENCE_ENTRY_PATH));
+      // The second half of obligation 1: the strings were checked against the document above,
+      // and this is where they are confirmed to have reached the archive rather than stopping
+      // at the validation.
+      at("archive", () =>
+        assertArchiveCarriesAttribution(
+          archive,
+          /** @type {Record<string, string>} */ (attribution),
+          LICENCE_ENTRY_PATH,
+        ),
+      );
+    } else {
+      at("archive", () => assertNotForDistribution(archive));
+    }
+    at("archive", () => deps.finaliseArchive(partialPath, outputPath));
   } catch (error) {
     deps.discardArchive(partialPath);
     throw error;
   }
 
-  return { roles, region: declaration.id, tiles, lowest };
+  return { roles, distributable, outputPath, region: declaration.id, tiles, lowest };
 }
 
 /**

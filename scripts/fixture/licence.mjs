@@ -188,6 +188,29 @@ export function assertArchiveCarriesAttribution(
   }
 }
 
+/** The marker a development archive must carry, so it cannot be mistaken for a shippable one. */
+export const NOT_FOR_DISTRIBUTION_PATH = "NOT-FOR-DISTRIBUTION";
+
+/**
+ * A non-distributable build must say so inside the archive.
+ *
+ * The counterpart to the licence checks rather than an exemption from them. Skipping the
+ * licence gate is only safe if the resulting artifact cannot be mistaken for one that passed
+ * it, so the development path trades one obligation for another: no licence, but a marker, and
+ * the build fails without it exactly as a distributable build fails without the notices.
+ *
+ * @param {{ entries: () => Iterable<{ path: string, text: string }> }} archive
+ */
+export function assertNotForDistribution(archive) {
+  const entries = [...archive.entries()];
+  if (entries.some((entry) => entry.path === NOT_FOR_DISTRIBUTION_PATH)) return;
+  throw new LicenceError(
+    `a development archive must carry ${NOT_FOR_DISTRIBUTION_PATH}: it skipped the licence ` +
+      `checks, so nothing else distinguishes it from one that passed them. Present: ` +
+      `${entries.length === 0 ? "(nothing)" : entries.map((e) => e.path).join(", ")}`,
+  );
+}
+
 /**
  * The archive must carry the licence itself, not only the credit line.
  *

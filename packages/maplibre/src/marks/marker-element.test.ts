@@ -50,6 +50,24 @@ describe("the wrapper carries the whole accessibility contract", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
+  it("keeps an interactive mark's click from also becoming a map click", () => {
+    // MapLibre listens above marker elements in the canvas container. This parent listener
+    // stands in for that boundary: without the wrapper's suppression it fires from the same
+    // native click, which would report one event mark as both an event and a map tap.
+    const mapContainer = globalThis.document.createElement("div");
+    const onMapClick = vi.fn();
+    const onActivate = vi.fn();
+    mapContainer.addEventListener("click", onMapClick);
+    mapContainer.append(build(BASE, onActivate));
+
+    mapContainer.firstElementChild?.dispatchEvent(
+      new globalThis.MouseEvent("click", { bubbles: true }),
+    );
+
+    expect(onActivate).toHaveBeenCalledOnce();
+    expect(onMapClick).not.toHaveBeenCalled();
+  });
+
   it("hides the consumer's markup, so a mark is announced once", () => {
     const element = build(BASE);
     const content = element.querySelector("[aria-hidden='true']");

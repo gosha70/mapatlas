@@ -37,7 +37,9 @@ export type MapCall =
       readonly op: "fitBounds";
       readonly bounds: readonly [number, number, number, number];
       readonly paddingPx: number;
+      readonly animate: boolean;
     }
+  | { readonly op: "easeTo"; readonly center: readonly [number, number] }
   | { readonly op: "jumpTo"; readonly center: readonly [number, number] }
   | { readonly op: "remove" };
 
@@ -278,6 +280,16 @@ export function createFakeMap(
       },
     },
 
+    // A deliberately simple reversible projection. The controller needs the relationship,
+    // not Web Mercator's formula: one screen-pixel nudge must round-trip through the seam and
+    // reach the consumer as a different coordinate.
+    project([lng, lat]: [number, number]): { x: number; y: number } {
+      return { x: lng * 100, y: -lat * 100 };
+    },
+    unproject(point: { x: number; y: number }): { lng: number; lat: number } {
+      return { lng: point.x / 100, lat: -point.y / 100 };
+    },
+
     addSource(id: string, source: SourceSpecification): void {
       assertLive("addSource");
       if (sources.has(id)) throw new FakeMapError(`source "${id}" already exists`);
@@ -339,9 +351,14 @@ export function createFakeMap(
       calls.push({ op: "setSourceData", id, featureCount: data.features.length });
     },
 
-    fitBounds(bounds: [number, number, number, number], paddingPx: number): void {
+    fitBounds(bounds: [number, number, number, number], paddingPx: number, animate: boolean): void {
       assertLive("fitBounds");
-      calls.push({ op: "fitBounds", bounds, paddingPx });
+      calls.push({ op: "fitBounds", bounds, paddingPx, animate });
+    },
+
+    easeTo(camera: { center: [number, number]; zoom?: number }): void {
+      assertLive("easeTo");
+      calls.push({ op: "easeTo", center: camera.center });
     },
 
     jumpTo(camera: { center: [number, number]; zoom?: number }): void {
@@ -407,12 +424,16 @@ export function createFakeMarker(element: HTMLElement, options: MarkerOptions): 
     setLngLat(lng: number, lat: number): void {
       lngLat = [lng, lat];
     },
-    addTo(): void {
+    addTo(map): void {
       attached = true;
+      const container = (map as Partial<FakeMap>).options?.container as
+        { append?: (child: HTMLElement) => void } | undefined;
+      container?.append?.(element);
     },
     remove(): void {
       removed = true;
       attached = false;
+      element.remove();
     },
   };
 }

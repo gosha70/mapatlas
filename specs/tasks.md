@@ -703,7 +703,10 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   pan, focus movement between vertices, and nudging the focused one — so the collision is
   settled before any handler is written, rather than by whichever runs first. A vertex is
   **grabbed** (Enter or Space), **nudged** while grabbed (arrows), and **dropped** (Enter or
-  Space) or **cancelled** (Escape); ungrabbed arrows move focus. That is the same shape as the
+  Space) or **cancelled** (Escape); ungrabbed arrows move focus. A nudge is one screen pixel,
+  and ten with Shift — the renderer's own draggable marker offers both, and shipping only the
+  fine one would leave the keyboard path an order of magnitude slower than the pointer path in
+  the task whose whole point is that they are equals. That is the same shape as the
   pointer path — press, move, release — so it reports through the same `onVertexMove`, with the
   grabbed state playing the part the drag plays there.
 
@@ -759,8 +762,11 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   the fake cannot see DOM. The browser drag test is that guard **provided it runs with the
   vertex layer present** — otherwise it tests draw mode in a configuration the demo never uses.
 
-  **A held arrow key repeats.** An unthrottled live region announces every nudge, so the
-  announcement is on drop or debounced, not per move.
+  **A held arrow key repeats**, which decides what the live region is *for*. It announces the
+  state changes that have no other channel — grab, drop, cancel — and neither nudges nor focus
+  moves. A nudge announcement would fire on every repeat of a held arrow; a focus announcement
+  would too, and would additionally repeat the element's own accessible name, which already
+  says which vertex is active and where it sits in the set.
 
   **A tap resolves in one order, not two pairwise rules:** draft vertex, then event mark, then
   map position. In draw mode both `draw-mode.ts`'s click handling and a controller-level
@@ -772,8 +778,10 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   moved from JavaScript and a media query has no say over an eased transition; the keyboard
   grab is released by drop, Escape, blur **and** by a reconcile that removes the focused vertex
   — the last two asserted, since neither is driven by the key handler under test; draft vertices
-  are focusable, reachable by tab, operable by arrow keys, and announce which vertex is active; a tap on an event mark fires `onEventClick` **alone**, asserted in the unit lane and
-  not only in the browser.
+  are focusable, reachable by tab, carry an accessible name saying which vertex they are, and
+  are operable by arrow keys at one screen pixel and ten with Shift — the coarse step asserted
+  so that dropping it fails; a tap on an event mark fires `onEventClick` **alone**, asserted in
+  the unit lane and not only in the browser.
 
   **That last one must be shown to fail without the implementation.** Marks are DOM elements
   above the canvas, so a click on one may never be dispatched as a map `click` at all — in which

@@ -128,6 +128,8 @@ interface Harness {
   readonly environment: MapEnvironment;
   readonly addProtocol: ReturnType<typeof vi.fn>;
   readonly createProtocol: ReturnType<typeof vi.fn>;
+  /** Preference read by camera operations, mutable so both states use one seam. */
+  reducedMotion: boolean;
 }
 
 function harness(preinstalled: PreinstalledStyleState = {}): Harness {
@@ -152,12 +154,13 @@ function harness(preinstalled: PreinstalledStyleState = {}): Harness {
         releaseListeners = releaseListeners.filter((registered) => registered !== listener);
       };
     },
+    prefersReducedMotion: () => result.reducedMotion,
     // A real DOM, so the accessibility contract is asserted against an implementation of it
     // rather than against a stand-in that agrees with whatever the code does.
     document: globalThis.document,
     protocolRegistrar: { addProtocol, createProtocol },
   };
-  return {
+  const result: Harness = {
     get map(): FakeMap {
       if (map === undefined) throw new Error("no map was constructed");
       return map;
@@ -166,6 +169,7 @@ function harness(preinstalled: PreinstalledStyleState = {}): Harness {
     environment,
     addProtocol,
     createProtocol,
+    reducedMotion: false,
     releasePointer: () => {
       for (const listener of [...releaseListeners]) listener();
     },
@@ -173,6 +177,7 @@ function harness(preinstalled: PreinstalledStyleState = {}): Harness {
       return releaseListeners.length;
     },
   };
+  return result;
 }
 
 /** Markers that are still on the map, in creation order. */
@@ -188,8 +193,9 @@ function mount(
   harness: Harness;
 } {
   const rig = harness(preinstalled);
+  const container = options.container ?? globalThis.document.createElement("div");
   const controller = createMapControllerInternal(
-    { container: CONTAINER, sources: [], ...options },
+    { container, sources: [], ...options },
     rig.environment,
   );
   return { controller, harness: rig };
@@ -1206,7 +1212,23 @@ describe("the camera", () => {
     expect(framed?.bounds).toEqual([1, 2, 3, 4]);
     // A default rather than zero, so endpoints are not flush against the viewport edge.
     expect(framed?.paddingPx).toBeGreaterThan(0);
-    expect(rig.map.calls.find((call) => call.op === "jumpTo")?.center).toEqual([18.06, 59.33]);
+    expect(rig.map.calls.find((call) => call.op === "easeTo")?.center).toEqual([18.06, 59.33]);
+  });
+
+  it("reads reduced motion at each move and sends both states through the camera seam", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+
+    rig.reducedMotion = false;
+    controller.fitBounds([1, 2, 3, 4]);
+    controller.recenter({ lat: 59.33, lng: 18.06 });
+    rig.reducedMotion = true;
+    controller.fitBounds([5, 6, 7, 8]);
+    controller.recenter({ lat: 59.34, lng: 18.07 });
+
+    const framed = rig.map.calls.filter((call) => call.op === "fitBounds");
+    expect(framed.map((call) => call.animate)).toEqual([true, false]);
+    expect(rig.map.calls.find((call) => call.op === "easeTo")?.center).toEqual([18.06, 59.33]);
+    expect(rig.map.calls.find((call) => call.op === "jumpTo")?.center).toEqual([18.07, 59.34]);
   });
 });
 
@@ -1240,6 +1262,12 @@ describe("destroy takes the markers with it", () => {
     }).toThrow(MapControllerDestroyedError);
     expect(() => {
       controller.recenter({ lat: 0, lng: 0 });
+    }).toThrow(MapControllerDestroyedError);
+    expect(() => {
+      controller.onMapTap(() => undefined);
+    }).toThrow(MapControllerDestroyedError);
+    expect(() => {
+      controller.onEventClick(() => undefined);
     }).toThrow(MapControllerDestroyedError);
   });
 });
@@ -1861,6 +1889,106 @@ function tap(rig: Harness, at: { x: number; y: number; lng: number; lat: number 
   rig.map.firePointer("click", at);
 }
 
+describe("map and event activation", () => {
+  const AT = { x: 10, y: 20, lng: 18.06, lat: 59.33 };
+
+  it("subscribes and unsubscribes map taps with isolated coordinates", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    const seen: LatLng[] = [];
+    const stopMutating = controller.onMapTap((at) => {
+      at.lng = 0;
+    });
+    const stop = controller.onMapTap((at) => seen.push(at));
+
+    tap(rig, AT);
+    stopMutating();
+    stop();
+    stop();
+    tap(rig, { ...AT, lng: 18.07 });
+
+    expect(seen).toEqual([{ lat: 59.33, lng: 18.06 }]);
+  });
+
+  it("makes an event mark a keyboard control and reports its id", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const seen: string[] = [];
+    controller.onEventClick((id) => seen.push(id));
+    controller.renderEvents([eventFixture("e1", AT.lng)]);
+    const eventMark = placed(rig)[0]?.element;
+
+    expect(eventMark?.getAttribute("role")).toBe("button");
+    expect(eventMark?.tabIndex).toBe(0);
+    eventMark?.dispatchEvent(
+      new globalThis.KeyboardEvent("keydown", { key: "Enter", cancelable: true }),
+    );
+
+    expect(seen).toEqual(["e1"]);
+  });
+
+  it("fires an event click alone, with the DOM suppression carrying the contract", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const events: string[] = [];
+    const maps: LatLng[] = [];
+    controller.onEventClick((id) => events.push(id));
+    controller.onMapTap((at) => maps.push(at));
+    controller.renderEvents([eventFixture("e1", AT.lng)]);
+    const eventMark = placed(rig)[0]?.element;
+    const mapContainer = rig.map.options.container;
+    // This is MapLibre's DOM relationship: the marker is inside the container whose native
+    // click becomes the synthetic map click. Removing the wrapper suppression makes this
+    // listener run and turns the assertion red.
+    mapContainer.addEventListener("click", () => tap(rig, AT));
+
+    eventMark?.dispatchEvent(new globalThis.MouseEvent("click", { bubbles: true }));
+
+    expect(events).toEqual(["e1"]);
+    expect(maps).toEqual([]);
+  });
+
+  it("gives an overlapping draft vertex priority over an event mark", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    const events: string[] = [];
+    const vertices: number[] = [];
+    controller.onEventClick((id) => events.push(id));
+    controller.renderDraft([{ lat: AT.lat, lng: AT.lng }]);
+    controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: () => undefined,
+      onVertexClick: (index) => vertices.push(index),
+    });
+    controller.renderEvents([eventFixture("e1", AT.lng)]);
+    rig.map.featuresUnderPointer = [{ properties: { kind: "draft-vertex", index: 0 } }];
+    const eventMark = placed(rig).find((marker) =>
+      marker.element.classList.contains("mapatlas-mark--event"),
+    );
+
+    eventMark?.element.dispatchEvent(new globalThis.MouseEvent("click", { bubbles: true }));
+
+    expect(vertices).toEqual([0]);
+    expect(events).toEqual([]);
+  });
+
+  it("lets draw mode own an empty-map tap rather than reporting it twice", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    const added: LatLng[] = [];
+    const maps: LatLng[] = [];
+    controller.onMapTap((at) => maps.push(at));
+    controller.enterDrawMode({
+      onVertexAdd: (at) => added.push(at),
+      onVertexMove: () => undefined,
+    });
+    rig.map.featuresUnderPointer = [];
+
+    tap(rig, AT);
+
+    expect(added).toEqual([{ lat: AT.lat, lng: AT.lng }]);
+    expect(maps).toEqual([]);
+  });
+});
+
 describe("draw mode borrows interaction and gives it back", () => {
   const AT = { x: 10, y: 20, lng: 18.06, lat: 59.33 };
   const ELSEWHERE = { x: 90, y: 90, lng: 18.09, lat: 59.36 };
@@ -2165,6 +2293,176 @@ describe("draw mode borrows interaction and gives it back", () => {
   });
 });
 
+describe("draw mode's keyboard vertex layer", () => {
+  const DRAFT = [
+    { lat: 59.33, lng: 18.06 },
+    { lat: 59.34, lng: 18.07 },
+    { lat: 59.35, lng: 18.08 },
+  ];
+
+  function vertexElements(rig: Harness): HTMLElement[] {
+    const container = rig.map.options.container;
+    if (!container.isConnected) globalThis.document.body.append(container);
+    return [...container.querySelectorAll<HTMLElement>(".mapatlas-draft-vertex")];
+  }
+
+  function press(
+    element: HTMLElement,
+    key: string,
+    modifiers: { shiftKey?: boolean } = {},
+  ): KeyboardEvent {
+    const event = new globalThis.KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+      cancelable: true,
+      ...modifiers,
+    });
+    element.dispatchEvent(event);
+    return event;
+  }
+
+  it("exposes one named tab stop and a visible focus indicator", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    controller.renderDraft(DRAFT);
+    controller.enterDrawMode({ onVertexAdd: () => undefined, onVertexMove: () => undefined });
+    const vertices = vertexElements(rig);
+
+    expect(vertices.map((element) => element.getAttribute("aria-label"))).toEqual([
+      "Draft vertex 1 of 3",
+      "Draft vertex 2 of 3",
+      "Draft vertex 3 of 3",
+    ]);
+    expect(vertices.map((element) => element.tabIndex)).toEqual([0, -1, -1]);
+    expect(vertices.every((element) => element.style.pointerEvents === "none")).toBe(true);
+
+    vertices[0]?.focus();
+    expect(globalThis.document.activeElement).toBe(vertices[0]);
+    expect(vertices[0]?.style.outline).toContain("3px");
+  });
+
+  it("moves focus with ungrabbed arrows, then nudges through onVertexMove while grabbed", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    const moved: [number, LatLng][] = [];
+    controller.renderDraft(DRAFT);
+    controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: (index, to) => moved.push([index, to]),
+    });
+    const vertices = vertexElements(rig);
+    vertices[0]?.focus();
+
+    expect(press(vertices[0]!, "ArrowRight").defaultPrevented).toBe(true);
+    expect(globalThis.document.activeElement).toBe(vertices[1]);
+    expect(moved).toEqual([]);
+
+    press(vertices[1]!, "Enter");
+    expect(vertices[1]?.getAttribute("aria-pressed")).toBe("true");
+    press(vertices[1]!, "ArrowRight");
+    press(vertices[1]!, "ArrowRight");
+    press(vertices[1]!, "Enter");
+
+    expect(moved.map(([index]) => index)).toEqual([1, 1]);
+    expect(moved[0]?.[1].lat).toBeCloseTo(59.34);
+    expect(moved[0]?.[1].lng).toBeCloseTo(18.08);
+    expect(moved[1]?.[1].lat).toBeCloseTo(59.34);
+    expect(moved[1]?.[1].lng).toBeCloseTo(18.09);
+    expect(vertices[1]?.getAttribute("aria-pressed")).toBe("false");
+    expect(rig.map.options.container.textContent).toContain("Dropped draft vertex 2");
+  });
+
+  it("nudges ten screen pixels with Shift, as MapLibre's own draggable marker does", () => {
+    // One pixel a press is placement, not travel: crossing the marker's own 24px takes two
+    // dozen presses. MapLibre answers that with a Shift step of ten on its draggable marker,
+    // and a keyboard path that omits it is an order of magnitude slower than the pointer one.
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    const moved: [number, LatLng][] = [];
+    controller.renderDraft(DRAFT);
+    controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: (index, to) => moved.push([index, to]),
+    });
+    const vertex = vertexElements(rig)[1]!;
+    vertex.focus();
+    press(vertex, "Enter");
+
+    press(vertex, "ArrowRight", { shiftKey: true });
+    press(vertex, "ArrowUp", { shiftKey: true });
+
+    // The fake's projection is 100 units per degree, so ten pixels is a tenth of a degree —
+    // ten times the plain step the test above measures at one hundredth.
+    expect(moved[0]?.[1].lng).toBeCloseTo(18.17);
+    expect(moved[0]?.[1].lat).toBeCloseTo(59.34);
+    expect(moved[1]?.[1].lat).toBeCloseTo(59.44);
+    expect(vertex.getAttribute("aria-keyshortcuts")).toContain("Shift+ArrowRight");
+  });
+
+  it("cancels a grab synchronously on blur", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    controller.renderDraft(DRAFT);
+    controller.enterDrawMode({ onVertexAdd: () => undefined, onVertexMove: () => undefined });
+    const vertex = vertexElements(rig)[0]!;
+    const elsewhere = globalThis.document.createElement("button");
+    rig.map.options.container.append(elsewhere);
+    vertex.focus();
+    press(vertex, "Enter");
+
+    elsewhere.focus();
+
+    expect(vertex.getAttribute("aria-pressed")).toBe("false");
+    expect(rig.map.options.container.textContent).toContain("Cancelled draft vertex 1");
+  });
+
+  it("cancels before reconciliation removes a focused vertex and puts focus somewhere defined", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    controller.renderDraft(DRAFT);
+    controller.enterDrawMode({ onVertexAdd: () => undefined, onVertexMove: () => undefined });
+    const removed = vertexElements(rig)[2]!;
+    removed.focus();
+    press(removed, "Enter");
+    let blurCount = 0;
+    removed.addEventListener("blur", () => {
+      blurCount += 1;
+    });
+
+    controller.renderDraft(DRAFT.slice(0, 2));
+
+    expect(removed.getAttribute("aria-pressed")).toBe("false");
+    expect(globalThis.document.activeElement).toBe(vertexElements(rig)[1]);
+    // Happy DOM mirrors the platform case this path exists for: removal itself emitted no
+    // blur, so only the explicit reconciliation cleanup could have released the grab.
+    expect(blurCount).toBe(0);
+  });
+
+  it("moves focus to the group when the last vertex disappears", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    controller.renderDraft([DRAFT[0]!]);
+    controller.enterDrawMode({ onVertexAdd: () => undefined, onVertexMove: () => undefined });
+    vertexElements(rig)[0]?.focus();
+
+    controller.renderDraft([]);
+
+    const group = rig.map.options.container.querySelector<HTMLElement>("[role='group']");
+    expect(globalThis.document.activeElement).toBe(group);
+    expect(group?.tabIndex).toBe(0);
+  });
+
+  it("removes the keyboard layer on exit without clearing the painted draft", () => {
+    const { controller, harness: rig } = mount({ sources: [OSM] });
+    rig.map.fireLoad();
+    controller.renderDraft(DRAFT);
+    const exit = controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: () => undefined,
+    });
+    expect(vertexElements(rig)).toHaveLength(3);
+
+    exit();
+
+    expect(vertexElements(rig)).toEqual([]);
+    expect(rig.map.data(ENGINE_SOURCE.draft)?.features).toHaveLength(4);
+  });
+});
+
 describe("draw mode cleanup survives a consumer failure", () => {
   const AT = { x: 10, y: 20, lng: 18.06, lat: 59.33 };
 
@@ -2275,6 +2573,7 @@ describe("draw-mode ownership", () => {
     const { controller, harness: rig } = mount({ sources: [OSM] });
     rig.map.fireLoad();
     rig.map.dragPan.disable();
+    const before = rig.map.listenerCount();
     const exit = controller.enterDrawMode({
       onVertexAdd: () => undefined,
       onVertexMove: () => undefined,
@@ -2289,7 +2588,7 @@ describe("draw-mode ownership", () => {
 
     expect(rig.map.dragPanEnabled).toBe(false);
     expect(rig.map.dragPanChanges.length).toBe(afterFirst);
-    expect(rig.map.listenerCount()).toBe(1);
+    expect(rig.map.listenerCount()).toBe(before);
   });
 
   it("a later exit does not undo panning the consumer turned off afterwards", () => {
@@ -2384,8 +2683,10 @@ describe("draw-mode ownership", () => {
     // no gesture in flight must treat one as nothing — otherwise one map's drag ending would
     // reach into another's state.
     const shared = harness();
+    const firstContainer = globalThis.document.createElement("div");
+    const secondContainer = globalThis.document.createElement("div");
     const first = createMapControllerInternal(
-      { container: CONTAINER, sources: [OSM] },
+      { container: firstContainer, sources: [OSM] },
       shared.environment,
     );
     const firstMap = shared.map;
@@ -2393,7 +2694,7 @@ describe("draw-mode ownership", () => {
 
     // A second controller over the same environment, and so the same document.
     const second = createMapControllerInternal(
-      { container: CONTAINER, sources: [OSM] },
+      { container: secondContainer, sources: [OSM] },
       shared.environment,
     );
     const secondMap = shared.map;

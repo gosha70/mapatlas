@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { LatLng } from "@mapatlas/core";
+import type { DraftTrackPoint, LatLng } from "@mapatlas/core";
 
+import { applyMarkerStyle, createMarkerElement } from "../marks/marker-element.js";
+import type { MarkerStyle } from "../marks/marker-style.js";
 import { ENGINE_LAYER } from "./engine-layers.js";
 import type {
   MapEnvironment,
   MapLike,
   MapPointerEvent,
   MapPointerEventName,
+  MarkerHandle,
 } from "./environment.js";
 
 /**
@@ -45,10 +48,11 @@ const MOVE_EVENTS: readonly MapPointerEventName[] = ["mousemove", "touchmove"];
  * Where the gesture is *taken away* rather than finished: a system gesture claims the touch,
  * a call arrives.
  *
- * Separate from ending because no click follows a cancellation, so the gesture must be
- * forgotten — a remembered one would be consumed by the next unrelated click and swallow it.
- * Both paths release the drag, since the one that does not is the one that leaves the map
- * unpannable.
+ * Routed to the same handler as an ordinary ending, because the borrowed state a cancellation
+ * has to release is exactly the state a release has to — and the path that forgets to release
+ * is the one that leaves the map unpannable. The retained gesture needs nothing further
+ * either: no click follows a cancellation, which is the renderer's rule and one the fake
+ * enforces, so nothing consumes the gesture at the time and the next press replaces it.
  *
  * `mouseout` is deliberately **not** here. It bubbles, so it fires when the pointer crosses a
  * marker inside the map, and cancelling there re-enables panning while the button is still
@@ -57,6 +61,44 @@ const MOVE_EVENTS: readonly MapPointerEventName[] = ["mousemove", "touchmove"];
  * was standing in for: a release outside the container, which the map never reports.
  */
 const CANCEL_EVENTS: readonly MapPointerEventName[] = ["touchcancel"];
+
+/**
+ * Screen pixels per keydown, matching MapLibre's own keyboard-marker movement: one pixel for
+ * placement, ten with Shift for travel. The coarse step is not a nicety — at one pixel a press,
+ * crossing the width of a marker takes a dozen presses and crossing the viewport takes
+ * hundreds, which would leave the keyboard path an order of magnitude slower than the pointer
+ * one in the task whose point is that they are equals.
+ */
+const KEYBOARD_NUDGE_PX = 1;
+const KEYBOARD_NUDGE_LARGE_PX = 10;
+/** Large enough to expose a platform focus ring without covering the painted vertex. */
+const KEYBOARD_VERTEX_SIZE_PX: readonly [number, number] = [24, 24];
+const FOCUS_OUTLINE = "3px solid #0969da";
+
+const ARROW_DELTA: Readonly<Record<string, readonly [dx: number, dy: number]>> = Object.freeze({
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+});
+
+let nextVertexGroupId = 1;
+
+interface AccessibleVertex {
+  index: number;
+  readonly indexRef: { current: number };
+  readonly element: HTMLElement;
+  readonly marker: MarkerHandle;
+}
+
+function vertexStyle(index: number, count: number): MarkerStyle {
+  return {
+    ariaLabel: `Draft vertex ${String(index + 1)} of ${String(count)}`,
+    anchor: "center",
+    className: "mapatlas-draft-vertex",
+    sizePx: [...KEYBOARD_VERTEX_SIZE_PX],
+  };
+}
 
 /** Which vertex, if any, is drawn under a point. */
 function vertexAt(map: MapLike, point: { x: number; y: number }): number | null {
@@ -82,13 +124,19 @@ function vertexAt(map: MapLike, point: { x: number; y: number }): number | null 
  * ownership nobody could reason about.
  */
 export interface DrawSession {
-  /** Idempotent: releases any drag, detaches every listener, restores panning. */
+  /** Reconcile the keyboard layer to the same indexed points as the painted source. */
+  renderDraft(points: readonly DraftTrackPoint[] | null): void;
+  /** Give an overlapping draft vertex first claim on a DOM event-mark activation. */
+  activateVertexAt(at: LatLng): boolean;
+  /** Idempotent: releases interaction, removes the keyboard layer, restores panning. */
   exit(): void;
 }
 
 export function startDrawMode(
   map: MapLike,
   environment: MapEnvironment,
+  container: HTMLElement,
+  initialDraft: readonly DraftTrackPoint[] | null,
   handlers: DrawModeHandlers,
 ): DrawSession {
   /** The gesture in flight, and whether it has moved. */
@@ -98,6 +146,218 @@ export function startDrawMode(
   let dragListenersAttached = false;
   /** Unsubscribes the document-level release, once a drag is in flight. */
   let stopListeningForRelease: (() => void) | null = null;
+  let vertices: AccessibleVertex[] = [];
+  let draft: DraftTrackPoint[] = [];
+  let rovingIndex = 0;
+  let grabbedIndex: number | null = null;
+  let renderVersion = 0;
+
+  const groupId = `mapatlas-draft-vertices-${String(nextVertexGroupId)}`;
+  nextVertexGroupId += 1;
+  const group = environment.document.createElement("div");
+  group.id = groupId;
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-label", "Draft vertices");
+  group.className = "mapatlas-draft-vertices";
+  group.style.position = "absolute";
+  group.style.left = "0";
+  group.style.top = "0";
+  group.style.width = "1px";
+  group.style.height = "1px";
+  group.style.pointerEvents = "none";
+  container.append(group);
+
+  const live = environment.document.createElement("span");
+  live.setAttribute("aria-live", "polite");
+  live.setAttribute("aria-atomic", "true");
+  live.style.position = "absolute";
+  live.style.width = "1px";
+  live.style.height = "1px";
+  live.style.padding = "0";
+  live.style.margin = "-1px";
+  live.style.overflow = "hidden";
+  live.style.clip = "rect(0, 0, 0, 0)";
+  live.style.whiteSpace = "nowrap";
+  live.style.border = "0";
+  group.append(live);
+
+  function announce(message: string): void {
+    live.textContent = message;
+  }
+
+  function setGrabbed(index: number | null, announcement?: string): void {
+    if (grabbedIndex !== null) {
+      vertices[grabbedIndex]?.element.setAttribute("aria-pressed", "false");
+    }
+    grabbedIndex = index;
+    if (index !== null) vertices[index]?.element.setAttribute("aria-pressed", "true");
+    if (announcement !== undefined) announce(announcement);
+  }
+
+  function toggleGrab(index: number): void {
+    if (grabbedIndex === index) {
+      setGrabbed(null, `Dropped draft vertex ${String(index + 1)}`);
+      return;
+    }
+    setGrabbed(index, `Grabbed draft vertex ${String(index + 1)}`);
+  }
+
+  function syncTabStops(): void {
+    for (const vertex of vertices) vertex.element.tabIndex = vertex.index === rovingIndex ? 0 : -1;
+  }
+
+  function focusVertex(index: number): void {
+    if (vertices.length === 0) return;
+    rovingIndex = (index + vertices.length) % vertices.length;
+    syncTabStops();
+    vertices[rovingIndex]?.element.focus();
+  }
+
+  function onVertexKeyDown(index: number, marker: MarkerHandle, event: KeyboardEvent): void {
+    const delta = ARROW_DELTA[event.key];
+    if (delta === undefined) {
+      if (event.key === "Escape" && grabbedIndex === index) {
+        event.preventDefault();
+        setGrabbed(null, `Cancelled draft vertex ${String(index + 1)}`);
+      }
+      return;
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+
+    event.preventDefault();
+    if (grabbedIndex !== index) {
+      const direction = delta[0] + delta[1];
+      focusVertex(index + (direction < 0 ? -1 : 1));
+      return;
+    }
+
+    const point = draft[index];
+    if (point === undefined) return;
+    const step = event.shiftKey ? KEYBOARD_NUDGE_LARGE_PX : KEYBOARD_NUDGE_PX;
+    const projected = map.project([point.lng, point.lat]);
+    const next = map.unproject({
+      x: projected.x + delta[0] * step,
+      y: projected.y + delta[1] * step,
+    });
+    const version = renderVersion;
+    try {
+      handlers.onVertexMove(index, { lat: next.lat, lng: next.lng });
+    } catch (error) {
+      setGrabbed(null, `Cancelled draft vertex ${String(index + 1)}`);
+      throw error;
+    }
+    // A consumer normally answers `onVertexMove` with `renderDraft`. If it did not, keep the
+    // keyboard marker and the next nudge moving from the coordinate just reported rather than
+    // repeating the same pixel forever. A synchronous render remains authoritative.
+    if (renderVersion === version && draft[index] !== undefined) {
+      draft[index] = { ...draft[index], lat: next.lat, lng: next.lng };
+      marker.setLngLat(next.lng, next.lat);
+    }
+  }
+
+  function createAccessibleVertex(
+    index: number,
+    count: number,
+    point: DraftTrackPoint,
+  ): AccessibleVertex {
+    const indexRef = { current: index };
+    const markerRef: { current: MarkerHandle | null } = { current: null };
+    const element = createMarkerElement(environment.document, vertexStyle(index, count), () => {
+      toggleGrab(indexRef.current);
+    });
+    element.id = `${groupId}-vertex-${String(index)}`;
+    element.setAttribute("aria-pressed", "false");
+    element.setAttribute(
+      "aria-keyshortcuts",
+      "Enter Space Escape ArrowUp ArrowDown ArrowLeft ArrowRight " +
+        "Shift+ArrowUp Shift+ArrowDown Shift+ArrowLeft Shift+ArrowRight",
+    );
+    // Pointer interaction remains canvas hit-testing. If this transparent keyboard layer
+    // becomes the pointer target, the draw path bypasses `queryRenderedFeatures` entirely.
+    element.style.pointerEvents = "none";
+    element.style.borderRadius = "50%";
+    element.addEventListener("focus", () => {
+      rovingIndex = indexRef.current;
+      syncTabStops();
+      element.style.outline = FOCUS_OUTLINE;
+      element.style.outlineOffset = "2px";
+      // No announcement here. The element's own accessible name already says which vertex it
+      // is, and `aria-posinset`/`aria-setsize` say where it sits, so a live message on focus
+      // is the same sentence twice. It is also the one unthrottled path: a held arrow moves
+      // focus on every repeat, and each repeat would write to the region. The live region is
+      // for the state changes that have no other channel — grab, drop, cancel.
+    });
+    element.addEventListener("blur", () => {
+      element.style.removeProperty("outline");
+      element.style.removeProperty("outline-offset");
+      if (grabbedIndex === indexRef.current) {
+        // Synchronous by design: focus reaches the canvas before a later keydown can, so the
+        // grabbed state must already be over when MapLibre's keyboard handler sees that key.
+        setGrabbed(null, `Cancelled draft vertex ${String(indexRef.current + 1)}`);
+      }
+    });
+    element.addEventListener("keydown", (event) => {
+      if (markerRef.current !== null) onVertexKeyDown(indexRef.current, markerRef.current, event);
+    });
+
+    const marker = environment.createMarker(element, { anchor: "center" });
+    markerRef.current = marker;
+    const vertex: AccessibleVertex = { index, indexRef, element, marker };
+    // MapLibre reads the coordinate during `addTo`; attaching first leaves its internal
+    // position undefined and fails before a later `setLngLat` can repair it.
+    marker.setLngLat(point.lng, point.lat);
+    marker.addTo(map);
+    return vertex;
+  }
+
+  function reconcileDraft(points: readonly DraftTrackPoint[] | null): void {
+    renderVersion += 1;
+    const next = (points ?? []).map((point) => ({ ...point }));
+    const active = environment.document.activeElement;
+    const focusedIndex = vertices.findIndex((vertex) => vertex.element === active);
+    const groupWasFocused = active === group;
+
+    // A changed cardinality means indices may now name different vertices. A grabbed vertex
+    // cannot survive that ambiguity; cancel before removing anything because DOM removal may
+    // move focus to the body without firing blur.
+    if (grabbedIndex !== null && next.length !== draft.length) {
+      const cancelled = grabbedIndex;
+      setGrabbed(null, `Cancelled draft vertex ${String(cancelled + 1)}`);
+    }
+
+    const reconciled: AccessibleVertex[] = [];
+    for (const [index, point] of next.entries()) {
+      const vertex = vertices[index] ?? createAccessibleVertex(index, next.length, point);
+      vertex.index = index;
+      vertex.indexRef.current = index;
+      applyMarkerStyle(vertex.element, vertexStyle(index, next.length));
+      vertex.element.id = `${groupId}-vertex-${String(index)}`;
+      vertex.element.setAttribute("aria-posinset", String(index + 1));
+      vertex.element.setAttribute("aria-setsize", String(next.length));
+      vertex.marker.setLngLat(point.lng, point.lat);
+      reconciled.push(vertex);
+    }
+    for (const stale of vertices.slice(next.length)) stale.marker.remove();
+    vertices = reconciled;
+    draft = next;
+    group.setAttribute("aria-owns", vertices.map((vertex) => vertex.element.id).join(" "));
+
+    if (vertices.length === 0) {
+      group.tabIndex = 0;
+      rovingIndex = 0;
+      if (focusedIndex >= 0) group.focus();
+      return;
+    }
+
+    group.tabIndex = -1;
+    if (focusedIndex >= 0) rovingIndex = Math.min(focusedIndex, vertices.length - 1);
+    else rovingIndex = Math.min(rovingIndex, vertices.length - 1);
+    syncTabStops();
+
+    if (focusedIndex >= vertices.length || groupWasFocused) {
+      vertices[rovingIndex]?.element.focus();
+    }
+  }
 
   /**
    * End the active drag, whatever ended it — a release, a cancellation, or a consumer
@@ -186,7 +446,7 @@ export function startDrawMode(
     releaseDrag();
   }
 
-  function onClick(event: MapPointerEvent): void {
+  function activateVertex(point: { x: number; y: number }): boolean {
     if (gesture !== null) {
       const { index, moved } = gesture;
       gesture = null;
@@ -194,31 +454,47 @@ export function startDrawMode(
       // wherever the pointer ended up. One that moved is a drag, and a drag is a drag and
       // nothing else — never also a click, and never an instruction to add another vertex.
       if (!moved) handlers.onVertexClick?.(index);
-      return;
+      return true;
     }
-    const index = vertexAt(map, event.point);
+    const index = vertexAt(map, point);
     if (index !== null) {
       handlers.onVertexClick?.(index);
-      return;
+      return true;
     }
+    return false;
+  }
+
+  function onClick(event: MapPointerEvent): void {
+    if (activateVertex(event.point)) return;
     handlers.onVertexAdd({ lat: event.lngLat.lat, lng: event.lngLat.lng });
   }
 
   for (const type of START_EVENTS) map.on(type, onStart);
   map.on("click", onClick);
+  reconcileDraft(initialDraft);
 
   return {
+    renderDraft(points): void {
+      reconcileDraft(points);
+    },
+    activateVertexAt(at): boolean {
+      return activateVertex(map.project([at.lng, at.lat]));
+    },
     /**
-     * Idempotent by composition rather than by a flag.
-     *
-     * `releaseDrag` already returns early once it has nothing attached and nothing borrowed,
-     * and detaching a listener that is not registered is a no-op in the renderer as it is
-     * here. A guard on top of that would be state no test could distinguish — and unobservable
-     * defensive state is the kind that quietly stops being true.
+     * Idempotent by composition rather than by a flag: `releaseDrag` already returns early
+     * with nothing attached and nothing borrowed, clearing an empty vertex list and a null
+     * grab are no-ops, removing a detached node is a no-op, and `off` for a listener already
+     * taken off is one too. A flag guarding all that was unobservable — every test still
+     * passed with it removed — and an unobservable guard is a claim nobody can check.
      */
     exit(): void {
       releaseDrag();
       gesture = null;
+      setGrabbed(null);
+      for (const vertex of vertices) vertex.marker.remove();
+      vertices = [];
+      draft = [];
+      group.remove();
       for (const type of START_EVENTS) map.off(type, onStart);
       map.off("click", onClick);
     },

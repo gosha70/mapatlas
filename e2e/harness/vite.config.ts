@@ -23,10 +23,9 @@ export default defineConfig({
       "@mapatlas/core": fileURLToPath(
         new URL("../../packages/core/dist/index.js", import.meta.url),
       ),
-      // The controller is not on the package barrel yet: `api.md` declares the full
-      // `MapController` surface and T4.1 delivers only its source-stack half, so exporting
-      // it now would make the contract untrue until T4.3. The browser lane still needs the
-      // real MapLibre runtime, so it reaches the module the barrel will eventually re-export.
+      // The public controller comes from the bare package entry. The remaining controller
+      // aliases are harness-only probes: they expose the injected environment and renderer
+      // state needed to verify what MapLibre did, neither of which belongs on the public API.
       "@mapatlas/maplibre/controller": fileURLToPath(
         new URL("../../packages/maplibre/dist/controller/browser.js", import.meta.url),
       ),

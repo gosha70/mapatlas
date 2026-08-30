@@ -16,6 +16,7 @@ describe("the real MapLibre environment", () => {
     const environment = createBrowserMapEnvironment();
 
     expect(environment.createMap).toBeTypeOf("function");
+    expect(environment.prefersReducedMotion).toBeTypeOf("function");
     expect(environment.protocolRegistrar.addProtocol).toBeTypeOf("function");
     expect(environment.protocolRegistrar.createProtocol).toBeTypeOf("function");
   });

@@ -818,7 +818,7 @@ export interface MapControllerOptions {
 export interface MapController {
   setSources(sources: TileSource[]): void;
   setTerrain(t: TerrainOptions | null): void;
-  setPresentation(p: EventPresentation): void;
+  setPresentation(p: EventPresentation | null): void;
   /** Draws one polyline per `track.segments` — never a line across a pause — plus the
    *  start/finish/lap marks from the presentation. */
   renderTrack(track: Track | null): void;
@@ -862,15 +862,11 @@ part that looks like an engine bug rather than a missing import — **markers la
 document flow instead of absolutely against the map**, so marks appear outside it. Consumers
 import it once, alongside the engine.
 
-**Delivery:** `createMapController` is built across Phase 4 and is **not yet on the package
-barrel**. T4.1 delivers construction plus `setSources`/`destroy`; T4.2 adds `setTerrain`; T4.3
-adds `renderTrack`, `renderEvents`, `renderDraft`, `showLivePosition` and the camera methods;
-T4.4 adds `setPresentation`; T4.5 adds `enterDrawMode`; T4.7 adds `onMapTap` and `onEventClick`.
-
-The factory is exported from the barrel — and this declaration becomes true — only when the
-returned object provides **every** method above. Until then it provides none of them as
-placeholders: a method that exists and throws "not supported yet" is worse than one that is
-absent, because a consumer discovers the gap at runtime instead of at compile time.
+**Delivery:** T4.7 completes the contract above, and `createMapController` plus its public types
+are exported from `@mapatlas/maplibre`. The implementation was built across Phase 4: T4.1
+delivered construction plus `setSources`/`destroy`; T4.2 added `setTerrain`; T4.3 added the
+render and camera methods; T4.4 added `setPresentation`; T4.5 added `enterDrawMode`; and T4.7
+adds `onMapTap` and `onEventClick` together with the accessibility and motion policy below.
 
 **Contract:** MapLibre rejects `addSource`/`addLayer` until its style has loaded, so
 `createMapController` returns synchronously while installation waits for that event. The
@@ -954,6 +950,25 @@ cannot be changed after.
 markup and must never be built from untrusted input** (see `SECURITY.md`). Every mark carries an
 `ariaLabel`; the engine supplies none, because only the consumer knows what a mark means. With no
 `presentation`, the renderer draws neutral built-in marks and no consumer branding.
+
+**Contract (activation):** a pointer activation resolves once, in this order: draft vertex,
+event mark, map position. Event marks are real keyboard controls and Enter/Space report their
+`Id` through `onEventClick`; their native click is stopped before it can also become an
+`onMapTap`. While draw mode is active, it owns canvas taps, so a vertex click or vertex add is
+never also a general map tap. Both subscription methods return idempotent unsubscribe functions.
+
+**Contract (keyboard draw mode):** the painted draft vertices remain the pointer hit-test
+surface. Draw mode adds a parallel DOM layer with one roving tab stop, visible focus, accessible
+names, and a polite live announcement of each grab, drop and cancellation — not of focus,
+which the accessible name already carries. Ungrabbed arrows move focus; Enter/Space grabs and
+drops; grabbed arrows report moves through `onVertexMove`, one screen pixel at a time and ten
+with Shift, matching the renderer's own draggable marker; Escape cancels. Blur cancels synchronously, and draft reconciliation also
+cancels before removing a focused vertex because DOM removal is not required to emit blur.
+
+**Contract (motion):** camera operations read `prefers-reduced-motion` when each operation is
+called. Bounds fitting disables animation under the reduced preference, and `recenter` uses an
+immediate jump instead of an eased move. A preference changed after controller construction is
+therefore honoured by the next operation.
 
 ## 9. React bindings (`@mapatlas/react`)
 

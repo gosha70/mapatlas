@@ -19,6 +19,7 @@ import type { MarkerStyle } from "./marker-style.js";
 
 /** Just enough of `Document` to build a marker, so the seam stays narrow. */
 export interface DocumentLike {
+  readonly activeElement: Element | null;
   createElement(tagName: string): HTMLElement;
 }
 
@@ -48,7 +49,7 @@ const OWNED_CLASSES_ATTRIBUTE = "data-mapatlas-classes";
 export function createMarkerElement(
   documentLike: DocumentLike,
   style: MarkerStyle,
-  onActivate?: () => void,
+  onActivate?: (event: Event) => void,
 ): HTMLElement {
   const wrapper = documentLike.createElement("div");
   const interactive = onActivate !== undefined;
@@ -71,8 +72,12 @@ export function createMarkerElement(
   applyMarkerStyle(wrapper, style);
 
   if (interactive) {
-    wrapper.addEventListener("click", () => {
-      onActivate();
+    wrapper.addEventListener("click", (event) => {
+      // A marker is above the canvas but inside MapLibre's canvas container. Letting its
+      // native click bubble would make the renderer synthesize a map click from the same
+      // activation, so one event mark would also be reported as an unrelated map tap.
+      event.stopPropagation();
+      onActivate(event);
     });
     wrapper.addEventListener("keydown", (event: Event) => {
       const key = (event as KeyboardEvent).key;
@@ -80,7 +85,7 @@ export function createMarkerElement(
       // Space scrolls the page otherwise, which moves the map out from under the mark the
       // user just activated.
       event.preventDefault();
-      onActivate();
+      onActivate(event);
     });
   }
 

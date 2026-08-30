@@ -53,11 +53,15 @@ strict resolvers (pnpm, Yarn PnP) as well as under npm's hoisting.
 
 ## Status
 
-Phase 4 of the build. `createMapController` is not yet on this package's public surface: it is
-exported only once it satisfies the whole `MapController` contract in
-[`specs/api.md`](https://github.com/gosha70/mapatlas/blob/main/specs/api.md). A method that
-exists and throws "not supported yet" is worse than one that is absent, because you would find
-the gap at runtime instead of at compile time.
+The complete `MapController` contract is available from this package's public surface:
+
+```ts
+import { createMapController, type MapController } from "@mapatlas/maplibre";
+```
+
+Its event marks and draft vertices are keyboard-operable, camera motion follows
+`prefers-reduced-motion`, and draw-mode vertices keep pointer hit-testing on the canvas while a
+parallel DOM layer supplies the accessible controls.
 
 ## License
 

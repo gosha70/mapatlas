@@ -9,11 +9,15 @@ describe("the package surface", () => {
     // builders because exporting them would put MapLibre's style specifications on this
     // package's public surface, and the bootstrap because registering a global handler is
     // a runtime capability the controller owns, not a side effect of describing a source.
-    expect(Object.keys(renderer).sort()).toEqual(["PACKAGE_NAME"]);
+    expect(Object.keys(renderer).sort()).toEqual(["PACKAGE_NAME", "createMapController"]);
   });
 
   it("reports its identity", () => {
     expect(renderer.PACKAGE_NAME).toBe("@mapatlas/maplibre");
+  });
+
+  it("publishes the complete controller factory", () => {
+    expect(renderer.createMapController).toBeTypeOf("function");
   });
 
   it("can be imported without a browser, a map, or maplibre-gl at runtime", () => {

@@ -17,7 +17,7 @@ import type {
   MarkerHandle,
   MarkerOptions,
 } from "./environment.js";
-import type { MapControllerCore, MapControllerOptions } from "./controller.js";
+import type { MapController, MapControllerOptions } from "./controller.js";
 import { createMapControllerInternal } from "./controller.js";
 
 /**
@@ -60,6 +60,8 @@ function adapt(map: MapLibreMap): MapLike {
         // normalises in practice, and "in practice" is not what the seam says.
         .map((feature) => ({ properties: feature.properties ?? {} })),
     dragPan: map.dragPan,
+    project: ([lng, lat]) => map.project([lng, lat]),
+    unproject: (point) => map.unproject([point.x, point.y]),
     addSource: (id, source) => {
       map.addSource(id, source);
     },
@@ -87,14 +89,17 @@ function adapt(map: MapLibreMap): MapLike {
       map.setTerrain(terrain);
     },
     getTerrain: () => map.getTerrain(),
-    fitBounds: ([west, south, east, north], paddingPx) => {
+    fitBounds: ([west, south, east, north], paddingPx, animate) => {
       map.fitBounds(
         [
           [west, south],
           [east, north],
         ],
-        { padding: paddingPx, animate: false },
+        { padding: paddingPx, animate },
       );
+    },
+    easeTo: (camera) => {
+      map.easeTo(camera.zoom === undefined ? { center: camera.center } : camera);
     },
     jumpTo: (camera) => {
       map.jumpTo(camera.zoom === undefined ? { center: camera.center } : camera);
@@ -154,6 +159,10 @@ export function createBrowserMapEnvironment(): MapEnvironment {
       };
     },
 
+    prefersReducedMotion(): boolean {
+      return globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    },
+
     document: globalThis.document,
 
     protocolRegistrar: {
@@ -168,6 +177,6 @@ export function createBrowserMapEnvironment(): MapEnvironment {
 }
 
 /** Mount a MapLibre GL map over the real runtime. */
-export function createMapController(options: MapControllerOptions): MapControllerCore {
+export function createMapController(options: MapControllerOptions): MapController {
   return createMapControllerInternal(options, createBrowserMapEnvironment());
 }

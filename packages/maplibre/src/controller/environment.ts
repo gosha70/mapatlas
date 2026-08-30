@@ -97,6 +97,9 @@ export interface MapLike {
     layerIds: readonly string[],
   ): readonly RenderedFeature[];
   readonly dragPan: DragPanLike;
+  /** Translate between map coordinates and screen pixels for keyboard vertex nudging. */
+  project(at: [lng: number, lat: number]): { x: number; y: number };
+  unproject(point: { x: number; y: number }): { lng: number; lat: number };
   addSource(id: string, source: SourceSpecification): void;
   removeSource(id: string): void;
   /**
@@ -139,8 +142,9 @@ export interface MapLike {
    */
   getTerrain(): TerrainSpecification | null;
   /** Frame a bounding box, in `[west, south, east, north]` degrees. */
-  fitBounds(bounds: [number, number, number, number], paddingPx: number): void;
-  /** Move the camera without animating — motion policy is T4.7's to decide. */
+  fitBounds(bounds: [number, number, number, number], paddingPx: number, animate: boolean): void;
+  /** Move the camera with or without animation, as selected by the controller's motion policy. */
+  easeTo(camera: { center: [lng: number, lat: number]; zoom?: number }): void;
   jumpTo(camera: { center: [lng: number, lat: number]; zoom?: number }): void;
   remove(): void;
 }
@@ -215,6 +219,8 @@ export interface MapEnvironment {
    * recorded as the better shape if this seam ever carries pointer events natively.
    */
   onPointerRelease(listener: () => void): () => void;
+  /** Read at each camera move, so a preference changed after construction still applies. */
+  prefersReducedMotion(): boolean;
   /**
    * Where engine-owned marker elements come from.
    *

@@ -16,5 +16,11 @@
  * is.
  */
 
+export type { MapController, MapControllerOptions } from "./controller/controller.js";
+export { createMapController } from "./controller/browser.js";
+export type { DrawModeHandlers } from "./controller/draw-mode.js";
+export type { MarkerStyle } from "./marks/marker-style.js";
+export type { EventPresentation, TrackLineStyle } from "./marks/presentation.js";
+
 /** Package identity, so a consumer can report which engine build it embeds. */
 export const PACKAGE_NAME = "@mapatlas/maplibre";

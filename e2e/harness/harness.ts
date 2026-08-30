@@ -29,13 +29,11 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { setWorkerUrl } from "maplibre-gl";
 
-import { createBrowserMapEnvironment, createMapController } from "@mapatlas/maplibre/controller";
+import { createMapController } from "@mapatlas/maplibre";
+import type { MapController, MapControllerOptions } from "@mapatlas/maplibre";
+import { createBrowserMapEnvironment } from "@mapatlas/maplibre/controller";
 import { createMapControllerInternal } from "@mapatlas/maplibre/controller-internal";
 import { ENGINE_LAYER } from "@mapatlas/maplibre/engine-layers";
-import type {
-  MapControllerCore,
-  MapControllerOptions,
-} from "@mapatlas/maplibre/controller-internal";
 import { isPmtilesProtocolRegistered } from "@mapatlas/maplibre/protocols";
 
 declare global {
@@ -88,6 +86,11 @@ declare global {
         added: { lat: number; lng: number }[];
         clicked: number[];
       };
+      /** Controller-level activation callbacks recorded by T4.7 browser scenarios. */
+      interactionLog?: {
+        maps: { lat: number; lng: number }[];
+        events: string[];
+      };
       /** The draw-mode exit function, so a test can release interaction. */
       exitDraw?: () => void;
       /** The controller under test, so a later `page.evaluate` can drive it. */
@@ -121,7 +124,7 @@ interface MapProbe {
 }
 
 interface MountedProbe {
-  controller: MapControllerCore;
+  controller: MapController;
   getTerrain(): unknown;
   hasLayer(id: string): boolean;
   /** Whether the map will pan again, which draw mode borrows and must give back. */

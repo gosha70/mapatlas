@@ -3,6 +3,7 @@
 import type {
   BBox,
   DraftTrackPoint,
+  Id,
   JSONValue,
   LatLng,
   MapEvent,
@@ -39,7 +40,7 @@ import {
   isEngineId,
 } from "./engine-layers.js";
 import { ensurePmtilesProtocol } from "../protocols/pmtiles.js";
-import type { MapEnvironment, MapLike, MarkerHandle } from "./environment.js";
+import type { MapEnvironment, MapLike, MapPointerEvent, MarkerHandle } from "./environment.js";
 
 /**
  * The map controller's source stack and terrain (T4.1, T4.2).
@@ -288,6 +289,7 @@ interface PreparedMark {
   readonly key: string;
   readonly lngLat: Position2D;
   readonly style: MarkerStyle;
+  readonly eventId?: Id;
 }
 
 function emptyRender(): PreparedRender {
@@ -363,6 +365,7 @@ function eventMarks(
 ): PreparedMark[] {
   return events.map((event) => ({
     key: `event:${event.id}`,
+    eventId: event.id,
     lngLat: [event.position.lng, event.position.lat] as Position2D,
     style:
       presentation === null
@@ -454,6 +457,7 @@ interface PlacedMarker {
   readonly marker: MarkerHandle;
   readonly element: HTMLElement;
   readonly anchor: "center" | "bottom";
+  readonly activation: { eventId: Id | null; lngLat: Position2D };
 }
 
 /**
@@ -479,8 +483,8 @@ function deepFreeze<T>(value: T): T {
 /** Padding used when framing a track, so its endpoints are not flush against the edge. */
 const FIT_PADDING_PX = 40;
 
-/** The part of `MapController` delivered so far. Widened by T4.3 (track and events). */
-export interface MapControllerCore {
+/** The complete renderer contract published by `@mapatlas/maplibre`. */
+export interface MapController {
   setSources(sources: TileSource[]): void;
   setTerrain(terrain: TerrainOptions | null): void;
   setPresentation(presentation: EventPresentation | null): void;
@@ -491,6 +495,8 @@ export interface MapControllerCore {
   fitTrack(track: Track): void;
   fitBounds(bbox: BBox, paddingPx?: number): void;
   recenter(to: LatLng, zoom?: number): void;
+  onMapTap(cb: (at: LatLng) => void): () => void;
+  onEventClick(cb: (id: Id) => void): () => void;
   /** Enter vertex-editing interaction; the returned fn exits it, and is idempotent. */
   enterDrawMode(handlers: DrawModeHandlers): () => void;
   destroy(): void;
@@ -512,7 +518,7 @@ export interface MapControllerOptions {
 export function createMapControllerInternal(
   options: MapControllerOptions,
   environment: MapEnvironment,
-): MapControllerCore {
+): MapController {
   // Before the map exists. A stack that cannot be translated is rejected without leaving a
   // WebGL context behind for a controller the caller never receives.
   assertStyleLeavesTheNamespaceAlone(options.style);
@@ -560,6 +566,7 @@ export function createMapControllerInternal(
    */
   let trackSnapshot: Track | null = null;
   let eventsSnapshot: readonly MapEvent[] = [];
+  let draftSnapshot: readonly DraftTrackPoint[] | null = null;
   let presentation: EventPresentation | null = options.presentation ?? null;
 
   let render: PreparedRender = emptyRender();
@@ -575,6 +582,8 @@ export function createMapControllerInternal(
    * nobody could reason about, so a second entry is refused instead.
    */
   let drawSession: DrawSession | null = null;
+  const mapTapListeners = new Set<(at: LatLng) => void>();
+  const eventClickListeners = new Set<(id: Id) => void>();
   let loaded = false;
   let destroyed = false;
 
@@ -710,15 +719,45 @@ export function createMapControllerInternal(
     if (existing !== undefined && existing.anchor === anchor) {
       applyMarkerStyle(existing.element, mark.style);
       existing.marker.setLngLat(lng, lat);
+      existing.activation.eventId = mark.eventId ?? null;
+      existing.activation.lngLat = [lng, lat];
       return existing;
     }
     existing?.marker.remove();
 
-    const element = createMarkerElement(environment.document, mark.style);
+    const activation = { eventId: mark.eventId ?? null, lngLat: [lng, lat] as Position2D };
+    const element = createMarkerElement(
+      environment.document,
+      mark.style,
+      mark.eventId === undefined
+        ? undefined
+        : (event) => {
+            // Pointer taps obey one priority order. An overlapping draft vertex claims the
+            // activation first; otherwise this event mark claims it. The wrapper stops the
+            // native click before MapLibre can also synthesize a map tap from it.
+            if (
+              event.type === "click" &&
+              drawSession?.activateVertexAt({
+                lat: activation.lngLat[1],
+                lng: activation.lngLat[0],
+              }) === true
+            ) {
+              return;
+            }
+            if (activation.eventId === null) return;
+            for (const listener of eventClickListeners) listener(activation.eventId);
+          },
+    );
     const marker = environment.createMarker(element, { anchor });
     marker.setLngLat(lng, lat);
     marker.addTo(map);
-    return { marker, element, anchor };
+    const placed: PlacedMarker = {
+      marker,
+      element,
+      anchor,
+      activation,
+    };
+    return placed;
   }
 
   function applyLivePosition(): void {
@@ -762,7 +801,24 @@ export function createMapControllerInternal(
     reconcile();
   }
 
+  function onMapClick(event: MapPointerEvent): void {
+    // Draw mode owns every canvas tap while active: a vertex click or an add is one action,
+    // never also a general map tap. Event markers do not reach this listener at all because
+    // their native wrapper activation stops before MapLibre synthesizes a map click.
+    if (drawSession !== null) return;
+    for (const listener of mapTapListeners) {
+      // Each subscriber gets its own boundary value. One callback mutating a mutable LatLng
+      // must not change what a later callback observes from the same renderer event.
+      listener({ lat: event.lngLat.lat, lng: event.lngLat.lng });
+    }
+  }
+
+  function frameBounds(bounds: BBox, paddingPx: number): void {
+    map.fitBounds(bounds, paddingPx, !environment.prefersReducedMotion());
+  }
+
   map.on("load", onLoad);
+  map.on("click", onMapClick);
 
   return {
     setSources(sources: TileSource[]): void {
@@ -831,7 +887,10 @@ export function createMapControllerInternal(
 
     renderDraft(points: DraftTrackPoint[] | null): void {
       if (destroyed) throw new MapControllerDestroyedError("renderDraft");
-      prepareRender({ draft: draftFeatures(points) });
+      const snapshot = points === null ? null : points.map((point) => ({ ...point }));
+      draftSnapshot = snapshot;
+      prepareRender({ draft: draftFeatures(snapshot) });
+      drawSession?.renderDraft(snapshot);
     },
 
     showLivePosition(point: TrackPoint | null): void {
@@ -846,12 +905,12 @@ export function createMapControllerInternal(
       // A track with no points has no extent to frame. Moving the camera to an invented one
       // would be worse than leaving it where the user put it.
       const bounds = trackBounds(track);
-      if (bounds !== null) map.fitBounds(bounds, FIT_PADDING_PX);
+      if (bounds !== null) frameBounds(bounds, FIT_PADDING_PX);
     },
 
     fitBounds(bbox: BBox, paddingPx?: number): void {
       if (destroyed) throw new MapControllerDestroyedError("fitBounds");
-      map.fitBounds(bbox, paddingPx ?? FIT_PADDING_PX);
+      frameBounds(bbox, paddingPx ?? FIT_PADDING_PX);
     },
 
     recenter(to: LatLng, zoom?: number): void {
@@ -859,9 +918,24 @@ export function createMapControllerInternal(
       // Camera moves apply immediately rather than waiting for `load`: a map has a transform
       // from the moment it exists, and a consumer who recenters before the style resolves
       // means it now, not eventually.
-      map.jumpTo(
-        zoom === undefined ? { center: [to.lng, to.lat] } : { center: [to.lng, to.lat], zoom },
-      );
+      const camera =
+        zoom === undefined
+          ? { center: [to.lng, to.lat] as [number, number] }
+          : { center: [to.lng, to.lat] as [number, number], zoom };
+      if (environment.prefersReducedMotion()) map.jumpTo(camera);
+      else map.easeTo(camera);
+    },
+
+    onMapTap(cb: (at: LatLng) => void): () => void {
+      if (destroyed) throw new MapControllerDestroyedError("onMapTap");
+      mapTapListeners.add(cb);
+      return () => mapTapListeners.delete(cb);
+    },
+
+    onEventClick(cb: (id: Id) => void): () => void {
+      if (destroyed) throw new MapControllerDestroyedError("onEventClick");
+      eventClickListeners.add(cb);
+      return () => eventClickListeners.delete(cb);
     },
 
     enterDrawMode(handlers: DrawModeHandlers): () => void {
@@ -872,7 +946,7 @@ export function createMapControllerInternal(
             "listeners would each claim the map's pan behaviour",
         );
       }
-      const session = startDrawMode(map, environment, handlers);
+      const session = startDrawMode(map, environment, options.container, draftSnapshot, handlers);
       drawSession = session;
       return () => {
         session.exit();
@@ -893,6 +967,9 @@ export function createMapControllerInternal(
       drawSession?.exit();
       drawSession = null;
       map.off("load", onLoad);
+      map.off("click", onMapClick);
+      mapTapListeners.clear();
+      eventClickListeners.clear();
       installed = [];
       // Markers live in the DOM outside MapLibre's container-emptying, so they are removed
       // explicitly rather than left behind as orphaned nodes holding listeners.

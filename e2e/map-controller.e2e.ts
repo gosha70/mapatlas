@@ -1111,7 +1111,8 @@ test("drags a real vertex without panning the map, then gives panning back", asy
   );
 
   await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
-  await expect(page.locator(".mapatlas-marker")).toHaveCount(1);
+  await expect(page.locator(".mapatlas-mark--event")).toHaveCount(1);
+  await expect(page.locator(".mapatlas-draft-vertex")).toHaveCount(2);
   // The draft has to be *painted* before a vertex can be hit-tested, which is what the
   // harness's `setWorkerUrl` call makes possible at all.
   await expect
@@ -1120,7 +1121,7 @@ test("drags a real vertex without panning the map, then gives panning back", asy
 
   const start = await page.evaluate(() => {
     const container = document.querySelector(".maplibregl-map")?.getBoundingClientRect();
-    const reference = document.querySelector(".mapatlas-marker")?.getBoundingClientRect();
+    const reference = document.querySelector(".mapatlas-mark--event")?.getBoundingClientRect();
     if (container === undefined || reference === undefined) return null;
     return {
       vertex: { x: container.left + container.width / 2, y: container.top + container.height / 2 },
@@ -1138,7 +1139,7 @@ test("drags a real vertex without panning the map, then gives panning back", asy
   await page.mouse.up();
 
   const after = await page.evaluate(() => {
-    const reference = document.querySelector(".mapatlas-marker")?.getBoundingClientRect();
+    const reference = document.querySelector(".mapatlas-mark--event")?.getBoundingClientRect();
     return {
       reference:
         reference === undefined
@@ -1159,7 +1160,7 @@ test("drags a real vertex without panning the map, then gives panning back", asy
   await expect
     .poll(async () =>
       page.evaluate(() => {
-        const r = document.querySelector(".mapatlas-marker")?.getBoundingClientRect();
+        const r = document.querySelector(".mapatlas-mark--event")?.getBoundingClientRect();
         return r === undefined ? null : { x: Math.round(r.left), y: Math.round(r.top) };
       }),
     )
@@ -1185,7 +1186,7 @@ test("drags a real vertex without panning the map, then gives panning back", asy
   await expect
     .poll(async () =>
       page.evaluate(() => {
-        const r = document.querySelector(".mapatlas-marker")?.getBoundingClientRect();
+        const r = document.querySelector(".mapatlas-mark--event")?.getBoundingClientRect();
         return r === undefined ? null : Math.round(r.left);
       }),
     )
@@ -1241,7 +1242,8 @@ test("a drag survives the pointer crossing a mark inside the map", async ({ page
     [RASTER_TEMPLATE, OSM_ATTRIBUTION, CENTRE] as const,
   );
 
-  await expect(page.locator(".mapatlas-marker")).toHaveCount(1);
+  await expect(page.locator(".mapatlas-mark--event")).toHaveCount(1);
+  await expect(page.locator(".mapatlas-draft-vertex")).toHaveCount(2);
   await expect
     .poll(async () => page.evaluate(() => window.mapatlas.probe?.vertexIsRendered() ?? false))
     .toBe(true);
@@ -1266,4 +1268,177 @@ test("a drag survives the pointer crossing a mark inside the map", async ({ page
   // ...and every move was reported, rather than half of them being lost to a cancellation.
   expect(await page.evaluate(() => window.mapatlas.drawLog?.moved.length ?? 0)).toBe(10);
   expect(await page.evaluate(() => window.mapatlas.probe?.dragPanEnabled() ?? false)).toBe(true);
+});
+
+test("routes an event mark alone, while an empty-map tap stays a map tap", async ({ page }) => {
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution]) => {
+      const controller = window.mapatlas.createMapController({
+        container: window.mapatlas.mapContainer(),
+        center: { lat: 59.33, lng: 18.06 },
+        zoom: 14,
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.controller = controller;
+      window.mapatlas.interactionLog = { maps: [], events: [] };
+      controller.onMapTap((at) => window.mapatlas.interactionLog?.maps.push(at));
+      controller.onEventClick((id) => window.mapatlas.interactionLog?.events.push(id));
+      controller.renderEvents([
+        {
+          id: "event-1",
+          position: { lat: 59.33, lng: 18.06 },
+          occurredAt: 1,
+          media: [],
+          tags: [],
+        },
+      ] as never);
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION] as const,
+  );
+
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
+  const event = page.getByRole("button", { name: "Event" });
+  await expect(event).toHaveCount(1);
+
+  await event.click();
+  expect(await page.evaluate(() => window.mapatlas.interactionLog)).toEqual({
+    maps: [],
+    events: ["event-1"],
+  });
+
+  // A genuine canvas tap, far from the centred event mark.
+  await page.locator("canvas.maplibregl-canvas").click({ position: { x: 40, y: 40 } });
+  expect(await page.evaluate(() => window.mapatlas.interactionLog?.maps.length)).toBe(1);
+
+  // Reach the mark from the map by Tab rather than focusing it directly.
+  await page.locator("canvas.maplibregl-canvas").focus();
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await page.keyboard.press("Tab");
+    if (await event.evaluate((element) => element === document.activeElement)) break;
+  }
+  expect(await event.evaluate((element) => element === document.activeElement)).toBe(true);
+  await page.keyboard.press("Enter");
+
+  expect(await page.evaluate(() => window.mapatlas.interactionLog)).toMatchObject({
+    events: ["event-1", "event-1"],
+  });
+});
+
+test("makes draft vertices one keyboard stop with visible, focus-scoped interaction", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await page.evaluate(
+    ([raster, attribution]) => {
+      const controller = window.mapatlas.createMapController({
+        container: window.mapatlas.mapContainer(),
+        center: { lat: 59.33, lng: 18.06 },
+        zoom: 14,
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      });
+      window.mapatlas.controller = controller;
+      const draft = [
+        { lat: 59.33, lng: 18.06 },
+        { lat: 59.331, lng: 18.062 },
+        { lat: 59.332, lng: 18.064 },
+      ];
+      controller.renderDraft(draft);
+      window.mapatlas.drawLog = { moved: [], added: [], clicked: [] };
+      window.mapatlas.exitDraw = controller.enterDrawMode({
+        onVertexAdd: (at) => window.mapatlas.drawLog?.added.push(at),
+        onVertexClick: (index) => window.mapatlas.drawLog?.clicked.push(index),
+        onVertexMove: (index, to) => {
+          window.mapatlas.drawLog?.moved.push([index, to]);
+          draft[index] = to;
+          controller.renderDraft(draft);
+        },
+      });
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION] as const,
+  );
+
+  await expect(page.locator(".maplibregl-ctrl-attrib")).toContainText(OSM_ATTRIBUTION);
+  const vertices = page.locator(".mapatlas-draft-vertex");
+  await expect(vertices).toHaveCount(3);
+  await expect(page.locator('.mapatlas-draft-vertex[tabindex="0"]')).toHaveCount(1);
+  await expect(vertices.nth(0)).toHaveAttribute("aria-label", "Draft vertex 1 of 3");
+  await expect(vertices.nth(1)).toHaveAttribute("aria-label", "Draft vertex 2 of 3");
+  await expect(vertices.nth(2)).toHaveAttribute("aria-label", "Draft vertex 3 of 3");
+
+  // Reach the composite from the canvas through the browser's real tab order.
+  await page.locator("canvas.maplibregl-canvas").focus();
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await page.keyboard.press("Tab");
+    if (await vertices.nth(0).evaluate((element) => element === document.activeElement)) break;
+  }
+  expect(await vertices.nth(0).evaluate((element) => element === document.activeElement)).toBe(
+    true,
+  );
+  expect(
+    await vertices.nth(0).evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth };
+    }),
+  ).toEqual({ outlineStyle: "solid", outlineWidth: "3px" });
+
+  // Ungrabbed arrows move the roving focus. Grabbed arrows move the vertex instead.
+  await page.keyboard.press("ArrowRight");
+  expect(await vertices.nth(1).evaluate((element) => element === document.activeElement)).toBe(
+    true,
+  );
+  await page.keyboard.press("Enter");
+  await expect(vertices.nth(1)).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Escape");
+  await expect(vertices.nth(1)).toHaveAttribute("aria-pressed", "false");
+  expect(await page.evaluate(() => window.mapatlas.drawLog?.moved.map(([index]) => index))).toEqual(
+    [1, 1],
+  );
+
+  // Blur is the ordinary cleanup entrance, synchronous with focus transfer.
+  await page.keyboard.press("Enter");
+  await expect(vertices.nth(1)).toHaveAttribute("aria-pressed", "true");
+  await page.locator("canvas.maplibregl-canvas").focus();
+  await expect(vertices.nth(1)).toHaveAttribute("aria-pressed", "false");
+
+  // DOM removal is not required to emit blur. Reconciliation therefore releases the grab
+  // explicitly and moves focus to the vertex that precedes the removed last one. The unit
+  // seam exercises the no-blur path; Chromium is free to emit blur during this real-DOM check.
+  await vertices.nth(2).focus();
+  await page.keyboard.press("Enter");
+  const reconciled = await page.evaluate(() => {
+    const removed = document.activeElement as HTMLElement | null;
+    window.mapatlas.controller?.renderDraft([
+      { lat: 59.33, lng: 18.06 },
+      { lat: 59.331, lng: 18.062 },
+    ]);
+    return {
+      removedPressed: removed?.getAttribute("aria-pressed"),
+      activeLabel: document.activeElement?.getAttribute("aria-label"),
+    };
+  });
+  expect(reconciled).toEqual({
+    removedPressed: "false",
+    activeLabel: "Draft vertex 2 of 2",
+  });
 });

@@ -205,7 +205,47 @@ is why criterion 4 is live and why the region is constrained.
 
 Proposed toolchain, chosen to avoid a system dependency so CI stays reproducible: decode the
 terrarium grid, trace isolines with `d3-contour`, emit GeoJSON, tile it, and write MVT.
-**[to verify]** whether a pure-npm path from GeoJSON to MVT exists at acceptable quality.
+
+**[author-verified 2026-08-30, scratchpad only] The GeoJSON→MVT tiling stage passes both
+recorded bars.** Candidate chain, pinned: `geojson-vt` 4.0.3 (ISC) → `vt-pbf` 3.1.3 (MIT), with
+`extent` 4096, `buffer` 64 and the default `tolerance` 3; decoded for checking with
+`@mapbox/vector-tile` 3.0.0 and `pbf` 5.1.2 (whose v5 surface exports `PbfReader`/`PbfWriter`
+rather than a default). Pure npm, no system dependency.
+
+*Bar 1 — seam continuity: pass.* A line crossing the z14 seam at lon 6.8774414 between tiles
+`14/8504/5839` and `14/8505/5839`. The two tiles cross the seam at latitudes 45.839999084 and
+45.839998706 — a gap of 3.78 × 10⁻⁷ ° (4.2 cm), **0.071 of one quantisation unit** (5.36 ×
+10⁻⁶ °). Measured by interpolating where each tile's line meets the seam, not by looking for a
+shared vertex: the input's midpoint is collinear and simplification correctly removes it.
+
+*Bar 2 — small-loop survival: pass, on topology rather than presence.* Four square rings
+(0.02°, 0.008°, 0.003°, 0.001°) across z10–z14, perceptibility threshold 4 px at 256 px/tile.
+Every perceptible ring — and every sub-threshold one — reconstructs as exactly **one** connected
+cycle with all vertices at degree two, feature type `Polygon` throughout, and area within 0.8% of
+the input. Rings crossing seams reassemble from 2 or 4 tile fragments into a single cycle.
+
+*Reconstruction method*, since presence of a tagged feature proves nothing about topology — a
+tagged feature can survive as clipped fragments, an open path, or a degenerate line, which are
+the failures the bar names. Each decoded fragment is clipped to its own tile's square in extent
+space (Liang–Barsky) so the render buffer is discarded; segments lying along a tile edge are
+dropped as clip artefacts; the remainder is converted to common world coordinates, deduplicated
+on a two-quantisation-unit grid (0.125 px at extent 4096, well below the recorded 4 px perceptibility threshold), and
+assembled into a graph. One closed cycle requires every vertex at degree two, one connected
+component, and nonzero shoelace area.
+
+**What this does not establish.** The evaluation exercises the *tiling stage* with hand-authored
+geometry, chosen because exact input coordinates make the decoded comparison decisive. Explicitly
+outstanding: `d3-contour`'s own output, which was never run; real DEM-derived geometry; fixture
+scale; adoption of any of these packages as dependencies, which has not happened and is not
+proposed here; and integration into the build, where the contour source remains unwritten. The
+status table above is unchanged, and none of these move to *discharged* on this evidence.
+
+It is also **author verification**: the chain was selected and the test that judges it was
+written by the same author. Three successive versions of that test reported false failures —
+identifying rings by measured width rather than by tag, searching for a shared seam vertex that
+simplification had legitimately removed, and stitching that dropped the buffer box while keeping
+the buffer overlap — each time the instrument rather than the chain. That history is the reason
+to treat this as evidence needing an independent look, not as a settled result.
 
 **[verified: negative] `pmtiles` 4.5.0 cannot write.** Its published type surface carries no
 write, serialize, or encode entry point — `bytesToHeader` parses a header and nothing emits one;
@@ -316,22 +356,28 @@ regression visible, and a threshold picked now would be invented.
 
 Ordered by what gates what.
 
-1. **The GeoJSON→MVT half of the contour toolchain** — the only open item that could still
-   change the toolchain rather than fill it in. Two bars, set before looking, and specific to
-   contour geometry rather than to vector tiles in general:
+1. **The contour toolchain beyond its tiling stage.** The GeoJSON→MVT candidate evaluation is
+   done: `geojson-vt` → `vt-pbf` passes both bars under author verification, recorded in the
+   contours section above with the measurements. What remains open is everything that
+   evaluation deliberately did not touch — **adopting any of those packages as dependencies**,
+   which has not happened and is a separate decision; **`d3-contour`'s own output**, which was
+   never run; **real DEM-derived geometry** rather than hand-authored squares and lines;
+   **fixture scale**; and **integration into the build**, where the contour source is still
+   unwritten and `writeArchive` has nothing behind it.
+
+   The two bars stay recorded because they still have to be met by the real chain, not only by
+   the tiling stage in isolation:
 
    - **Seam continuity.** Coordinate quantization at tile boundaries leaves contour lines that
      do not meet across the seam. A single tile renders perfectly; the defect exists only
      between adjacent tiles.
    - **Small-loop survival.** Simplification at low zoom closes or drops small closed contours —
      a knoll or a hollow vanishing, or worse, becoming a line. Again invisible in isolation.
-     The instrument is a ring count per zoom, but a count alone says rings were dropped, not
-     whether the right ones were: rings present at z14 and absent at z10 is correct behaviour.
-     So the comparison basis is named now rather than read off the first candidate's curve —
-     **a closed ring must survive at every zoom where its own extent is still perceptible**,
-     which pins the bar to what a reader could see rather than to what a tool happens to do.
-     The pixel figure is set with the fixture's line width and target display, before output
-     exists.
+     A ring count alone says rings were dropped, not whether the right ones were: rings present
+     at z14 and absent at z10 is correct behaviour. So the comparison basis is fixed — **a
+     closed ring must survive at every zoom where its own extent is still perceptible** — and
+     survival means one connected degree-two cycle with nonzero area, not a feature bearing the
+     right tag. The pixel figure is set with the fixture's line width and target display.
 
    Both share the leaf-directory shape, and the shape has a tell worth naming: **when a
    property's statement contains a relational word — meets, matches, survives across, agrees
@@ -341,12 +387,15 @@ Ordered by what gates what.
    and the pointer and DOM lanes agreeing on which vertex is under a tap. Each was invisible to
    a test that looked complete.
 
-   So the check must be built to cross the boundary deliberately — render adjacent tiles together and compare
-   endpoints across the seam, and count closed rings per zoom level rather than eyeballing one
-   tile. Deciding this before a candidate's output is on screen is what stops the output from
-   setting the bar.
-2. **Archive size** — answerable once (1) is settled; the region is now declared and verified.
-   ADR-0024 criterion 6 requires the result **measured** rather than calculated.
+   So the check crosses the boundary deliberately — adjacent tiles reconstructed together and
+   compared at the seam, closed cycles counted per zoom rather than one tile eyeballed. Deciding
+   that before a candidate's output was on screen is what stopped the output from setting the
+   bar, and it is why three successive false failures were legible as instrument faults rather
+   than as results.
+2. **Archive size** — answerable only from a real assembled archive, so it waits on full-chain
+   integration: the writer adopted, the contour source written, real tiles cut. ADR-0024
+   criterion 6 requires the result **measured** rather than calculated, and there is nothing to
+   measure until the chain produces one.
 
 **Status of the writer, stated precisely so a summary cannot round it up.** `s2-pmtiles` is a
 well-evidenced candidate, not yet a committed dependency. Verified: the API shape, a four-tile

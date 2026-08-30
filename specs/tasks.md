@@ -654,7 +654,9 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   about the DOM and MapLibre's style state. The harness now sets it, and the lane paints;
   documented in `api.md` and the package README as the consumer requirement it is.
 
-- **T4.6 Vertical acceptance fixture.** ADR-0024 has settled the elevation source outright:
+- **T4.6 Vertical acceptance fixture.** Implementation plan:
+  [`specs/plans/t4-6-vertical-fixture.md`](plans/t4-6-vertical-fixture.md). ADR-0024 has settled
+  the elevation source outright:
   **Copernicus DEM GLO-30 Public**, whatever region is chosen. The input that used to remain —
   whether the region is US-only, selecting 3DEP instead — was gated on the engine sampling
   elevation from the DEM, which it does not do anywhere; the ADR's amendment records the three

@@ -203,7 +203,34 @@ regression visible, and a threshold picked now would be invented.
 Ordered by what gates what.
 
 1. **The GeoJSON→MVT half of the contour toolchain** — the only open item that could still
-   change the toolchain rather than fill it in.
+   change the toolchain rather than fill it in. Two bars, set before looking, and specific to
+   contour geometry rather than to vector tiles in general:
+
+   - **Seam continuity.** Coordinate quantization at tile boundaries leaves contour lines that
+     do not meet across the seam. A single tile renders perfectly; the defect exists only
+     between adjacent tiles.
+   - **Small-loop survival.** Simplification at low zoom closes or drops small closed contours —
+     a knoll or a hollow vanishing, or worse, becoming a line. Again invisible in isolation.
+     The instrument is a ring count per zoom, but a count alone says rings were dropped, not
+     whether the right ones were: rings present at z14 and absent at z10 is correct behaviour.
+     So the comparison basis is named now rather than read off the first candidate's curve —
+     **a closed ring must survive at every zoom where its own extent is still perceptible**,
+     which pins the bar to what a reader could see rather than to what a tool happens to do.
+     The pixel figure is set with the fixture's line width and target display, before output
+     exists.
+
+   Both share the leaf-directory shape, and the shape has a tell worth naming: **when a
+   property's statement contains a relational word — meets, matches, survives across, agrees
+   with, continues into — the unit under test is the pair, not the thing.** No amount of testing
+   individual artifacts reaches a property that lives between them. Three instances in this task
+   alone: leaf directories versus a root-only archive, seam continuity between adjacent tiles,
+   and the pointer and DOM lanes agreeing on which vertex is under a tap. Each was invisible to
+   a test that looked complete.
+
+   So the check must be built to cross the boundary deliberately — render adjacent tiles together and compare
+   endpoints across the seam, and count closed rings per zoom level rather than eyeballing one
+   tile. Deciding this before a candidate's output is on screen is what stops the output from
+   setting the bar.
 2. **The region** — independent of (1), pending its per-tile coverage check and a justified
    `minElevationM`.
 3. **Archive size** — answerable only once (1) and (2) are settled, and ADR-0024 criterion 6

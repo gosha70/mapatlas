@@ -1270,6 +1270,75 @@ test("a drag survives the pointer crossing a mark inside the map", async ({ page
   expect(await page.evaluate(() => window.mapatlas.probe?.dragPanEnabled() ?? false)).toBe(true);
 });
 
+test("a release still ends the drag when something swallows mouseup on the way up", async ({
+  page,
+}) => {
+  // The seam listens for the release in the *capture* phase. A bubble-phase listener sits at
+  // the end of the chain, so a `stopPropagation` anywhere in front of it — the renderer's own
+  // handlers, or consumer code on the container, as here — means the release never arrives,
+  // the drag never ends and panning never comes back. That is the failure `mouseout` used to
+  // mask, reachable again by a different route, so it is guarded by a gesture rather than by
+  // reading the listener registration.
+  await page.goto("/");
+
+  const CENTRE = { lat: 59.33, lng: 18.06 };
+
+  await page.evaluate(
+    ([raster, attribution, centre]) => {
+      const probe = window.mapatlas.mountWithProbe({
+        container: window.mapatlas.mapContainer(),
+        center: centre,
+        zoom: 14,
+        sources: [
+          {
+            id: "osm",
+            kind: "raster",
+            transport: "template",
+            url: raster as string,
+            attribution: attribution as string,
+          },
+        ],
+      } as never);
+      window.mapatlas.probe = probe;
+      probe.controller.renderDraft([centre as { lat: number; lng: number }]);
+      window.mapatlas.drawLog = { moved: [], added: [], clicked: [] };
+      probe.controller.enterDrawMode({
+        onVertexAdd: (at) => window.mapatlas.drawLog?.added.push(at),
+        onVertexMove: (index, to) => window.mapatlas.drawLog?.moved.push([index, to]),
+      });
+
+      // A consumer listener that stops the release on its way up. Nothing exotic: any widget
+      // that treats a mouseup on the map as its own does this.
+      document.querySelector(".maplibregl-map")?.addEventListener("mouseup", (event) => {
+        event.stopPropagation();
+      });
+    },
+    [RASTER_TEMPLATE, OSM_ATTRIBUTION, CENTRE] as const,
+  );
+
+  await expect(page.locator(".mapatlas-draft-vertex")).toHaveCount(1);
+  await expect
+    .poll(async () => page.evaluate(() => window.mapatlas.probe?.vertexIsRendered() ?? false))
+    .toBe(true);
+
+  const centre = await page.evaluate(() => {
+    const rect = document.querySelector(".maplibregl-map")?.getBoundingClientRect();
+    return rect === undefined
+      ? null
+      : { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+  expect(centre).not.toBeNull();
+
+  await page.mouse.move(centre!.x, centre!.y);
+  await page.mouse.down();
+  await page.mouse.move(centre!.x + 40, centre!.y + 30, { steps: 6 });
+  await page.mouse.up();
+
+  expect(await page.evaluate(() => (window.mapatlas.drawLog?.moved.length ?? 0) > 0)).toBe(true);
+  // The release arrived despite the suppression, so panning came back.
+  expect(await page.evaluate(() => window.mapatlas.probe?.dragPanEnabled() ?? false)).toBe(true);
+});
+
 test("routes an event mark alone, while an empty-map tap stays a map tap", async ({ page }) => {
   await page.goto("/");
 

@@ -51,6 +51,21 @@ missing import — map marks lose their absolute positioning and render outside 
 The peer dependency above is what makes that import resolvable from your application under
 strict resolvers (pnpm, Yarn PnP) as well as under npm's hoisting.
 
+### The one style you may need to set
+
+Draft vertices in draw mode draw their own focus ring, because a keyboard user needs one
+whether or not you ship a stylesheet. Its colour is a custom property, since the ring sits over
+whatever your basemap shows and a fixed blue has no guaranteed contrast against satellite
+imagery:
+
+```css
+:root {
+  --mapatlas-focus-ring-color: #ffd400;
+}
+```
+
+Set it anywhere above the map. Unset, the ring is `3px solid #0969da`.
+
 ## Status
 
 The complete `MapController` contract is available from this package's public surface:

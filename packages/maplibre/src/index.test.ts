@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
+// @vitest-environment node
+//
+// Stated locally, not inherited. This file's central claim is that the package root imports
+// without a DOM, and the project default happening to be `node` is not the same as this test
+// requiring it: flip that default and the assertion below stops asserting what it says. The
+// pragma makes the requirement the file's own.
 import { describe, expect, it } from "vitest";
 
 import * as renderer from "./index.js";

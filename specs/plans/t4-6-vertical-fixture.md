@@ -76,12 +76,33 @@ tile list is a checked-in snapshot that is advisory.** The reasoning:
   GLO-30 Public's withheld set is a published policy, not a live service's availability — and
   being generous costs nothing precisely because the snapshot is not load-bearing.
 
-## Region selection is a process, not a value in this plan
+## Region selected by the process, not assumed into the plan
 
-A candidate is proposed with: bounds, a declared `minElevationM` with its justification, and its
-per-tile coverage checked against the snapshot. It is named in the fixture declaration only once
-those hold. Constraints from ADR-0024: above the treeline, inland, released coverage, and enough
-relief that terrain, hillshade and contours are worth demonstrating.
+**[verified 2026-08-30]** `fixtures/vertical/region.json` declares the Mont Blanc summit cut:
+`[6.825, 45.815, 6.905, 45.865]`, wholly inside source tile `N45E006`, with a 2,500 m floor.
+Pecher, Tasser and Tappeiner report mean potential-treeline elevations of 2,200–2,350 m in the
+central European Alps (2011, https://doi.org/10.1016/j.ecolind.2010.06.015), so the declared
+floor sits above the top of that reported range rather than choosing a threshold from the DEM
+it is meant to judge.
+
+The public 2021 GLO-30 COG existed at selection time (42,310,635 bytes; ETag
+`72c5ebd9d8a7e37b8843109b5a40978b`). A full-resolution crop over the declared bounds measured
+2,560.8–4,810.7 m: it clears the floor with a deliberately finite margin, is inland and has enough
+relief to make terrain, hillshade and contours visible. A `HEAD` on that object returned 200, which is
+direct evidence that the one tile this cut needs is published — but it is **selection evidence,
+not a discharge of obligation 2**. The build repeats the coverage check every run, because a
+tile published at selection time is a fact about then, and the snapshot remains necessary
+regardless: it is what classifies a future absence as withheld-by-policy rather than as a
+transport failure, which detection alone cannot do.
+
+"Inland" is discharged here too, and by these same checks rather than a fourth: the cut requires
+only published tiles and every sample clears a 2,500 m floor, so no ocean pixel can be present.
+That enforces no ocean intersection, not distance from a coastline.
+
+This measurement selects the region; it
+does not discharge the build obligation. The build still computes the lowest decoded sample and
+fails against the declaration every time, so a later source or bounds change cannot inherit the
+selection-time answer.
 
 ## Contours
 
@@ -231,10 +252,8 @@ Ordered by what gates what.
    endpoints across the seam, and count closed rings per zoom level rather than eyeballing one
    tile. Deciding this before a candidate's output is on screen is what stops the output from
    setting the bar.
-2. **The region** — independent of (1), pending its per-tile coverage check and a justified
-   `minElevationM`.
-3. **Archive size** — answerable only once (1) and (2) are settled, and ADR-0024 criterion 6
-   requires it **measured** rather than calculated.
+2. **Archive size** — answerable once (1) is settled; the region is now declared and verified.
+   ADR-0024 criterion 6 requires the result **measured** rather than calculated.
 
 **Status of the writer, stated precisely so a summary cannot round it up.** `s2-pmtiles` is a
 well-evidenced candidate, not yet a committed dependency. Verified: the API shape, a four-tile

@@ -1,0 +1,6 @@
+{
+  "id": "mont-blanc-summit",
+  "bounds": [6.825, 45.815, 6.905, 45.865],
+  "minElevationM": 2500,
+  "minElevationJustification": "Pecher, Tasser and Tappeiner (2011, https://doi.org/10.1016/j.ecolind.2010.06.015) report mean potential-treeline elevations of 2200–2350 m in the central European Alps; a 2500 m floor stays above the top of that reported range."
+}

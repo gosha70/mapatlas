@@ -587,11 +587,26 @@ decision over.
 must be **above the treeline and inland**. Above the treeline there is no canopy, so the DSM and
 a DTM converge to within the product's own vertical error and the contour geometry is a claim
 about ground after all — the criterion-4 defect is not tolerated, it is arranged not to arise.
+**"Inland" is defined operationally, so it is checked rather than asserted.** It means: the cut
+requires only published tiles, and every decoded sample satisfies the floor. Both are already
+obligations — 2 and 3 for the first, 4 for the second — so the constraint needs no check of its
+own; a coastal box either reaches tiles GLO-30 Public never published, or includes sea-level
+pixels that any above-treeline floor rejects. Two things follow. The definition enforces **no
+ocean intersection**, not distance from a coastline: a box a kilometre inland of a cliff, wholly
+above the floor and wholly within published tiles, satisfies it, and should. And the constraint
+is discharged by the same three checks rather than by a fourth, which is why the "and inland"
+half of the sentence has no separate machinery — it was, until this was written down, the half
+still resting on prose.
+
 Inland avoids the coast, and with it the second trap: GLO-30 Public ships **no ocean tiles**,
-terrarium has **no no-data sentinel** — every RGB triple decodes to a valid elevation, and the
-natural fill of zero decodes to sea level, indistinguishable from real sea level. A coastal
-fixture would therefore need an explicit choice about absent tiles, made rather than inherited
-from whatever the encoder does by default. The constraint also happens to select for the relief
+and terrarium has **no no-data sentinel** — every one of the 2^24 RGB triples decodes to a valid
+elevation, so absence cannot be expressed at all. An earlier version of this paragraph said a
+zero fill "decodes to sea level"; that is wrong, and the first line of the encoder falsified it.
+The formula carries a fixed offset, so a zero-byte fill decodes to **−32768 m**, the bottom of
+the range, while sea level is `RGB(128, 0, 0)`. The correction strengthens the point rather than
+weakening it: the problem is not that a fill looks plausible, it is that there is no value that
+means nothing. A coastal fixture would therefore need an explicit choice about absent tiles, made
+rather than inherited from whatever the encoder does by default. The constraint also happens to select for the relief
 that makes terrain, hillshade and contours worth demonstrating at all, so it costs the fixture
 nothing.
 

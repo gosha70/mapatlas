@@ -661,10 +661,13 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   whether the region is US-only, selecting 3DEP instead — was gated on the engine sampling
   elevation from the DEM, which it does not do anywhere; the ADR's amendment records the three
   checks. The region is therefore an ordinary fixture choice rather than a decision the source
-  depends on — but a **constrained** one: **above the treeline and inland**. The contour geometry
+  depends on — but a **constrained** one: **above the treeline and inland**, the second defined operationally — the cut requires only
+  published tiles and every decoded sample clears the floor, which is obligations 2, 3 and 4
+  rather than a fourth check, and which enforces no ocean intersection rather than distance from
+  a coastline. The contour geometry
   this script generates is the one live consumer of the DSM/DTM difference, and above the
   treeline the two converge; inland keeps the fixture off the coast, where GLO-30 Public ships no
-  ocean tiles and terrarium has no no-data value to tell an absent tile from sea level.
+  ocean tiles and terrarium has no no-data value with which to say a tile is absent at all.
 
   **Four build-script obligations, each of which makes something checked rather than trusted.**
   Every one of them **fails the build**; none of them warns. An obligation that logs is an
@@ -676,7 +679,9 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   2. Released coverage is verified **per tile, not per country** — withholding is at tile
      granularity, so a region can be partially covered with no country-level list saying so.
   3. A gap **fails the build** rather than being filled, since terrarium has no no-data value:
-     any fill decodes as a real elevation and a zero fill decodes as sea level. The failure
+     every one of its 2^24 triples decodes to a valid elevation, so absence cannot be
+     expressed — a zero-byte fill reads as −32768 m, the bottom of the range, and sea level is
+     `RGB(128, 0, 0)` rather than zero because the formula carries a fixed offset. The failure
      **names the tile** — "no published tile at N45E007", not "gap in coverage", which sends a
      reader to debug the fetcher for a file that was never going to arrive.
   4. The region declares a **minimum-elevation floor** beside its bounds, and the cut region's

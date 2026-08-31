@@ -669,6 +669,103 @@ test-of-tests**: each corruption case was re-run with its corruption removed, an
 failed. "Assert the digest is *not* the expected one" is exactly the shape that passes when
 nothing was corrupted at all.
 
+## The Web-Mercator bars — set before implementation
+
+Recorded before any resampling code exists, because this increment has enough degrees of freedom
+that a plausible-looking terrain image would otherwise choose the semantics. From review on
+2026-08-31; the arithmetic below was **recomputed here** rather than transcribed.
+
+### 1. Addressing: XYZ, pixel centres, half-open at the region edge
+
+Standard slippy-map Web Mercator. For output tile `(z, x, y)`, pixel `(col, row)` is the global
+pixel **centre** `(x·256 + col + 0.5, y·256 + row + 0.5)`, inverse-projected to lon/lat and
+sampled from the geographic DEM. The half-open rule already used by `requiredTiles` and
+`cropWindow` continues to apply at the region boundary — west and north included, east and south
+excluded — so a bound landing exactly on a tile edge does not acquire the neighbour.
+
+`minZoom` and `maxZoom` are **explicit inputs**, not a product policy baked into the fixture.
+**z11–12** for this region, and the tile ranges are computed, not assumed:
+
+| zoom | x | y | tiles | m/px at 45.84°N | envelope |
+| --- | --- | --- | --- | --- | --- |
+| 11 | 1062..1063 | 729..730 | 4 | 53.25 | lon 6.67969..**7.03125**, lat 45.70618..45.95115 |
+| 12 | 2125..2126 | 1459..1460 | 4 | 26.63 | lon 6.76758..6.94336, lat 45.76752..45.89001 |
+
+One arcsecond at that latitude is 30.92 m of latitude and 21.54 m of longitude, so z12 sits
+inside the source's native scale and z13 (13.31 m/px) would be roughly 2× upsampling.
+
+**The floor is z11 for a harder reason than scale.** z10's envelope is lat 45.58329..46.07323 —
+it crosses **46°N**, so it would require `N46E006` and `N46E007` as well. The zoom range chooses
+which source cells the build must have, which makes it a coverage decision and not only a
+resolution one.
+
+The raster-dem source declares `maxzoom: 12`; a renderer uses maxzoom tiles when displayed
+beyond it, so nothing is missing above z12.
+
+### 2. Resampling: bilinear, in decoded metres
+
+The contract, and the ordering in it is the whole point:
+
+```
+source encoded bytes -> decode to metres -> bilinear interpolate -> encode as terrarium
+```
+
+**Terrarium RGB channels are never interpolated.** The encoding packs a value across three
+channels with carries between them, so averaging channels produces a number that is not the
+average of the elevations — and is a perfectly well-formed colour, which is why it would render
+as terrain rather than fail.
+
+Bilinear rather than nearest: elevation is a continuous field and this is a reprojection onto a
+different lattice, where nearest makes the result depend on grid alignment and staircases the
+terrain.
+
+*The oracle: an affine elevation plane* `h(lon, lat) = A·lon + B·lat + C`. Bilinear reproduces an
+affine function **exactly** before quantisation, so one fixture kills nearest-neighbour, wrong
+fractional coordinates, row/column swaps and channel interpolation at once. The output is then
+asserted to differ from the analytical elevation by at most the terrarium step (1/256 m).
+
+**A circularity this must avoid.** The affine oracle cannot catch a wrong *projection* if the
+expected elevation is evaluated at a lon/lat obtained from the same projection code — both sides
+move together and the check passes. So bar 2 tests interpolation and bar 4 tests projection, as
+**separate assertions** over independently computed expected coordinates. Neither alone is
+sufficient, and a single combined assertion would look stronger than the pair while proving less.
+
+### 3. Edges: expand the read envelope; never invent no-data
+
+The governing decision. A Mercator tile intersecting the region must still be a complete 256×256
+raster, and none of these is acceptable: filling outside-region pixels with an arbitrary
+elevation, clamping them to the region edge, omitting partially intersecting tiles, or inventing
+a no-data RGB. There is no terrarium encoding for absence, which is the same reason obligation 3
+has no fill path.
+
+Two extents, kept distinct:
+
+- **declared region** — what the consumer asked for, and what the archive's `bounds` metadata
+  carries, so a renderer does not request tiles outside it.
+- **production envelope** — the full footprints of every Mercator tile intersecting the region,
+  plus the source-sample halo bilinear needs (one sample beyond each edge).
+
+Real DEM samples are read for the whole production envelope. **If any required source sample is
+unavailable, the build fails** rather than fabricating terrain.
+
+*This changes coverage.* The build currently checks `requiredTiles(declaration.bounds)`, which
+yields `N45E006` alone. The z11 envelope reaches 7.03125°E, so the envelope requires **`N45E007`
+as well** — a real seam the fixture crosses rather than a constructed one. Coverage must be
+computed over the production envelope, not the declared region, and that is a change to the
+build's ordering, not only to the resampler.
+
+### 4. Falsification: prove coordinates, not appearance
+
+Pin two adjacent Mercator tiles and assert their border pixel centres land at the analytically
+expected lon/lat — exactly one pixel apart, neither duplicated nor skipped — then run the affine
+oracle across that boundary. Source-cell lookup crossing an integer degree keeps the existing
+`PixelIsPoint` ownership rule, so the sample on a shared meridian belongs to one cell only.
+
+**Mutations that must each bite independently:** dropping the `+0.5` centre offset; linear
+latitude instead of inverse Mercator; nearest instead of bilinear; interpolating encoded RGB;
+clamping outside the declared bbox; omitting the bilinear halo; and including an east or south
+tile whose edge lies exactly on the bound.
+
 ## Fixture composition
 
 Per T4.6: a track of ≥5k raw points with a two-segment pause, two consumer-defined event marks,

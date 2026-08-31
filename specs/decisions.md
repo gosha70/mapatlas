@@ -643,3 +643,37 @@ for as long as the artifact exists and leaves no code path pointing back at wher
 That is why the baked consumer is both the more permanent and the easier to miss — it stops
 looking like a consumer the moment its output ships.
 
+
+---
+
+## ADR-0025 — Terrain and contours are separate PMTiles archives
+
+**Status.** Decided. Discovered while adopting the writer (T4.6), before any contour code existed
+to be shaped by the alternative.
+
+**Decision.** The vertical fixture writes **two** PMTiles archives for one region: terrain
+(terrarium PNG rasters) and contours (MVT vectors). They are never combined.
+
+**Why it is a structural constraint rather than a preference.** PMTiles v3 carries **one
+archive-level Tile Type** and **one archive-level Tile Compression** — single bytes at fixed
+header offsets, verified in the pinned reader's own parse (`tileType` at byte 99,
+`tileCompression` at 98) rather than taken from the specification alone. So a single conforming
+archive cannot describe both PNG and MVT payloads *at all*, regardless of what compression is
+chosen. An earlier framing of this constraint said compression only — already-compressed PNG
+wants `none` while vector tiles want `gzip` — which is true and much too weak: it suggests a
+trade-off where there is none available.
+
+**What follows, so this is not rediscovered downstream.**
+
+- The fixture layout is one archive per source, not one per region. Anything that assumes a
+  region maps to a single archive — build outputs, the `/lab` route, the offline scenario, the
+  archive-size measurement of ADR-0024 criterion 6 — must handle a set.
+- Archive size is therefore reported **per archive and as a total**; one number would hide which
+  source grew.
+- `scripts/fixture/archive.mjs` takes the payload type per call and holds no opinion about which
+  sources exist, so adding a third source is a caller change, not a writer change.
+
+**Consequences accepted.** Two files per region rather than one, and two `getHeader` round trips
+for a consumer wanting both. Both are what a renderer does anyway: a terrain source and a vector
+source are separate sources in a style, so nothing here asks a consumer to do more work than the
+format already implies.

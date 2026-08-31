@@ -24,9 +24,13 @@ real release — 8 tiles, 1,493,696 bytes, reproducible byte for byte — and th
 same committed entry point against a synthetic source with no network. Every terrain row in the
 plan's status table reads *yes*.
 
-**Contour generation is at level 1.** `contour.mjs` traces and tiles, and nothing calls it; no
-contour archive is built. The acceptance criteria proper — the fixture track, `/lab`, simulated
-GPS, the offline scenario and the frame-time baseline — are untouched.
+**Contours are at level 3 too.** The same command writes a second archive (MVT, gzipped,
+183,182 bytes, 8 tiles) alongside terrain, per ADR-0025. Levels are derived from the declared
+region's samples — 23 of them, 2,600 to 4,800 — while interpolation and tiling still read the
+wider envelope.
+
+**What remains are the acceptance criteria proper**, untouched: the fixture track, `/lab`,
+simulated GPS, the offline Playwright scenario and the frame-time baseline.
 
 ---
 
@@ -134,17 +138,15 @@ working from bypassed, and assert *that* — not the absence of an alarm.
 
 1. ~~Adopt the contour toolchain as dependencies.~~ **Done.** `d3-contour` 4.0.2, `geojson-vt`
    4.0.3 and `vt-pbf` 3.1.3 are pinned dependencies, and `scripts/fixture/contour.mjs` traces
-   isolines and cuts them to MVT. It is **not wired in**: no contour archive is built.
+   isolines and cuts them to MVT, and the build writes a second archive from it.
 2. ~~Confirm the PMTiles writer at fixture scale.~~ **Done.** `s2-pmtiles` 1.1.2 is adopted and
    `scripts/fixture/archive.mjs` writes real archives, over `FileWriter` — `BufferWriter` is
    unusable at scale.
 3. ~~A real tile reader, and wiring it in.~~ **Done.** `scripts/fixture/source.mjs` range-reads a
    GLO-30 COG with no GeoTIFF dependency; `scripts/fixture/deps.mjs` binds it and a real S3 probe
    behind the build's seams, which are async. It is part of the discharged terrain path.
-4. Wire the contour source into the build, as a **second archive** (ADR-0025: PMTiles v3 carries
-   one archive-level tile type *and* one compression, so PNG and MVT cannot share one). Derive
-   the levels from the **declared region's** samples while still reading the larger envelope for
-   interpolation and tiling.
+4. ~~Wire the contour source into the build.~~ **Done.** A second archive per ADR-0025, levels
+   from the declared region's samples, envelope still read for interpolation and tiling.
 5. ~~**Produce an actual archive**~~ **Done.** `npm run fixture:build` cuts the terrain
    archive from the real release: 8 tiles, 1,493,696 bytes, reproducible byte for byte.
 6. ~~Measure archive size~~ **Done.** 1,493,696 bytes, measured (ADR-0024 criterion 6).

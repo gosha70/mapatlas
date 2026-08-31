@@ -115,8 +115,12 @@ export function levelsFor(lowestM, highestM, intervalM) {
       `contour interval must be a positive number of metres, got ${String(intervalM)}`,
     );
   }
-  if (!(highestM > lowestM)) {
-    throw new ContourError(`contour range is empty: ${String(lowestM)}..${String(highestM)} m`);
+  // Inverted bounds are a caller mistake; a range too narrow to contain a multiple is a fact
+  // about the terrain. The first throws, the second returns nothing — this answers *which levels
+  // a range contains*, and "none" is a real answer to that. Whether a fixture with no contours is
+  // acceptable is the build's judgement, and making it here would put a policy inside a query.
+  if (highestM < lowestM) {
+    throw new ContourError(`contour range is inverted: ${String(lowestM)}..${String(highestM)} m`);
   }
   const levels = [];
   for (

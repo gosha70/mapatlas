@@ -12,6 +12,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { VectorTile } from "@mapbox/vector-tile";
+import Pbf from "pbf";
 import { PMTiles } from "pmtiles";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -39,10 +41,19 @@ const REGION = {
   minElevationJustification: "synthetic terrain, declared above the floor for this test",
   minZoom: 14,
   maxZoom: 14,
+  zoomJustification: "one z14 tile fits the synthetic raster",
+  contourIntervalM: 100,
+  contourIntervalJustification: "100 m across the synthetic ramp gives several levels",
 };
 const SPACING = 1 / 3600;
-/** Well clear of the floor, and varying, so a constant fill could not pass. */
-const elevation = (col, row) => 3000 + col * 0.7 - row * 0.4;
+/**
+ * Well clear of the floor, and varying enough to carry contours.
+ *
+ * The gradient is steep because the region is one z14 tile, some 79 samples across: at 0.7 m per
+ * sample it spanned 55 m, which contains no multiple of the 100 m interval, and the build
+ * refuses a fixture whose contour layer would be empty.
+ */
+const elevation = (col, row) => 3000 + col * 3 - row * 1.5;
 
 let dir;
 let paths;
@@ -58,7 +69,8 @@ beforeAll(() => {
     snapshotPath: DEFAULT_PATHS.snapshotPath,
     licencePath: DEFAULT_PATHS.licencePath,
     attributionPath: DEFAULT_PATHS.attributionPath,
-    archivePath: join(dir, "out", "terrain.pmtiles"),
+    terrainArchivePath: join(dir, "out", "terrain.pmtiles"),
+    contourArchivePath: join(dir, "out", "contours.pmtiles"),
   };
 });
 afterAll(() => {
@@ -151,9 +163,13 @@ describe("the committed entry point produces an archive", () => {
     expect(report.region).toBe("synthetic-corner");
     expect(report.sourceCells).toEqual(["N45E006"]);
     expect(report.lowest.elevationM).toBeGreaterThanOrEqual(REGION.minElevationM);
-    expect(report.outputPath).toBe(paths.archivePath);
-    expect(report.archiveBytes).toBeGreaterThan(0);
-    expect(statSync(paths.archivePath).size).toBe(report.archiveBytes);
+    // Two archives, because PMTiles v3 carries one tile type and one compression per file.
+    expect(report.archives.map((a) => a.kind)).toEqual(["terrain", "contours"]);
+    for (const archive of report.archives) {
+      expect(archive.bytes).toBeGreaterThan(0);
+      expect(statSync(archive.path).size).toBe(archive.bytes);
+      expect(archive.tiles).toBeGreaterThan(0);
+    }
   });
 
   it("creates the output directory rather than requiring one to exist", async () => {
@@ -162,21 +178,22 @@ describe("the committed entry point produces an archive", () => {
     // directory the fixture set up first, so without this the `mkdirSync` could be deleted with
     // the suite green and only the committed command would break.
     const nested = join(dir, "made", "up", "path", "terrain.pmtiles");
+    const nestedContours = join(dir, "made", "up", "path", "contours.pmtiles");
 
     const report = await buildFixture({
-      paths: { ...paths, archivePath: nested },
+      paths: { ...paths, terrainArchivePath: nested, contourArchivePath: nestedContours },
       fetchImpl: syntheticSource().fetchImpl,
     });
 
-    expect(report.outputPath).toBe(nested);
-    expect(statSync(nested).size).toBeGreaterThan(0);
+    expect(report.archives.map((a) => a.path)).toEqual([nested, nestedContours]);
+    for (const archive of report.archives) expect(statSync(archive.path).size).toBeGreaterThan(0);
   });
 
   it("carries every tile of the declared pyramid, each a distinct PNG", async () => {
     const { fetchImpl } = syntheticSource();
     await buildFixture({ paths, fetchImpl });
 
-    const archive = openArchive(paths.archivePath);
+    const archive = openArchive(paths.terrainArchivePath);
     // The archive's own declaration, not just the payloads. A raster archive mislabelled as
     // vector carries perfectly good PNGs that a renderer will hand to a vector-tile decoder,
     // and every payload assertion below passes either way.
@@ -198,11 +215,43 @@ describe("the committed entry point produces an archive", () => {
     expect(digests.size).toBe(count);
   });
 
+  it("declares the contour archive as gzipped vector tiles, and it decodes as such", async () => {
+    // PMTiles v3 carries one tile type and one compression per archive, which is why there are
+    // two. Asserting the payloads decode is not enough on its own: an MVT archive mislabelled as
+    // PNG hands perfectly good protobuf to an image decoder, and every payload check passes.
+    const { fetchImpl } = syntheticSource();
+    await buildFixture({ paths, fetchImpl });
+
+    const terrain = await openArchive(paths.terrainArchivePath).getHeader();
+    const contours = openArchive(paths.contourArchivePath);
+    const header = await contours.getHeader();
+
+    expect(terrain.tileType).toBe(2); // PNG
+    expect(terrain.tileCompression).toBe(1); // none — PNG is already deflated
+    expect(header.tileType).toBe(1); // MVT
+    expect(header.tileCompression).toBe(2); // gzip
+    expect(header.tileType).not.toBe(terrain.tileType);
+
+    // And the bytes really are vector tiles carrying elevations, read by an independent decoder.
+    let decoded = 0;
+    for (const { z, x, y } of tilesInRange(REGION.bounds, REGION.minZoom, REGION.maxZoom)) {
+      const tile = await contours.getZxy(z, x, y);
+      if (tile === undefined) continue;
+      const layer = new VectorTile(new Pbf(new Uint8Array(tile.data))).layers.contours;
+      expect(layer.length).toBeGreaterThan(0);
+      for (let i = 0; i < layer.length; i += 1) {
+        expect(layer.feature(i).properties.elevation % 100).toBe(0);
+        decoded += 1;
+      }
+    }
+    expect(decoded).toBeGreaterThan(0);
+  });
+
   it("advertises the declared region and the real licence in its metadata", async () => {
     const { fetchImpl } = syntheticSource();
     await buildFixture({ paths, fetchImpl });
 
-    const metadata = await openArchive(paths.archivePath).getMetadata();
+    const metadata = await openArchive(paths.terrainArchivePath).getMetadata();
     expect(metadata.bounds).toEqual(REGION.bounds);
     expect(metadata.minzoom).toBe(REGION.minZoom);
     expect(metadata.maxzoom).toBe(REGION.maxZoom);
@@ -222,7 +271,7 @@ describe("the committed entry point produces an archive", () => {
 
     await expect(
       buildFixture({
-        paths: { ...paths, regionPath: join(dir, "low.json"), archivePath: failing },
+        paths: { ...paths, regionPath: join(dir, "low.json"), terrainArchivePath: failing },
         fetchImpl,
       }),
     ).rejects.toThrow(/below the declared floor/);
@@ -238,6 +287,9 @@ describe("the committed entry point produces an archive", () => {
     // failed build that leaves a usable-looking artifact is worse than one leaving nothing,
     // since `/lab` and the browser scenario read the finalised path.
     const failing = join(dir, "out", "orphan.pmtiles");
+    // Both paths are fresh: asserting on the shared contour path would only observe an archive
+    // an earlier test wrote successfully, and would pass however this build behaved.
+    const failingContours = join(dir, "out", "orphan-contours.pmtiles");
     const { fetchImpl } = syntheticSource();
     const io = {
       ...realIo(),
@@ -247,26 +299,107 @@ describe("the committed entry point produces an archive", () => {
     };
 
     await expect(
-      buildFixture({ paths: { ...paths, archivePath: failing }, fetchImpl, io }),
+      buildFixture({
+        paths: { ...paths, terrainArchivePath: failing, contourArchivePath: failingContours },
+        fetchImpl,
+        io,
+      }),
     ).rejects.toThrow(/cross-device link/);
 
-    expect(() => statSync(`${failing}.partial`)).toThrow();
-    expect(() => statSync(failing)).toThrow();
+    // Neither archive is named, and neither partial survives, when either fails: a half-built
+    // stack that looks complete is the same defect as a licence-violating archive, one level up.
+    for (const path of [failing, failingContours]) {
+      expect(() => statSync(path), path).toThrow();
+      expect(() => statSync(`${path}.partial`), `${path}.partial`).toThrow();
+    }
+  });
+
+  it("leaves no archive at all when a rebuild's second promotion fails", async () => {
+    // The transactional case, on a real filesystem. **A rebuild finds both finals already
+    // there**, so a failure partway through promotion can leave the *previous* counterpart
+    // published beside nothing — a half-built stack assembled from two builds rather than one.
+    // Removing only what this build renamed does not fix that, which is why the invariant is
+    // "once promotion has begun, a failure leaves no archive".
+    const terrain = join(dir, "out", "rebuild.pmtiles");
+    const contours = join(dir, "out", "rebuild-contours.pmtiles");
+    const rebuildPaths = { ...paths, terrainArchivePath: terrain, contourArchivePath: contours };
+
+    // A previous build succeeded, leaving both finals in place.
+    await buildFixture({ paths: rebuildPaths, fetchImpl: syntheticSource().fetchImpl });
+    expect(statSync(terrain).size).toBeGreaterThan(0);
+    expect(statSync(contours).size).toBeGreaterThan(0);
+
+    // This one replaces terrain and then fails renaming contours.
+    let renames = 0;
+    const io = {
+      ...realIo(),
+      renameSync: (from, to) => {
+        renames += 1;
+        if (renames === 2) throw new Error("rename failed");
+        renameSync(from, to);
+      },
+    };
+
+    await expect(
+      buildFixture({ paths: rebuildPaths, fetchImpl: syntheticSource().fetchImpl, io }),
+    ).rejects.toThrow(/rename failed/);
+
+    expect(renames).toBe(2); // the second was attempted, so the first had already published
+    for (const path of [terrain, contours, `${terrain}.partial`, `${contours}.partial`]) {
+      expect(() => statSync(path), path).toThrow();
+    }
+  });
+
+  it("leaves a previous pair intact when the first promotion fails", async () => {
+    // The other side of the transaction boundary, and the one that decides *where* it sits. A
+    // first rename that throws has modified nothing, so the previous build's pair is still whole
+    // — deleting it would destroy good output over a failure that touched none of it. Only once
+    // a rename has landed is the pair a mixture, and only then does everything go.
+    const terrain = join(dir, "out", "keep.pmtiles");
+    const contours = join(dir, "out", "keep-contours.pmtiles");
+    const keepPaths = { ...paths, terrainArchivePath: terrain, contourArchivePath: contours };
+
+    await buildFixture({ paths: keepPaths, fetchImpl: syntheticSource().fetchImpl });
+    const before = [readFileSync(terrain), readFileSync(contours)];
+
+    const io = {
+      ...realIo(),
+      renameSync: () => {
+        throw new Error("rename failed");
+      },
+    };
+
+    await expect(
+      buildFixture({ paths: keepPaths, fetchImpl: syntheticSource().fetchImpl, io }),
+    ).rejects.toThrow(/rename failed/);
+
+    // The previous pair survives, byte for byte...
+    expect(readFileSync(terrain).equals(before[0])).toBe(true);
+    expect(readFileSync(contours).equals(before[1])).toBe(true);
+    // ...and this build's partials do not.
+    for (const path of [`${terrain}.partial`, `${contours}.partial`]) {
+      expect(() => statSync(path), path).toThrow();
+    }
   });
 
   it("writes a development build to its own path, marked not for distribution", async () => {
     const { fetchImpl } = syntheticSource();
     const dev = join(dir, "out", "dev.pmtiles");
 
+    const devContours = join(dir, "out", "dev-contours.pmtiles");
     const report = await buildFixture({
-      paths: { ...paths, archivePath: dev },
+      paths: { ...paths, terrainArchivePath: dev, contourArchivePath: devContours },
       distributable: false,
       fetchImpl,
     });
 
-    expect(report.outputPath).toBe(`${dev}.dev`);
+    expect(report.archives.map((a) => a.path)).toEqual([`${dev}.dev`, `${devContours}.dev`]);
     expect(report.distributable).toBe(false);
-    const metadata = await openArchive(`${dev}.dev`).getMetadata();
-    expect(metadata["NOT-FOR-DISTRIBUTION"]).toBeDefined();
+    // Both archives are development output, so both carry the marker — checking only the one
+    // holding the elevation data would ship unmarked contours traced from the same source.
+    for (const archive of report.archives) {
+      const metadata = await openArchive(archive.path).getMetadata();
+      expect(metadata["NOT-FOR-DISTRIBUTION"]).toBeDefined();
+    }
   });
 });

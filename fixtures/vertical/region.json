@@ -5,5 +5,7 @@
   "minElevationJustification": "Pecher, Tasser and Tappeiner (2011, https://doi.org/10.1016/j.ecolind.2010.06.015) report mean potential-treeline elevations of 2200–2350 m in the central European Alps; a 2500 m floor stays above the top of that reported range.",
   "minZoom": 11,
   "maxZoom": 12,
-  "zoomJustification": "z12 (26.6 m/px at 45.84N) sits inside the source's 1-arcsecond native scale (30.9 m of latitude, 21.5 m of longitude); z13 would be roughly 2x upsampling. The floor is z11 because z10's production envelope crosses 46N and would require the N46 source cells, making the zoom range a coverage decision and not only a resolution one."
+  "zoomJustification": "z12 (26.6 m/px at 45.84N) sits inside the source's 1-arcsecond native scale (30.9 m of latitude, 21.5 m of longitude); z13 would be roughly 2x upsampling. The floor is z11 because z10's production envelope crosses 46N and would require the N46 source cells, making the zoom range a coverage decision and not only a resolution one.",
+  "contourIntervalM": 100,
+  "contourIntervalJustification": "100 m over a region spanning 2,560.8-4,810.7 m gives 23 levels, 2,600 through 4,800 inclusive - enough to read relief at z11-12 without the layer becoming a hatch. Levels are anchored to multiples of the interval, so a 2,600 m line is at 2,600 m in every region."
 }

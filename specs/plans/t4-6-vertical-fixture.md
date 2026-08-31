@@ -24,6 +24,7 @@ drives the build through injected fakes.
 | Licence rule (ob. 1) | yes | yes | **no** | strings check against the real document; the archive half still sees a fake archive |
 | COG source reader | yes | yes | **no** | bound behind `readTile` by `deps.mjs` |
 | PMTiles writer | yes | **no** | **no** | `archive.mjs` writes and reads back; the build has no z/x/y tiles to give it yet |
+| Mercator addressing + envelope | yes | **no** | **no** | `mercator.mjs`; coverage still computed over the declaration, not the envelope |
 | Build ordering | yes | — | **no** | `writeArchive` still has nothing behind it |
 
 **Remaining T4.6 implementation scope.** The source reader is built and is now bound behind
@@ -765,6 +766,34 @@ oracle across that boundary. Source-cell lookup crossing an integer degree keeps
 latitude instead of inverse Mercator; nearest instead of bilinear; interpolating encoded RGB;
 clamping outside the declared bbox; omitting the bilinear halo; and including an east or south
 tile whose edge lies exactly on the bound.
+
+### Addressing and the envelope, as built
+
+`scripts/fixture/mercator.mjs` answers where a pixel is and what extent a pyramid needs. It
+resamples nothing and knows no elevation.
+
+*The projection is tested against an independently written oracle.* The module inverts with
+`atan(sinh(...))`; the suite uses the Gudermannian's `2·atan(exp(y)) − π/2` form and a forward
+`ln(tan(π/4 + φ/2))`. Mathematically equal, textually unrelated — so a transcription slip in one
+does not reproduce itself in the other. Two published anchors sit under both, the equator landing
+exactly halfway down the pyramid and the 85.0511287798066° limit at the top, because two formulas
+that agree with each other can still both be wrong.
+
+*Two test bugs found by running them, both mine.* The check that latitude is not linear asserted
+the inequality **backwards**: Mercator stretches high latitudes, so a polar tile spans *fewer*
+degrees than an equatorial one, not more. And a guard refusing bounds that "cover no tile" was
+unreachable — with `west < east` guaranteed, a half-open upper edge steps back at most to the
+tile the lower edge already occupies. It is removed and `tileRange` now uses the shared
+`parseBounds`, so four call sites cannot drift on what a box is.
+
+*Author verification.* 20 tests, 11 mutations killed, covering the list the bars named: the
+`+0.5` centre offset dropped on both axes and on one; linear latitude for inverse Mercator; the
+half-open upper edge; north and south swapped; the halo omitted per edge; and the envelope's east
+and south taken from the wrong tile.
+
+**Still to do before this discharges anything:** coverage is computed over `declaration.bounds`
+and must move to the production envelope, which is a change to the build's ordering. Until it
+does, a build for this region would check `N45E006` and then read `N45E007` unchecked.
 
 ## Fixture composition
 

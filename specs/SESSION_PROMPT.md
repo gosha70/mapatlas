@@ -20,9 +20,10 @@ vocabulary may enter any package — not in code, not in comments, not in test f
 ## Where the work is
 
 **T4.6, the vertical acceptance fixture.** Four obligations are implemented, unit-tested and
-wired into a build orchestrator that **has never touched a network or a filesystem** — every
-integration test drives it through injected fakes. **No build obligation or status-table row is
-discharged end to end.**
+wired into a build orchestrator whose fetching seams are now bound to the real source: a
+scratchpad run has driven it against S3 and a real COG. **No committed path has produced a real
+archive**, the archive stage is still a fake writer, and every suite drives the build through
+injected fakes — so **no build obligation or status-table row is discharged end to end.**
 
 Track four levels separately and never collapse them, because a series of individually-true
 "done" reports is how a false impression of progress gets built:
@@ -38,7 +39,8 @@ Remaining, in dependency order:
    evaluated and passing but **not adopted**; nothing is in `package.json`.
 2. Confirm the PMTiles writer (`s2-pmtiles`) at fixture scale with real raster payloads. The
    only remaining item that can still change the shape rather than fill it in.
-3. A real tile reader behind the build's `readTile` seam.
+3. ~~A real tile reader.~~ **Done**, and bound behind `readTile` by `scripts/fixture/deps.mjs`,
+   along with a real S3 probe; the build's seams are async. It moves no status row.
 4. Write the contour source into the build.
 5. **Produce an actual archive** — the hinge; it is what can move any status row off "no".
 6. Measure archive size (ADR-0024 criterion 6: measured, not calculated).

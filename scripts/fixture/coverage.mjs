@@ -39,11 +39,18 @@ const TILE_DEGREES = 1;
 /**
  * Statuses that mean "the tile is there".
  *
- * 206 is not a nicety: the build discovers coverage during the COG **range** reads it has to
- * make anyway, and a range read of a present tile answers 206, not 200. Accepting only 200
- * would reject every successful read the real build performs. Enumerated rather than accepting
- * 2xx generally — 204 is a success status carrying no tile bytes, and treating it as presence
- * would let an empty answer stand in for data.
+ * 206 is not a nicety: the probe is itself a **range** GET — one byte of the tile's object — and
+ * a present object answers 206, not 200. Accepting only 200 would reject every successful probe
+ * the real build makes.
+ *
+ * It is a *separate* request from the reader's, not a by-product of one. An earlier note here
+ * claimed coverage came free with the COG reads the build has to make anyway; that stopped being
+ * true when the probe was split out, and it was split out deliberately: a reader throws on a
+ * 404, and a thrown probe is classified `unreachable`, which would collapse an unpublished tile
+ * into a transport failure. The extra request buys that distinction.
+ *
+ * Enumerated rather than accepting 2xx generally — 204 is a success status carrying no tile
+ * bytes, and treating it as presence would let an empty answer stand in for data.
  */
 const PRESENT_STATUSES = new Set([200, 206]);
 
@@ -253,22 +260,27 @@ export function loadCoverageSnapshot(manifestPath, io) {
  * refusal to invent a tile is the absence of a branch rather than a guard around one, so there
  * is nothing here to relax under pressure.
  *
+ * The probe is awaited, so it may be a network call or a plain value — the real one is an HTTP
+ * range read. The `await` sits **inside** the `try`, which is what makes a rejected probe arrive
+ * as a transport failure rather than escaping as an unhandled rejection past the one place that
+ * classifies it.
+ *
  * @param {[west: number, south: number, east: number, north: number]} bounds
- * @param {(id: string) => { status: number }} probe
+ * @param {(id: string) => { status: number } | Promise<{ status: number }>} probe
  * @param {CoverageSnapshot} snapshot
- * @returns {string[]} the tile ids, all confirmed present
+ * @returns {Promise<string[]>} the tile ids, all confirmed present
  */
-export function assertCoverage(bounds, probe, snapshot) {
+export async function assertCoverage(bounds, probe, snapshot) {
   const required = requiredTiles(bounds);
 
   for (const id of required) {
     let status;
     try {
-      ({ status } = probe(id));
+      ({ status } = await probe(id));
     } catch (error) {
-      // A probe that throws — a timeout, a DNS failure, a socket reset — is a transport
-      // failure like a 5xx, and must arrive as one. Letting it escape raw would mean the one
-      // caller that distinguishes these three cases receives an error with no `kind` on it.
+      // A probe that throws *or rejects* — a timeout, a DNS failure, a socket reset — is a
+      // transport failure like a 5xx, and must arrive as one. Letting it escape raw would mean
+      // the one caller that distinguishes these three cases receives an error with no `kind`.
       throw new CoverageError(
         `tile ${id} could not be read: ${error instanceof Error ? error.message : String(error)} ` +
           `— a transport failure rather than an absence, so the region is not implicated`,

@@ -1,0 +1,201 @@
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * The real implementations behind the build's fetching seams (T4.6).
+ *
+ * `build.mjs` takes `probe` and `readTile` as injected functions so its ordering is testable
+ * with no network. This is where those two are bound to the actual source: an HTTP range read
+ * against the GLO-30 bucket, and `readTerrariumCrop`. It exists as its own module rather than
+ * inline in the build for the same reason the seams exist at all — the build's tests never want
+ * these, and these want tests the build's suite cannot give them.
+ *
+ * Nothing here writes an archive. The writer, the contour source and archive production are a
+ * separate increment.
+ */
+
+import { parseTileId } from "./coverage.mjs";
+import { parseBounds } from "./region.mjs";
+import { cogUrl, readTerrariumCrop } from "./source.mjs";
+
+/** Degrees per source tile, both axes — GLO-30 Public ships 1°×1° cells. */
+const TILE_DEGREES = 1;
+
+/**
+ * A range reader over `fetch`, which checks that it was **given the interval it asked for**.
+ *
+ * A status alone proves nothing about which bytes arrived, and every way of being wrong here
+ * decodes into plausible terrain rather than into an error:
+ *
+ * - **200 is refused, not accepted.** A server or proxy that does not honour `Range` answers 200
+ *   with the *whole* 42 MB object. The header parse would then succeed against byte 0 — it is
+ *   the same object — and a tile read would take its bytes from the file's start.
+ * - **`Content-Range`'s first byte must be the one requested.** A 206 carrying a correctly sized
+ *   window from the wrong offset is the worst case available: the length checks out, `inflate`
+ *   succeeds because another internal tile is also a valid deflate stream, and the result is a
+ *   real piece of terrain in the wrong place.
+ * - **The body's length must match what `Content-Range` claims.** Checked against the header
+ *   rather than against the request, for the reason below.
+ *
+ * A range may legitimately be answered **short at the end of the object**: HTTP returns the
+ * intersection of the request with what exists, so a 64 KB header window over a smaller object
+ * comes back smaller. That is accepted only when the response says the object ended there — a
+ * server truncating mid-object is refused, since a header window stopping early would be parsed
+ * as a divergent format rather than recognised as a short read.
+ *
+ * Throws on all of these, because every caller of *this* wants the bytes and has no use for a
+ * status. That is the opposite of what {@link createProbe} needs, and the two are deliberately
+ * separate functions rather than one with a flag — see there.
+ *
+ * @param {typeof globalThis.fetch} [fetchImpl]
+ * @returns {(url: string, start: number, endInclusive: number) => Promise<Uint8Array>}
+ */
+export function rangeFetcher(fetchImpl = globalThis.fetch) {
+  return async (url, start, endInclusive) => {
+    const requested = `bytes=${String(start)}-${String(endInclusive)}`;
+    const where = `GET ${url} ${requested}`;
+    const response = await fetchImpl(url, { headers: { Range: requested } });
+    if (response.status !== 206) {
+      throw new Error(
+        `${where}: expected 206 Partial Content, got HTTP ${String(response.status)} — a range ` +
+          `that is not honoured returns the whole object, whose bytes are not the ones asked for`,
+      );
+    }
+
+    // RFC 9110 form: `bytes <first>-<last>/<complete-length>`.
+    const contentRange = response.headers.get("Content-Range");
+    const parsed = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange ?? "");
+    if (parsed === null) {
+      throw new Error(`${where}: answered Content-Range "${String(contentRange)}", unparseable`);
+    }
+    const first = Number(parsed[1]);
+    const last = Number(parsed[2]);
+    const total = Number(parsed[3]);
+    if (first !== start) {
+      throw new Error(
+        `${where}: served from byte ${String(first)}, not ${String(start)} — the right number of ` +
+          `bytes from the wrong offset decodes as valid data in the wrong place`,
+      );
+    }
+    if (last > endInclusive) {
+      throw new Error(
+        `${where}: answered bytes ${String(first)}-${String(last)}, beyond the range`,
+      );
+    }
+    if (last < endInclusive && last !== total - 1) {
+      throw new Error(
+        `${where}: answered bytes ${String(first)}-${String(last)} of ${String(total)}, stopping ` +
+          `short of both the range and the object`,
+      );
+    }
+
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const claimed = last - first + 1;
+    if (bytes.length !== claimed) {
+      throw new Error(
+        `${where}: Content-Range claims ${String(claimed)} bytes, body carries ${String(bytes.length)}`,
+      );
+    }
+    return bytes;
+  };
+}
+
+/**
+ * The coverage probe: one cheap range request per tile, reporting its **status**.
+ *
+ * **It must not reuse {@link rangeFetcher}**, and this is the whole reason the two exist
+ * separately. A reader that throws on a non-2xx turns a 404 into a thrown error, and
+ * `assertCoverage` classifies a thrown probe as `unreachable` — so an unpublished tile would
+ * arrive as a transport failure, telling a reader to retry a tile that will never exist and
+ * hiding the one case the coverage snapshot exists to name. The status has to survive as data.
+ *
+ * A genuine transport failure still throws, from `fetch` itself, and is classified as such.
+ *
+ * @param {typeof globalThis.fetch} [fetchImpl]
+ * @param {string} [bucketUrl]
+ * @returns {(tileId: string) => Promise<{ status: number }>}
+ */
+export function createProbe(fetchImpl = globalThis.fetch, bucketUrl) {
+  return async (tileId) => {
+    // One byte, because presence is the question. A present object answers 206 to this and a
+    // withheld one answers 404; `assertCoverage` accepts 200 and 206 and nothing else.
+    const response = await fetchImpl(cogUrl(tileId, bucketUrl), {
+      headers: { Range: "bytes=0-0" },
+    });
+    // Release the body rather than walking away from it. Only the status is wanted, but an
+    // unread body keeps its connection checked out of the agent's pool; over one probe per
+    // required tile, serially, that is how a build ends up waiting on connection reuse for
+    // bytes nobody will ever read. `body` is null when there is nothing to release.
+    if (response.body !== null && response.body !== undefined) await response.body.cancel();
+    return { status: response.status };
+  };
+}
+
+/**
+ * The part of a cut that falls inside one source tile.
+ *
+ * A cut spanning two cells cannot hand its full bounds to either of them — the crop would start
+ * before the raster's first column and be rejected as outside the tile. Each tile is asked only
+ * for its own share.
+ *
+ * The shares meet exactly, and that is a property of the **pair** rather than of either clip:
+ * `cropWindow` is half-open at its east and south edges, so the column exactly on a shared
+ * meridian belongs to the tile east of it and to that tile only. No sample is read twice and
+ * none is missed. `requiredTiles` uses the same half-open rule for deciding which cells a cut
+ * needs, which is what keeps the two from disagreeing.
+ *
+ * @param {[west: number, south: number, east: number, north: number]} bounds
+ * @param {string} tileId
+ * @returns {[west: number, south: number, east: number, north: number]}
+ */
+export function clipBoundsToTile(bounds, tileId) {
+  const [west, south, east, north] = parseBounds(bounds, "cut bounds");
+  const cell = parseTileId(tileId);
+  return [
+    Math.max(west, cell.west),
+    Math.max(south, cell.south),
+    Math.min(east, cell.west + TILE_DEGREES),
+    Math.min(north, cell.south + TILE_DEGREES),
+  ];
+}
+
+/**
+ * Bind the build's fetching seams to the real source.
+ *
+ * @param {{
+ *   bounds: [west: number, south: number, east: number, north: number],
+ *   fetchImpl?: typeof globalThis.fetch,
+ *   bucketUrl?: string,
+ * }} options
+ * @returns {{
+ *   probe: (tileId: string) => Promise<{ status: number }>,
+ *   readTile: (tileId: string) => Promise<Iterable<[number, number, number]>>,
+ * }}
+ */
+export function createSourceDeps({ bounds, fetchImpl = globalThis.fetch, bucketUrl }) {
+  const fetchRange = rangeFetcher(fetchImpl);
+  return {
+    probe: createProbe(fetchImpl, bucketUrl),
+    readTile: async (tileId) => {
+      // Each tile is read for **its own** clipped share. Reading the cut's first tile every
+      // time would decode successfully and report every other tile's name against the first
+      // tile's samples.
+      const crop = await readTerrariumCrop(tileId, clipBoundsToTile(bounds, tileId), {
+        fetchRange,
+        bucketUrl,
+      });
+      return pixelTriples(crop.rgb);
+    },
+  };
+}
+
+/**
+ * The build's `readTile` seam yields `[r, g, b]` per sample; the reader produces one flat
+ * buffer. Adapted here rather than by changing either side: the seam's shape is what the floor
+ * check consumes, and the flat buffer is what a writer will want.
+ *
+ * @param {Uint8Array} rgb
+ * @returns {Iterable<[number, number, number]>}
+ */
+function* pixelTriples(rgb) {
+  for (let i = 0; i < rgb.length; i += 3) yield [rgb[i], rgb[i + 1], rgb[i + 2]];
+}

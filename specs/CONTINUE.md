@@ -19,8 +19,11 @@ impression of overall progress. Keep them separate:
 3. discharged end-to-end (run against real data)
 4. remaining scope
 
-As of the last session, **nothing is at level 3.** The orchestrator has never touched a network
-or a filesystem; every integration test drives it through injected fakes.
+As of the last session, **nothing is at level 3.** The orchestrator's seams are now bound to the
+real source and a scratchpad run has driven it against S3 and a real COG — so "it has never
+touched a network" is no longer the reason. The reason is narrower and unchanged in effect: **no
+committed path has produced a real archive**, the archive stage is still a fake writer, and every
+suite drives the build through injected fakes.
 
 ---
 
@@ -130,10 +133,11 @@ working from bypassed, and assert *that* — not the absence of an alarm.
    evaluated (both bars pass; Bar 2 independently adjudicated) but **not adopted**.
 2. Confirm the PMTiles writer (`s2-pmtiles`) at fixture scale with real raster payloads. This is
    the only remaining item that can still change the shape rather than fill it in.
-3. ~~A real tile reader.~~ **Built** — `scripts/fixture/source.mjs` range-reads a GLO-30 COG,
-   crops it and terrarium-encodes it, with no GeoTIFF dependency (`node:zlib` plus predictor 3).
-   It has decoded the real object and reproduces the recorded crop control. It is **not wired
-   behind `readTile`**, so it moves no status row. Wiring it is what remains.
+3. ~~A real tile reader, and wiring it in.~~ **Done.** `scripts/fixture/source.mjs` range-reads a
+   GLO-30 COG with no GeoTIFF dependency; `scripts/fixture/deps.mjs` binds it and a real S3 probe
+   behind the build's seams, which are now async. A scratchpad run drives the assembled build
+   against real inputs. It still moves **no status row**: the archive stage is a fake writer,
+   nothing is written, and no committed path reproduces the run.
 4. Write the contour source into the build.
 5. **Produce an actual archive** — the hinge: it is what can move any status row off "no".
 6. Measure archive size (ADR-0024 criterion 6 requires measured, not calculated).

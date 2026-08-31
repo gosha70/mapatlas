@@ -40,6 +40,13 @@ import { decodeElevation } from "./terrarium.mjs";
  * injected, so the assembled ordering is testable without a network — which matters because the
  * properties worth testing here are the ones that live *between* the checks rather than inside
  * any one of them.
+ *
+ * **The build is async because two of those seams really fetch.** The probe is an HTTP request
+ * and the reader is a range read, so every stage is awaited. A dropped `await` is the failure
+ * mode this shape introduces, and it is quiet in a specific way: the value flowing on is a
+ * pending promise rather than a result, so the build continues and fails somewhere else, or
+ * — worse — a rejection escapes the `try` that would have named the stage it came from.
+ * `scripts/fixture/deps.mjs` binds the real implementations behind these seams.
  */
 
 /** The stages, in the order they run. Exported so a test asserts the order rather than assuming it. */
@@ -71,14 +78,21 @@ export class BuildError extends Error {
 }
 
 /**
+ * Run one stage, labelling anything it throws — or rejects with — as that stage's failure.
+ *
+ * `return await work()` rather than `return work()`, and the difference is the whole point: the
+ * bare return settles the promise *outside* this `try`, so an async stage's rejection escapes
+ * unlabelled and every `error.stage` assertion in the suite reads `undefined`. It is the one
+ * place where the redundant-looking `await` is load-bearing.
+ *
  * @param {string} stage
- * @param {() => T} work
- * @returns {T}
+ * @param {() => T | Promise<T>} work
+ * @returns {Promise<T>}
  * @template T
  */
-function at(stage, work) {
+async function at(stage, work) {
   try {
-    return work();
+    return await work();
   } catch (error) {
     throw new BuildError(stage, error);
   }
@@ -92,8 +106,8 @@ function at(stage, work) {
  *   readText: (path: string) => string,
  *   readJson: (path: string) => unknown,
  *   io: object,
- *   probe: (tileId: string) => { status: number },
- *   readTile: (tileId: string) => Iterable<[number, number, number]>,
+ *   probe: (tileId: string) => { status: number } | Promise<{ status: number }>,
+ *   readTile: (tileId: string) => Iterable<[number, number, number]> | Promise<Iterable<[number, number, number]>>,
  *   writeArchive: (path: string, tiles: string[], licenceText: string, attribution: Record<string, string>) => { entries: () => Iterable<{ path: string, text: string }> },
  *   finaliseArchive: (from: string, to: string) => void,
  *   discardArchive: (path: string) => void,
@@ -102,16 +116,18 @@ function at(stage, work) {
  *
  * `discardArchive` must tolerate a path that was never created: it is called whenever the
  * archive stage fails, including when the writer itself threw before producing anything.
+ *
+ * @returns {Promise<{ roles: string[], distributable: boolean, outputPath: string, region: string, tiles: string[], lowest: object }>}
  */
-export function runBuild(paths, deps, options = {}) {
+export async function runBuild(paths, deps, options = {}) {
   const distributable = options.distributable ?? true;
   let licenceText = "";
   let attribution = {};
   let roles = [];
   if (distributable) {
-    licenceText = at("licence", () => deps.readText(paths.licencePath));
-    attribution = at("licence", () => deps.readJson(paths.attributionPath));
-    roles = at("licence", () =>
+    licenceText = await at("licence", () => deps.readText(paths.licencePath));
+    attribution = await at("licence", () => deps.readJson(paths.attributionPath));
+    roles = await at("licence", () =>
       assertStringsBackedByLicence(
         /** @type {Record<string, string>} */ (attribution),
         licenceText,
@@ -123,11 +139,11 @@ export function runBuild(paths, deps, options = {}) {
   // `parseRegionDeclaration` rather than `loadRegionDeclaration`: the latter reads the file
   // itself, which would put I/O inside a stage this module promises to keep injectable. Reading
   // here and parsing there also means the build has exactly one place that touches the disk.
-  const declaration = at("region", () =>
+  const declaration = await at("region", () =>
     parseRegionDeclaration(deps.readJson(paths.regionPath), paths.regionPath),
   );
 
-  const snapshot = at("snapshot", () => {
+  const snapshot = await at("snapshot", () => {
     const loaded = loadCoverageSnapshot(paths.snapshotPath, deps.io);
     assertSnapshotFresh(loaded, deps.now());
     return loaded;
@@ -138,16 +154,12 @@ export function runBuild(paths, deps, options = {}) {
   // `BuildError` keeps the cause — but nothing between the probe and the classifier may catch a
   // `CoverageError` and recast it as a generic gap, or the three collapse into "the build
   // failed" exactly where the distinction stops being visible.
-  const tiles = at("coverage", () => assertCoverage(declaration.bounds, deps.probe, snapshot));
+  const tiles = await at("coverage", () =>
+    assertCoverage(declaration.bounds, deps.probe, snapshot),
+  );
 
-  const lowest = at("elevation", () =>
-    assertMinimumElevation(
-      declaration,
-      tiles.map((tileId) => ({
-        tileId,
-        elevationsM: decodeTile(deps.readTile(tileId)),
-      })),
-    ),
+  const lowest = await at("elevation", () =>
+    assertMinimumElevation(declaration, elevationTiles(tiles, deps.readTile)),
   );
 
   // Written to a partial path and only named as the archive once it has passed. A build that
@@ -164,15 +176,17 @@ export function runBuild(paths, deps, options = {}) {
     // a failing check does. The `.partial` suffix already keeps `/lab` and the browser scenario
     // from picking it up, so this is tidiness rather than safety — but a leftover whose only
     // protection is a naming convention is one rename away from being a real one.
-    const archive = at("archive", () =>
+    const archive = await at("archive", () =>
       deps.writeArchive(partialPath, tiles, licenceText, attribution),
     );
     if (distributable) {
-      at("archive", () => assertArchiveCarriesLicence(archive, licenceText, LICENCE_ENTRY_PATH));
+      await at("archive", () =>
+        assertArchiveCarriesLicence(archive, licenceText, LICENCE_ENTRY_PATH),
+      );
       // The second half of obligation 1: the strings were checked against the document above,
       // and this is where they are confirmed to have reached the archive rather than stopping
       // at the validation.
-      at("archive", () =>
+      await at("archive", () =>
         assertArchiveCarriesAttribution(
           archive,
           /** @type {Record<string, string>} */ (attribution),
@@ -180,15 +194,53 @@ export function runBuild(paths, deps, options = {}) {
         ),
       );
     } else {
-      at("archive", () => assertNotForDistribution(archive));
+      await at("archive", () => assertNotForDistribution(archive));
     }
-    at("archive", () => deps.finaliseArchive(partialPath, outputPath));
+    await at("archive", () => deps.finaliseArchive(partialPath, outputPath));
   } catch (error) {
-    deps.discardArchive(partialPath);
+    try {
+      await deps.discardArchive(partialPath);
+    } catch (cleanupError) {
+      // A cleanup that fails must not become the story. `discardArchive` is `fs.rm` on a path a
+      // failing build just wrote, so rejecting is entirely plausible — and letting it propagate
+      // raw would replace "the archive carries no LICENSE" with "permission denied", losing both
+      // the reason the build failed and the stage that names it. Both are kept: the stage stands,
+      // and the cause becomes the pair, original first.
+      throw new BuildError(
+        error.stage,
+        new AggregateError(
+          [error.cause, cleanupError],
+          `the ${error.stage} stage failed and the partial at ${partialPath} could not be discarded`,
+        ),
+      );
+    }
     throw error;
   }
 
   return { roles, distributable, outputPath, region: declaration.id, tiles, lowest };
+}
+
+/**
+ * Read and decode each required tile, one at a time.
+ *
+ * An async generator rather than a `map`: `map` would start every read at once and hold every
+ * crop, which is the opposite of what `assertMinimumElevation` accepts an iterable *for*. Here
+ * a tile is fetched only when the floor check asks for the next one, so a cut over many source
+ * tiles holds one crop at a time.
+ *
+ * Each tile is read by **its own id**. That reads as too obvious to state until the loop is
+ * written with an index, at which point reading `tiles[0]` every time produces a build that
+ * checks one tile's samples as many times as there are tiles and reports the others' names
+ * against them.
+ *
+ * @param {string[]} tiles
+ * @param {(tileId: string) => Iterable<[number, number, number]> | Promise<Iterable<[number, number, number]>>} readTile
+ * @returns {AsyncIterable<{ tileId: string, elevationsM: Iterable<number> }>}
+ */
+async function* elevationTiles(tiles, readTile) {
+  for (const tileId of tiles) {
+    yield { tileId, elevationsM: decodeTile(await readTile(tileId)) };
+  }
 }
 
 /**

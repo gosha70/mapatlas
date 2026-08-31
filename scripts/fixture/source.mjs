@@ -14,9 +14,11 @@
  * format change fails loudly here instead of being accommodated into a wrong surface.
  *
  * **Range reads, not whole objects.** The object is 42 MB; a cut of the declared region touches
- * two of its sixteen internal tiles, so a build reads a header window plus ~3.8 MB. The 206 that
- * a range read answers is also what makes coverage free (`coverage.mjs`) — it is the same
- * request, not a second one.
+ * two of its sixteen internal tiles, so a build reads a header window plus ~3.8 MB across three
+ * requests. Coverage is **not** discovered for free along the way: `deps.mjs` issues a separate
+ * one-byte probe per required tile, because a reader that throws on a 404 would destroy the
+ * distinction between an unpublished tile and a broken fetch. The probe is a range GET like
+ * these, which is why 206 is a presence status — not because it is the same request.
  *
  * Nothing here fetches directly: `fetchRange` is injected, so the whole reader is testable
  * against a constructed COG with no network.
@@ -300,9 +302,19 @@ export function undoFloatPredictor(bytes, rowBytes) {
       }
     }
   }
-  // Copied rather than viewed: `bytes` is a subarray of a fetched buffer whose byteOffset need
-  // not be a multiple of four, and `Float32Array`'s constructor requires that alignment.
-  return new Float32Array(bytes.slice().buffer);
+  // Copied into an ArrayBuffer this function owns, because `bytes` is a view: it starts at some
+  // byteOffset inside a larger buffer, and `Float32Array`'s constructor both requires four-byte
+  // alignment and ignores the view's offset when handed a raw `.buffer`.
+  //
+  // **Not `bytes.slice()`.** `inflateSync` returns a Buffer, and `Buffer.prototype.slice` is a
+  // view rather than a copy — the one method on Buffer that disagrees with its `Uint8Array`
+  // namesake. `bytes.slice().buffer` is therefore the whole allocation pool, and the floats get
+  // read from the pool's origin instead of from this tile. It decoded correctly wherever the
+  // buffer happened to land at offset zero, which is what a large unpooled allocation does, and
+  // returned another tile's bytes as entirely plausible terrain where it did not.
+  const copy = new Uint8Array(bytes.length);
+  copy.set(bytes);
+  return new Float32Array(copy.buffer);
 }
 
 /**

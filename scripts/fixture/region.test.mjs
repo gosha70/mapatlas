@@ -18,15 +18,19 @@ const REGION = {
   bounds: [6.825, 45.815, 6.905, 45.865],
   minElevationM: 2500,
   minElevationJustification: "The declared threshold is above the regional treeline.",
+  minZoom: 11,
+  maxZoom: 12,
 };
 
 describe("the checked-in region declaration", () => {
-  it("pins the selected bounds, floor, and the reason for that floor", () => {
+  it("pins the selected bounds, floor, zoom range, and the reasons for them", () => {
     expect(loadRegionDeclaration(REGION_PATH)).toEqual({
       id: "mont-blanc-summit",
       bounds: [6.825, 45.815, 6.905, 45.865],
       minElevationM: 2500,
       minElevationJustification: expect.stringContaining("2200–2350 m"),
+      minZoom: 11,
+      maxZoom: 12,
     });
   });
 });
@@ -38,6 +42,9 @@ describe("region declaration validation", () => {
     { value: { ...REGION, bounds: [6, 45, 6] }, problem: "bounds" },
     { value: { ...REGION, bounds: [7, 45, 6, 46] }, problem: "west must precede east" },
     { value: { ...REGION, minElevationM: Number.NaN }, problem: "minElevationM" },
+    { value: { ...REGION, minZoom: -1 }, problem: "minZoom must be an integer" },
+    { value: { ...REGION, maxZoom: 1.5 }, problem: "maxZoom must be an integer" },
+    { value: { ...REGION, minZoom: 12, maxZoom: 11 }, problem: "precedes minZoom" },
     {
       value: { ...REGION, minElevationJustification: "   " },
       problem: "minElevationJustification",

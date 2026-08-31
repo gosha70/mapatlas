@@ -2,9 +2,12 @@
 import { describe, expect, it } from "vitest";
 
 import { BUILD_STAGES, BuildError, runBuild } from "./build.mjs";
-import { CoverageError } from "./coverage.mjs";
+import { CoverageError, requiredTiles } from "./coverage.mjs";
+import { clipBoundsToTile } from "./deps.mjs";
 import { LICENCE_ENTRY_PATH } from "./licence.mjs";
+import { productionEnvelope, tilesInRange } from "./mercator.mjs";
 import { ElevationFloorError } from "./region.mjs";
+import { SOURCE_SAMPLE_SPACING_DEG as SPACING } from "./source.mjs";
 import { encodeElevation } from "./terrarium.mjs";
 
 const LICENCE = "Produced under terms. No liability. No endorsement. Recipients are bound.";
@@ -14,21 +17,40 @@ const ATTRIBUTION = {
   noEndorsement: "No endorsement.",
   downstreamBinding: "Recipients are bound.",
 };
+// Small enough that the pyramid is a couple of tiles, so every case here renders real rasters
+// without the suite becoming a benchmark.
 const REGION = {
   id: "test-region",
-  bounds: [6.5, 45.5, 6.6, 45.6],
+  bounds: [6.5, 45.5, 6.51, 45.51],
   minElevationM: 2500,
   minElevationJustification: "above the reported treeline",
+  minZoom: 14,
+  maxZoom: 14,
 };
 /**
- * A cut spanning two source cells.
+ * A cut lying **wholly west of 7°E** whose production envelope does not.
  *
- * Every other case here uses a single-tile region, and a single tile cannot observe the two
- * mistakes that matter most in the read loop: reading only the first tile, and reading the
- * first tile's bytes under every tile's name. Both produce a build that passes.
+ * Its single z14 tile spans 6.98730..7.00928, so the complete raster reaches past the meridian
+ * even though the declared region stops short of it. That gap between "what was asked for" and
+ * "what must be read" is the entire reason coverage moved off the declaration, and bounds that
+ * straddled 7°E themselves — the first version of this fixture — could not show it: coverage
+ * would have admitted both cells either way.
  */
-const REGION_TWO_TILES = { ...REGION, bounds: [6.5, 45.5, 7.5, 45.6] };
-const TWO_TILES = ["N45E006", "N45E007"];
+const SEAM_REGION = { ...REGION, bounds: [6.99, 45.5, 6.995, 45.51] };
+/**
+ * A cut that **straddles** 7°E, so both cells contribute samples inside the declared region.
+ *
+ * Distinct from `SEAM_REGION` on purpose. That one proves the envelope pulls in a cell the
+ * region never touches; this one proves the floor is judged across both cells when both are
+ * genuinely part of the region. A cell outside the region contributes nothing to the floor,
+ * which is correct and is why the two fixtures cannot be the same.
+ */
+const STRADDLE_REGION = { ...REGION, bounds: [6.995, 45.5, 7.005, 45.51] };
+
+/** Computed, not written in, so the fixture cannot drift from what the envelope actually needs. */
+const SEAM_CELLS = requiredTiles(
+  productionEnvelope(SEAM_REGION.bounds, SEAM_REGION.minZoom, SEAM_REGION.maxZoom, SPACING),
+);
 
 const PATHS = {
   regionPath: "region.json",
@@ -38,14 +60,59 @@ const PATHS = {
   archivePath: "out.pmtiles",
 };
 
-/** A tile of pixels that decode to the given metres — the codec and the floor, actually wired. */
-const tileAt = (...metres) => metres.map((m) => encodeElevation(m));
+/**
+ * A synthetic source crop for one cell's share of a region's production envelope.
+ *
+ * Laid out on the **global** sample lattice — indices are `lon · 3600`, not offsets from the
+ * crop — so adjacent cells' crops abut exactly the way GLO-30's do and `stitchSurface` can join
+ * them. Half-open at east and south, matching `cropWindow`, so no sample is claimed twice.
+ */
+function cropFor(tileId, region, elevationAt) {
+  const envelope = productionEnvelope(region.bounds, region.minZoom, region.maxZoom, SPACING);
+  const [west, south, east, north] = clipBoundsToTile(envelope, tileId);
+  const first = (v) => Math.ceil(v / SPACING - 1e-6);
+  const col0 = first(west);
+  const cols = first(east) - col0;
+  const row0 = first(-north);
+  const rows = first(-south) - row0;
+  const rgb = new Uint8Array(cols * rows * 3);
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < cols; c += 1) {
+      const [red, green, blue] = encodeElevation(
+        elevationAt((col0 + c) * SPACING, -(row0 + r) * SPACING),
+      );
+      const i = (r * cols + c) * 3;
+      rgb[i] = red;
+      rgb[i + 1] = green;
+      rgb[i + 2] = blue;
+    }
+  }
+  return {
+    width: cols,
+    height: rows,
+    west: col0 * SPACING,
+    north: -row0 * SPACING,
+    pixelScaleDeg: SPACING,
+    rgb,
+  };
+}
+
+/** A gentle slope, well clear of the floor. */
+const slope = (lon, lat) => 3000 + (lon - 6.5) * 400 + (lat - 45.5) * 300;
 
 function harness(overrides = {}) {
-  const calls = { readTile: [], probe: [], wrote: [], finalised: [], discarded: [] };
+  const calls = {
+    readTile: [],
+    readBounds: [],
+    probe: [],
+    wrote: [],
+    finalised: [],
+    discarded: [],
+    archived: [],
+  };
   const files = {
     "LICENCE.txt": LICENCE,
-    "region.json": JSON.stringify(REGION),
+    "region.json": JSON.stringify(overrides.region ?? REGION),
     "attribution.json": JSON.stringify(ATTRIBUTION),
     ...overrides.files,
   };
@@ -62,21 +129,27 @@ function harness(overrides = {}) {
       calls.probe.push(id);
       return (overrides.probe ?? (() => ({ status: 200 })))(id);
     },
-    readTile: async (id) => {
+    readTile: async (id, bounds) => {
       calls.readTile.push(id);
-      return (overrides.readTile ?? (() => tileAt(2600, 2700)))(id);
+      calls.readBounds.push(bounds);
+      const region = overrides.region ?? REGION;
+      return (overrides.readTile ?? ((tileId) => cropFor(tileId, region, slope)))(id);
     },
-    writeArchive: (path, tiles, licenceText, attribution) => {
+    writeArchive: (path, tiles, meta) => {
       calls.wrote.push(path);
+      calls.archived.push({ path, tiles, meta });
       return (
         overrides.writeArchive ??
-        ((_p, _t, text, declared) => ({
+        ((_p, _t, m) => ({
           entries: () => [
-            { path: "LICENSE", text },
-            { path: "metadata.json", text: Object.values(declared).join(" ") },
+            { path: "LICENSE", text: m.licenceText },
+            {
+              path: "metadata.json",
+              text: JSON.stringify({ ...m, licenceText: undefined }),
+            },
           ],
         }))
-      )(path, tiles, licenceText, attribution);
+      )(path, tiles, meta);
     },
     finaliseArchive: (from, to) => calls.finalised.push([from, to]),
     discardArchive: (path) => calls.discarded.push(path),
@@ -126,6 +199,7 @@ describe("the order of the checks", () => {
       "snapshot",
       "coverage",
       "elevation",
+      "tiles",
       "archive",
     ]);
   });
@@ -136,8 +210,10 @@ describe("the order of the checks", () => {
 
     const report = await runBuild(PATHS, deps);
 
-    expect(report.tiles).toEqual(["N45E006"]);
-    expect(report.lowest).toEqual({ elevationM: 2600, tileId: "N45E006", sampleIndex: 0 });
+    expect(report.sourceCells).toEqual(["N45E006"]);
+    expect(report.tileCount).toBeGreaterThan(0);
+    expect(report.lowest.tileId).toBe("N45E006");
+    expect(report.lowest.elevationM).toBeGreaterThanOrEqual(REGION.minElevationM);
     // Written partial, then named as the archive only once every check has passed.
     expect(calls.wrote).toEqual(["out.pmtiles.partial"]);
     expect(calls.finalised).toEqual([["out.pmtiles.partial", "out.pmtiles"]]);
@@ -172,7 +248,7 @@ describe("the order of the checks", () => {
   });
 
   it("writes nothing when the floor is breached", async () => {
-    const { deps, calls } = harness({ readTile: () => tileAt(2600, 2400) });
+    const { deps, calls } = harness({ readTile: (id) => cropFor(id, REGION, () => 2400) });
     withSnapshot(deps, ["N45E006"]);
 
     const error = await catchBuild(() => runBuild(PATHS, deps));
@@ -182,32 +258,94 @@ describe("the order of the checks", () => {
   });
 });
 
-describe("every declared tile is read, and read as itself", () => {
+describe("every source cell is read, and read as itself", () => {
   /** @param {object} overrides */
-  function twoTileHarness(overrides = {}) {
-    const { deps, calls } = harness({
-      ...overrides,
-      files: { "region.json": JSON.stringify(REGION_TWO_TILES), ...overrides.files },
-    });
-    withSnapshot(deps, TWO_TILES);
+  function seamHarness(overrides = {}) {
+    const { deps, calls } = harness({ ...overrides, region: SEAM_REGION });
+    withSnapshot(deps, SEAM_CELLS);
     return { deps, calls };
   }
 
-  it("reads each required tile once, by its own id, in the order coverage returned them", async () => {
-    const { deps, calls } = twoTileHarness();
+  it("requires both cells its envelope reaches, not only the one its bounds sit in", () => {
+    // The declared region lies wholly west of 7°E; its production envelope does not. This is
+    // the property the coverage move exists for.
+    expect(requiredTiles(SEAM_REGION.bounds)).toEqual(["N45E006"]);
+    expect(SEAM_CELLS).toEqual(["N45E006", "N45E007"]);
+  });
+
+  it("genuinely requires the second cell — a build fails at coverage without it", async () => {
+    // The other half of the mandatory property. The test above shows both cells are *read*;
+    // this shows the second is *admitted by coverage*, so it cannot be reached by a build that
+    // never checked it. The snapshot lists it, so its absence is classified `unexpected` — a
+    // released tile that has gone missing, not a region that was never viable.
+    const { deps, calls } = harness({
+      region: SEAM_REGION,
+      probe: (id) => ({ status: id === "N45E007" ? 404 : 206 }),
+    });
+    withSnapshot(deps, SEAM_CELLS);
+
+    const error = await catchBuild(() => runBuild(PATHS, deps));
+
+    expect(error.stage).toBe("coverage");
+    expect(error.cause.kind).toBe("unexpected");
+    expect(error.message).toContain("N45E007");
+    expect(calls.readTile).toEqual([]);
+  });
+
+  it("reads each cell against the envelope, not the declared region", async () => {
+    // Found by running the whole chain against real data, not by this suite: the reader was
+    // clipping each cell against the declaration while coverage admitted cells over the
+    // envelope. For a cell east of the declared region the two do not intersect, and the clip
+    // produced a degenerate box. The suite missed it because its fake computed the envelope
+    // itself instead of being told one — a harness agreeing with the code rather than checking
+    // it. This asserts the value that actually crosses the seam.
+    const { deps, calls } = harness({ region: SEAM_REGION });
+    withSnapshot(deps, SEAM_CELLS);
 
     const report = await runBuild(PATHS, deps);
 
-    expect(calls.readTile).toEqual(TWO_TILES);
-    expect(report.tiles).toEqual(TWO_TILES);
+    expect(calls.readBounds).toHaveLength(SEAM_CELLS.length);
+    for (const bounds of calls.readBounds) expect(bounds).toEqual(report.envelope);
+    expect(report.envelope[2]).toBeGreaterThan(SEAM_REGION.bounds[2]);
   });
 
-  it("fails on a floor breach that exists only in the second tile", async () => {
-    // The assertion that a first-tile-only read cannot survive. Reading N45E006 twice — or
-    // reading it once and stopping — sees nothing below the floor, and the build passes.
-    const { deps } = twoTileHarness({
-      readTile: (id) => (id === "N45E007" ? tileAt(2600, 2400) : tileAt(3000, 3100)),
+  it("sizes the envelope with the interpolation halo the source actually needs", async () => {
+    // `mercator.test.mjs` proves `productionEnvelope` adds a halo when asked; this proves the
+    // build asks. Passing zero is a plausible-looking call that leaves the outermost output
+    // pixels without a complete stencil — and whether that throws depends on where the tile
+    // footprint happens to fall on the source lattice, so it is exactly the kind of defect that
+    // works until the region moves.
+    const { deps } = harness({ region: SEAM_REGION });
+    withSnapshot(deps, SEAM_CELLS);
+
+    const report = await runBuild(PATHS, deps);
+
+    const bare = productionEnvelope(
+      SEAM_REGION.bounds,
+      SEAM_REGION.minZoom,
+      SEAM_REGION.maxZoom,
+      0,
+    );
+    expect(bare[0] - report.envelope[0]).toBeCloseTo(SPACING, 12);
+    expect(report.envelope[2] - bare[2]).toBeCloseTo(SPACING, 12);
+  });
+
+  it("reads each admitted cell once, by its own id, in the order coverage returned them", async () => {
+    const { deps, calls } = seamHarness();
+
+    const report = await runBuild(PATHS, deps);
+
+    expect(calls.readTile).toEqual(SEAM_CELLS);
+    expect(report.sourceCells).toEqual(SEAM_CELLS);
+  });
+
+  it("fails on a floor breach that exists only in the second cell", async () => {
+    // A first-cell-only read sees nothing below the floor and the build passes.
+    const { deps } = harness({
+      region: STRADDLE_REGION,
+      readTile: (id) => cropFor(id, STRADDLE_REGION, id === "N45E007" ? () => 2400 : () => 3000),
     });
+    withSnapshot(deps, SEAM_CELLS);
 
     const error = await catchBuild(() => runBuild(PATHS, deps));
 
@@ -216,35 +354,135 @@ describe("every declared tile is read, and read as itself", () => {
     expect(error.message).toContain("2400 m");
   });
 
-  it("attributes each tile's samples to that tile", async () => {
-    // The other half of the same mistake: reading the first tile's bytes under the second
-    // tile's name reports a correct-looking minimum against the wrong tile, which sends a
-    // reader to inspect a tile that never held the sample.
-    const { deps } = twoTileHarness({
-      readTile: (id) => (id === "N45E007" ? tileAt(3000, 2550) : tileAt(2900, 2800)),
+  it("attributes each cell's samples to that cell", async () => {
+    const { deps } = harness({
+      region: STRADDLE_REGION,
+      readTile: (id) => cropFor(id, STRADDLE_REGION, id === "N45E007" ? () => 2550 : () => 2900),
     });
+    withSnapshot(deps, SEAM_CELLS);
 
-    expect((await runBuild(PATHS, deps)).lowest).toEqual({
-      elevationM: 2550,
-      tileId: "N45E007",
-      sampleIndex: 1,
-    });
+    expect((await runBuild(PATHS, deps)).lowest.tileId).toBe("N45E007");
   });
 
-  it("reads one tile at a time rather than fetching the whole cut up front", async () => {
-    // The streaming property `assertMinimumElevation` accepts an iterable *for*. An eager
-    // `map` or `Promise.all` would read both tiles before the first is examined, so the second
-    // read happens even though the first tile already ended the build. Observable only because
-    // an empty tile fails *within* its own tile rather than after the full scan — a floor
-    // breach deliberately does not stop early, since the error must name the true lowest.
-    const { deps, calls } = twoTileHarness({
-      readTile: (id) => (id === "N45E006" ? [] : tileAt(3000)),
+  it("reads one cell at a time rather than fetching the whole cut up front", async () => {
+    // A read that fails on the first cell must stop there. An eager implementation — `map` into
+    // `Promise.all` — issues both reads before anything inspects the first, so the second cell
+    // appears in the log even though the build never got past the first.
+    const { deps, calls } = seamHarness({
+      readTile: (id) => {
+        if (id === "N45E006") throw new Error("range read failed");
+        return cropFor(id, SEAM_REGION, () => 3000);
+      },
     });
 
     const error = await catchBuild(() => runBuild(PATHS, deps));
 
-    expect(error.message).toContain("N45E006 contains no elevation samples");
+    expect(error.stage).toBe("elevation");
     expect(calls.readTile).toEqual(["N45E006"]);
+  });
+
+  it("judges the floor on the declared region, not on the envelope it had to read", async () => {
+    // The distinction the real run forced. The envelope reaches a tile's width past the region,
+    // which around a summit means valley floors — so a build that judged the envelope would
+    // fail on terrain it only read in order to complete the edge tiles. Here the out-of-region
+    // margin is far below the floor and the build must still succeed.
+    const region = SEAM_REGION;
+    const { deps } = harness({
+      region,
+      readTile: (id) =>
+        // Half a sample of slack on each side. A sample sitting exactly on the region's edge
+        // has its longitude reconstructed by multiplication, which lands a hair below the
+        // bound — so a strict predicate here marks an in-region sample as outside and the test
+        // fails on its own arithmetic rather than on the build's.
+        cropFor(id, region, (lon, lat) =>
+          lon >= region.bounds[0] - SPACING / 2 &&
+          lon < region.bounds[2] + SPACING / 2 &&
+          lat >= region.bounds[1] - SPACING / 2 &&
+          lat < region.bounds[3] + SPACING / 2
+            ? 3000
+            : 200,
+        ),
+    });
+    withSnapshot(deps, SEAM_CELLS);
+
+    const report = await runBuild(PATHS, deps);
+
+    expect(report.lowest.elevationM).toBeCloseTo(3000, 1);
+  });
+});
+
+describe("what the build hands the writer", () => {
+  it("advertises the declared region, not the production envelope it had to read", async () => {
+    // The envelope is how complete tiles were produced; the bounds are what a consumer asked
+    // for. Publishing the envelope would invite a renderer to request tiles outside the region,
+    // and those tiles do not exist in the archive.
+    const { deps, calls } = harness({ region: SEAM_REGION });
+    withSnapshot(deps, SEAM_CELLS);
+
+    const report = await runBuild(PATHS, deps);
+
+    const { meta } = calls.archived[0];
+    expect(meta.bounds).toEqual(SEAM_REGION.bounds);
+    expect(report.envelope[2]).toBeGreaterThan(7);
+    expect(meta.bounds[2]).toBeLessThan(7);
+    expect(meta.bounds[2]).toBeLessThan(report.envelope[2]);
+  });
+
+  it("produces every zoom the declaration asks for, not just one", async () => {
+    // A pyramid built from `minZoom` alone, or from `maxZoom` alone, is a plausible archive
+    // that silently lacks half its levels — and nothing downstream would notice until a
+    // renderer asked for the missing one.
+    const region = { ...REGION, minZoom: 13, maxZoom: 14 };
+    const { deps, calls } = harness({ region });
+    withSnapshot(deps, ["N45E006"]);
+
+    await runBuild(PATHS, deps);
+
+    const zooms = new Set(calls.archived[0].tiles.map((t) => t.z));
+    expect([...zooms].sort()).toEqual([13, 14]);
+  });
+
+  it("hands over every address in the pyramid, each exactly once", async () => {
+    const region = { ...REGION, minZoom: 13, maxZoom: 14 };
+    const { deps, calls } = harness({ region });
+    withSnapshot(deps, ["N45E006"]);
+
+    await runBuild(PATHS, deps);
+
+    const { tiles } = calls.archived[0];
+    const expected = [...tilesInRange(region.bounds, region.minZoom, region.maxZoom)];
+    expect(tiles.map(({ z, x, y }) => `${z}/${x}/${y}`).sort()).toEqual(
+      expected.map(({ z, x, y }) => `${z}/${x}/${y}`).sort(),
+    );
+    expect(new Set(tiles.map(({ z, x, y }) => `${z}/${x}/${y}`)).size).toBe(tiles.length);
+  });
+
+  it("refuses a source whose sample spacing is not the one the envelope was sized for", async () => {
+    // The halo is computed from a declared constant *before* any header is read, so a source at
+    // a finer grid makes it the wrong width — and a halo that is too small is a build sampling
+    // outside the envelope coverage admitted. Nothing else in this suite varies the spacing, so
+    // without this the assertion was unobservable and could be deleted with the suite green.
+    const { deps } = harness({
+      readTile: (id) => ({ ...cropFor(id, REGION, slope), pixelScaleDeg: SPACING / 2 }),
+    });
+    withSnapshot(deps, ["N45E006"]);
+
+    const error = await catchBuild(() => runBuild(PATHS, deps));
+
+    expect(error.stage).toBe("tiles");
+    expect(error.message).toContain("production envelope");
+  });
+
+  it("hands over real PNG rasters, not empty or placeholder payloads", async () => {
+    const { deps, calls } = harness();
+    withSnapshot(deps, ["N45E006"]);
+
+    await runBuild(PATHS, deps);
+
+    for (const tile of calls.archived[0].tiles) {
+      expect([...tile.bytes.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+      expect(tile.bytes.length).toBeGreaterThan(1000);
+    }
   });
 });
 
@@ -343,7 +581,7 @@ describe("a seam that rejects is still that stage's failure", () => {
     const { deps } = harness({ probe: () => Promise.resolve({ status: 206 }) });
     withSnapshot(deps, ["N45E006"]);
 
-    await expect(runBuild(PATHS, deps)).resolves.toMatchObject({ tiles: ["N45E006"] });
+    await expect(runBuild(PATHS, deps)).resolves.toMatchObject({ sourceCells: ["N45E006"] });
   });
 });
 
@@ -417,14 +655,14 @@ describe("the codec and the floor are actually wired together", () => {
   // to the floor — is invisible until here. RGB(128,0,0) is sea level, so undecoded bytes
   // would compare as ~128 m and breach a 2,500 m floor with a nonsense number.
   it("compares decoded metres against the declared floor, not raw channel values", async () => {
-    const { deps } = harness({ readTile: () => tileAt(2600, 3100, 2550) });
+    const { deps } = harness({ readTile: (id) => cropFor(id, REGION, () => 2550) });
     withSnapshot(deps, ["N45E006"]);
 
-    expect((await runBuild(PATHS, deps)).lowest.elevationM).toBe(2550);
+    expect((await runBuild(PATHS, deps)).lowest.elevationM).toBeCloseTo(2550, 2);
   });
 
   it("reports the breaching elevation in metres, so the failure is readable", async () => {
-    const { deps } = harness({ readTile: () => tileAt(2600, 2412.5) });
+    const { deps } = harness({ readTile: (id) => cropFor(id, REGION, () => 2412.5) });
     withSnapshot(deps, ["N45E006"]);
 
     const error = await catchBuild(() => runBuild(PATHS, deps));
@@ -496,7 +734,7 @@ describe("the archive must carry what it was built under", () => {
     // is checked against the licence and then dropped, leaving recipients no attribution while
     // every earlier check passes. Only an assertion over what the archive *emits* catches it.
     const { deps } = harness({
-      writeArchive: (_p, _t, text) => ({ entries: () => [{ path: "LICENSE", text }] }),
+      writeArchive: (_p, _t, m) => ({ entries: () => [{ path: "LICENSE", text: m.licenceText }] }),
     });
     withSnapshot(deps, ["N45E006"]);
 
@@ -510,12 +748,12 @@ describe("the archive must carry what it was built under", () => {
   it("hands the writer the attribution as well as the licence", async () => {
     let received;
     const { deps } = harness({
-      writeArchive: (_p, _t, text, declared) => {
-        received = declared;
+      writeArchive: (_p, _t, m) => {
+        received = m.attribution;
         return {
           entries: () => [
-            { path: "LICENSE", text },
-            { path: "meta", text: Object.values(declared).join(" ") },
+            { path: "LICENSE", text: m.licenceText },
+            { path: "meta", text: Object.values(m.attribution).join(" ") },
           ],
         };
       },
@@ -563,10 +801,10 @@ describe("the archive must carry what it was built under", () => {
     // entry would re-enter the scanned set and every declared string would be found inside it.
     const paths = [];
     const { deps } = harness({
-      writeArchive: (_p, _t, text, declared) => ({
+      writeArchive: (_p, _t, m) => ({
         entries: () => [
-          { path: LICENCE_ENTRY_PATH, text },
-          { path: "meta", text: Object.values(declared).join(" ") },
+          { path: LICENCE_ENTRY_PATH, text: m.licenceText },
+          { path: "meta", text: Object.values(m.attribution).join(" ") },
         ],
       }),
       deps: {

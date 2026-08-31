@@ -30,6 +30,17 @@ import { parseTileId } from "./coverage.mjs";
 import { parseBounds } from "./region.mjs";
 import { encodeElevation } from "./terrarium.mjs";
 
+/**
+ * GLO-30's sample spacing, one arcsecond.
+ *
+ * Declared rather than discovered because the production envelope — which decides *which* source
+ * cells a build must cover — has to be computed before any header is read. It is checked against
+ * every crop's actual header at read time, so the assumption is verified rather than trusted: a
+ * source that changed to a finer grid would make the interpolation halo too small, and a halo
+ * that is too small produces a build that reads outside its own envelope.
+ */
+export const SOURCE_SAMPLE_SPACING_DEG = 1 / 3600;
+
 /** The public mirror the release is read from (ADR-0024, criterion 7). */
 export const COG_BUCKET_URL = "https://copernicus-dem-30m.s3.amazonaws.com";
 

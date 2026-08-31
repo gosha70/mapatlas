@@ -2,9 +2,14 @@
 import { describe, expect, it } from "vitest";
 
 import { buildCog } from "./cog-fixture.mjs";
-import { clipBoundsToTile, createProbe, createSourceDeps, rangeFetcher } from "./deps.mjs";
+import {
+  clipBoundsToTile,
+  createProbe,
+  createSourceDeps,
+  elevationsOf,
+  rangeFetcher,
+} from "./deps.mjs";
 import { cropWindow } from "./source.mjs";
-import { decodeElevation } from "./terrarium.mjs";
 
 const NO_HEADERS = { get: () => null };
 
@@ -270,9 +275,10 @@ describe("readTile is bound to each tile's own object", () => {
     { tile: "N45E007", metres: 4000 },
   ])("reads $tile from its own object and its own share", async ({ tile, metres }) => {
     const { calls, fetchImpl } = fetchOver(objects);
-    const { readTile } = createSourceDeps({ bounds: CUT, fetchImpl });
+    const { readTile } = createSourceDeps({ fetchImpl });
 
-    const samples = [...(await readTile(tile))].map(([r, g, b]) => decodeElevation(r, g, b));
+    const crop = await readTile(tile, CUT);
+    const samples = [...elevationsOf(crop)];
 
     expect(samples.length).toBeGreaterThan(0);
     for (const m of samples) expect(m).toBeCloseTo(metres, 2);
@@ -285,8 +291,8 @@ describe("readTile is bound to each tile's own object", () => {
     // own raster — and the reader rejects it as outside the tile. The failure is loud, but it
     // only happens for a cut that spans a seam, which no single-tile fixture produces.
     const { fetchImpl } = fetchOver(objects);
-    const { readTile } = createSourceDeps({ bounds: CUT, fetchImpl });
+    const { readTile } = createSourceDeps({ fetchImpl });
 
-    await expect(readTile("N45E007")).resolves.toBeDefined();
+    await expect(readTile("N45E007", CUT)).resolves.toBeDefined();
   });
 });

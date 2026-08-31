@@ -8,7 +8,13 @@ import {
   assertArchiveCarriesLicence,
   assertStringsBackedByLicence,
 } from "./licence.mjs";
+import { productionEnvelope, tilesInRange } from "./mercator.mjs";
+import { encodePng } from "./png.mjs";
 import { assertMinimumElevation, parseRegionDeclaration } from "./region.mjs";
+import { TILE_SIZE } from "./mercator.mjs";
+import { renderTerrariumTile } from "./resample.mjs";
+import { SOURCE_SAMPLE_SPACING_DEG } from "./source.mjs";
+import { stitchSurface } from "./surface.mjs";
 import { decodeElevation } from "./terrarium.mjs";
 
 /**
@@ -56,6 +62,7 @@ export const BUILD_STAGES = Object.freeze([
   "snapshot",
   "coverage",
   "elevation",
+  "tiles",
   "archive",
 ]);
 
@@ -107,7 +114,7 @@ async function at(stage, work) {
  *   readJson: (path: string) => unknown,
  *   io: object,
  *   probe: (tileId: string) => { status: number } | Promise<{ status: number }>,
- *   readTile: (tileId: string) => Iterable<[number, number, number]> | Promise<Iterable<[number, number, number]>>,
+ *   readTile: (tileId: string, bounds: [number, number, number, number]) => Promise<object>,
  *   writeArchive: (path: string, tiles: string[], licenceText: string, attribution: Record<string, string>) => { entries: () => Iterable<{ path: string, text: string }> },
  *   finaliseArchive: (from: string, to: string) => void,
  *   discardArchive: (path: string) => void,
@@ -149,18 +156,61 @@ export async function runBuild(paths, deps, options = {}) {
     return loaded;
   });
 
+  // **Coverage is checked over the production envelope, not the declared region.** Output tiles
+  // are complete rasters, so the build reads every intersecting tile's full footprint plus the
+  // interpolation halo — which for this region reaches past 7°E and therefore needs a source
+  // cell the declaration never touches. Admitting cells by the declaration and then reading the
+  // envelope would read a tile coverage never checked, which is the whole point of the check.
+  const envelope = await at("region", () =>
+    productionEnvelope(
+      declaration.bounds,
+      declaration.minZoom,
+      declaration.maxZoom,
+      SOURCE_SAMPLE_SPACING_DEG,
+    ),
+  );
+
   // `assertCoverage` distinguishes an unpublished tile from an unexpected one from a transport
   // failure, and those three imply different actions. Wrapping in `at` is safe because
   // `BuildError` keeps the cause — but nothing between the probe and the classifier may catch a
   // `CoverageError` and recast it as a generic gap, or the three collapse into "the build
   // failed" exactly where the distinction stops being visible.
-  const tiles = await at("coverage", () =>
-    assertCoverage(declaration.bounds, deps.probe, snapshot),
+  const sourceCells = await at("coverage", () => assertCoverage(envelope, deps.probe, snapshot));
+
+  // Read once, used twice. The floor check wants samples one at a time and the surface wants
+  // whole crops; re-reading a 42 MB object per use to avoid holding a few megabytes would be a
+  // poor trade. This does mean the envelope must be resident — a real limit of resampling at
+  // all, since a reprojection cannot stream its input in the order its output needs.
+  const crops = [];
+  const lowest = await at("elevation", () =>
+    assertMinimumElevation(
+      declaration,
+      readCrops(sourceCells, deps.readTile, envelope, declaration.bounds, crops),
+    ),
   );
 
-  const lowest = await at("elevation", () =>
-    assertMinimumElevation(declaration, elevationTiles(tiles, deps.readTile)),
-  );
+  const rasterTiles = await at("tiles", () => {
+    for (const crop of crops) {
+      if (crop.pixelScaleDeg !== SOURCE_SAMPLE_SPACING_DEG) {
+        // The halo was sized from the declared spacing before any header was read. A source at
+        // a different spacing makes it the wrong width, and a halo that is too small is a build
+        // that samples outside the envelope it had admitted.
+        throw new Error(
+          `source sample spacing is ${String(crop.pixelScaleDeg)}, but the production envelope ` +
+            `was computed for ${String(SOURCE_SAMPLE_SPACING_DEG)}`,
+        );
+      }
+    }
+    const surface = stitchSurface(crops);
+    return [...tilesInRange(declaration.bounds, declaration.minZoom, declaration.maxZoom)].map(
+      ({ z, x, y }) => ({
+        z,
+        x,
+        y,
+        bytes: encodePng(TILE_SIZE, TILE_SIZE, renderTerrariumTile(surface, z, x, y)),
+      }),
+    );
+  });
 
   // Written to a partial path and only named as the archive once it has passed. A build that
   // fails its licence checks after writing leaves a licence-violating archive on disk, which
@@ -177,7 +227,17 @@ export async function runBuild(paths, deps, options = {}) {
     // from picking it up, so this is tidiness rather than safety — but a leftover whose only
     // protection is a naming convention is one rename away from being a real one.
     const archive = await at("archive", () =>
-      deps.writeArchive(partialPath, tiles, licenceText, attribution),
+      deps.writeArchive(partialPath, rasterTiles, {
+        // **The declared region, not the envelope.** The bounds advertise what a consumer asked
+        // for and what a renderer should request tiles within; the envelope is an implementation
+        // detail of how complete tiles were produced, and publishing it would invite requests
+        // for tiles outside the region.
+        bounds: declaration.bounds,
+        minzoom: declaration.minZoom,
+        maxzoom: declaration.maxZoom,
+        licenceText,
+        attribution,
+      }),
     );
     if (distributable) {
       await at("archive", () =>
@@ -217,7 +277,16 @@ export async function runBuild(paths, deps, options = {}) {
     throw error;
   }
 
-  return { roles, distributable, outputPath, region: declaration.id, tiles, lowest };
+  return {
+    roles,
+    distributable,
+    outputPath,
+    region: declaration.id,
+    envelope,
+    sourceCells,
+    tileCount: rasterTiles.length,
+    lowest,
+  };
 }
 
 /**
@@ -237,18 +306,62 @@ export async function runBuild(paths, deps, options = {}) {
  * @param {(tileId: string) => Iterable<[number, number, number]> | Promise<Iterable<[number, number, number]>>} readTile
  * @returns {AsyncIterable<{ tileId: string, elevationsM: Iterable<number> }>}
  */
-async function* elevationTiles(tiles, readTile) {
-  for (const tileId of tiles) {
-    yield { tileId, elevationsM: decodeTile(await readTile(tileId)) };
+async function* readCrops(tileIds, readTile, envelope, region, collected) {
+  for (const tileId of tileIds) {
+    // Read against the **envelope**. Coverage admitted these cells over it, so reading them
+    // against anything narrower asks a cell east of the declared region for a box that does not
+    // intersect it.
+    const crop = await readTile(tileId, envelope);
+    collected.push(crop);
+
+    // Judge the floor against the **declared region**. The envelope exists so that output tiles
+    // are complete rasters, and it reaches a tile's width beyond the region — which around any
+    // summit means valley floors. Checking it would turn "this region is above the treeline"
+    // into "everything within a tile of it is", a condition no mountain satisfies; the real
+    // build first failed at 554 m on exactly that. ADR-0024 makes the declared region the
+    // subject, and the archive advertises those same bounds.
+    const window = regionWindow(crop, region);
+    if (window === null) continue;
+    yield { tileId, elevationsM: samplesIn(crop, window) };
   }
+  // No count of contributing cells is kept. The envelope contains the region by construction, so
+  // at least one crop always intersects it — and were that ever false, yielding nothing reaches
+  // `assertMinimumElevation`'s own "cannot check the declared floor without elevation samples",
+  // which is tested. A guard here would have been a claim no input could reach.
 }
 
 /**
- * Decode a tile's pixels lazily, so a cut larger than memory is still one pass.
+ * The part of a crop lying inside the declared region, or `null` if none does.
  *
- * @param {Iterable<[number, number, number]>} pixels
+ * Half-open at east and south, like every other window in this build, so a sample on a shared
+ * edge is counted once. A cell can legitimately contribute nothing: the envelope pulls in cells
+ * the region never touches, and for this fixture `N45E007` is entirely outside it.
+ *
+ * @param {{ width: number, height: number, west: number, north: number, pixelScaleDeg: number }} crop
+ * @param {[west: number, south: number, east: number, north: number]} region
+ */
+function regionWindow(crop, region) {
+  const scale = crop.pixelScaleDeg;
+  const first = (v) => Math.ceil(v / scale - 1e-6);
+  const col0 = Math.max(0, first(region[0] - crop.west));
+  const colEnd = Math.min(crop.width, first(region[2] - crop.west));
+  const row0 = Math.max(0, first(crop.north - region[3]));
+  const rowEnd = Math.min(crop.height, first(crop.north - region[1]));
+  if (colEnd <= col0 || rowEnd <= row0) return null;
+  return { col0, cols: colEnd - col0, row0, rows: rowEnd - row0 };
+}
+
+/**
+ * @param {{ width: number, rgb: Uint8Array }} crop
+ * @param {{ col0: number, cols: number, row0: number, rows: number }} window
  * @returns {Iterable<number>}
  */
-function* decodeTile(pixels) {
-  for (const [r, g, b] of pixels) yield decodeElevation(r, g, b);
+function* samplesIn(crop, window) {
+  for (let r = 0; r < window.rows; r += 1) {
+    const base = (window.row0 + r) * crop.width + window.col0;
+    for (let c = 0; c < window.cols; c += 1) {
+      const i = (base + c) * 3;
+      yield decodeElevation(crop.rgb[i], crop.rgb[i + 1], crop.rgb[i + 2]);
+    }
+  }
 }

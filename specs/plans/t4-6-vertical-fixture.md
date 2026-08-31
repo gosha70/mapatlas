@@ -18,17 +18,31 @@ drives the build through injected fakes.
 
 | | unit-tested | wired into `build.mjs` | discharged end-to-end | notes |
 | --- | --- | --- | --- | --- |
-| Terrarium codec | yes | yes | **no** | real COG pixels have passed through it, in a scratchpad run — no committed path does this |
-| Region declaration + floor (ob. 4) | yes | yes | **no** | same run: real decoded samples cleared the 2,500 m floor at 2,560.80 m |
-| Coverage + gap classification (ob. 2, 3) | yes | yes | **no** | the probe now really reaches S3, but only the **present** path — see below |
-| Licence rule (ob. 1) | yes | yes | **no** | strings check against the real document; the archive half still sees a fake archive |
-| COG source reader | yes | yes | **no** | bound behind `readTile` by `deps.mjs` |
-| PMTiles writer | yes | **no** | **no** | `archive.mjs` writes and reads back; the build has no z/x/y tiles to give it yet |
-| Mercator addressing + envelope | yes | **no** | **no** | `mercator.mjs`; coverage still computed over the declaration, not the envelope |
-| Bilinear resampler | yes | **no** | **no** | `resample.mjs`; nothing calls it — the build produces no tiles yet |
-| Stitched source surface | yes | **no** | **no** | `surface.mjs`; the seam is joined, but no orchestration reads two cells yet |
-| PNG serialiser | yes | **no** | **no** | `png.mjs`; nothing calls it |
-| Build ordering | yes | — | **no** | `writeArchive` still has nothing behind it |
+| Terrarium codec | yes | yes | **once** | real COG pixels through the whole chain into a real archive |
+| Region declaration + floor (ob. 4) | yes | yes | **once** | real decoded samples cleared the 2,500 m floor at 2,560.80 m |
+| Coverage (ob. 2) | yes | yes | **once** | both cells probed against S3 and admitted before any read |
+| Gap rule (ob. 3) | yes | yes | **once** | no fill path exists, and an unwritten tile reads back `undefined` from the real archive |
+| Licence rule (ob. 1) | yes | yes | **once** | checked against the real document *and* the real archive's own metadata |
+| COG source reader | yes | yes | **once** | bound behind `readTile` by `deps.mjs` |
+| PMTiles writer | yes | yes | **once** | 1.49 MB archive, read back by `pmtiles` 4.5.0 |
+| Mercator addressing + envelope | yes | yes | **once** | coverage now runs over the envelope |
+| Bilinear resampler | yes | yes | **once** | 8 distinct PNG tiles |
+| Stitched source surface | yes | yes | **once** | two real cells joined across 7°E |
+| PNG serialiser | yes | yes | **once** | every tile in the archive is a PNG |
+| Build ordering | yes | — | **once** | all stages ran in order against real inputs |
+
+**"once" is not "yes", and the gap is reproducibility.** Every obligation above has been met, end
+to end, against the real release — but by a **scratchpad runner**, so nothing in the repository
+reproduces it and CI cannot. A committed entry point is the next increment, and until it exists
+these rows say what happened rather than what a reader can re-run.
+
+**The chain produced a real archive on 2026-08-31.** `mont-blanc-summit`, source cells
+`N45E006` **and** `N45E007`, envelope 6.679–7.032 °E against a declared region ending at 6.905,
+lowest sample 2,560.805 m, 8 tiles, **1,493,696 bytes**, in 8.3 s. Verified through `pmtiles`
+4.5.0 over the hardened range path: spec v3, PNG, z11–12, clustered, `bounds` equal to the
+declared region, all four attribution roles present, 8 of 8 tiles found with 8 distinct payloads,
+and an unwritten address reading back `undefined`. That measurement discharges ADR-0024
+criterion 6, which requires archive size **measured** rather than calculated.
 
 **Remaining T4.6 implementation scope.** The source reader is built and is now bound behind
 `readTile` (see *The source reader* and *The async wiring* below). Still outstanding: the GeoJSON→MVT
@@ -905,6 +919,36 @@ the length field, a zeroed CRC, an omitted `IDAT`, an undeflated `IDAT`, and the
 removed. Separately and outside the suite, macOS ImageIO reads the output as 256×256, 8 bits per
 sample, 3 samples per pixel — an independent decoder, where the suite's parser is still ours.
 Whether MapLibre accepts these bytes as `raster-dem` is the browser lane's to establish.
+
+### Orchestration, and two things only a real run could find
+
+The wiring adds no algorithm; it composes proven pieces in the order the bars fixed. Coverage now
+runs over the **production envelope**, so no source cell can be read that coverage did not first
+admit — the mandatory mutation reverting it to `requiredTiles(declaration.bounds)` is killed,
+and a companion test shows the second cell is genuinely *required* by failing at the coverage
+stage when it is withheld.
+
+**Both findings came from running the whole chain, not from the suite**, and both were invisible
+to unit tests for the same reason: the harness computed the envelope itself instead of being
+handed one, so it agreed with the code rather than checking it.
+
+1. *The reader was clipping to the declaration while coverage admitted over the envelope.* For
+   `N45E007` the two do not intersect, and the clip produced a degenerate box. `readTile` now
+   takes the bounds per call — the build owns the extent, so the build passes it — and a test
+   asserts the value that actually crosses the seam.
+2. *The floor was being judged over the envelope.* The first real run failed at **554 m**: a
+   valley within a z11 tile's width of the summit. Judging the envelope turns "this region is
+   above the treeline" into "everything within a tile of it is", which no mountain satisfies.
+   ADR-0024 makes the declared region the subject and the archive advertises those same bounds,
+   so the floor is now judged over the region while the envelope is only *read*. A cell that
+   contributes no in-region sample is skipped, which for this fixture is exactly `N45E007`.
+
+*Author verification.* 41 build tests; 14 mutations killed, including coverage reverted to the
+declaration, the archive advertising the envelope, a pyramid built from one zoom, a surface from
+one cell, the halo dropped, the spacing assumption unchecked, the read bounds reverted, and four
+on the region window. One survived and was **removed rather than kept**: a guard for "no cell
+contributed a sample" is unreachable, since the envelope contains the region by construction, and
+`assertMinimumElevation`'s own tested empty-cut guard covers the impossible case anyway.
 
 ## Fixture composition
 

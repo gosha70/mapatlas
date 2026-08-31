@@ -15,7 +15,10 @@
 
 import { parseTileId } from "./coverage.mjs";
 import { parseBounds } from "./region.mjs";
+import { writeArchive } from "./archive.mjs";
+import { LICENCE_ENTRY_PATH } from "./licence.mjs";
 import { cogUrl, readTerrariumCrop } from "./source.mjs";
+import { decodeElevation } from "./terrarium.mjs";
 
 /** Degrees per source tile, both axes — GLO-30 Public ships 1°×1° cells. */
 const TILE_DEGREES = 1;
@@ -163,41 +166,79 @@ export function clipBoundsToTile(bounds, tileId) {
 /**
  * Bind the build's fetching seams to the real source.
  *
+ * **`readTile` takes the bounds per call rather than closing over them**, and that is a
+ * correction rather than a style choice. Binding them at construction meant the caller chose an
+ * extent once, while the build chooses one *later* — the production envelope, computed from the
+ * declaration and the zoom range. The two silently disagreed: a cell east of the declared region
+ * was admitted by coverage over the envelope and then clipped against the declaration, producing
+ * a degenerate box. The build owns the extent, so the build passes it.
+ *
  * @param {{
- *   bounds: [west: number, south: number, east: number, north: number],
  *   fetchImpl?: typeof globalThis.fetch,
  *   bucketUrl?: string,
  * }} options
  * @returns {{
  *   probe: (tileId: string) => Promise<{ status: number }>,
- *   readTile: (tileId: string) => Promise<Iterable<[number, number, number]>>,
+ *   readTile: (tileId: string, bounds: [number, number, number, number]) => Promise<object>,
  * }}
  */
-export function createSourceDeps({ bounds, fetchImpl = globalThis.fetch, bucketUrl }) {
+export function createSourceDeps({ fetchImpl = globalThis.fetch, bucketUrl } = {}) {
   const fetchRange = rangeFetcher(fetchImpl);
   return {
     probe: createProbe(fetchImpl, bucketUrl),
-    readTile: async (tileId) => {
+    // Returns the **crop**, not a stream of triples. The build needs the same read twice: once
+    // for the floor check and once to stitch the source surface, and reading a 42 MB object
+    // twice to avoid holding a 4 MB crop would be a poor trade. `elevationsOf` adapts it for
+    // the floor check, which is the only consumer that wants samples one at a time.
+    readTile: async (tileId, bounds) =>
       // Each tile is read for **its own** clipped share. Reading the cut's first tile every
       // time would decode successfully and report every other tile's name against the first
       // tile's samples.
-      const crop = await readTerrariumCrop(tileId, clipBoundsToTile(bounds, tileId), {
-        fetchRange,
-        bucketUrl,
-      });
-      return pixelTriples(crop.rgb);
-    },
+      readTerrariumCrop(tileId, clipBoundsToTile(bounds, tileId), { fetchRange, bucketUrl }),
   };
 }
 
 /**
- * The build's `readTile` seam yields `[r, g, b]` per sample; the reader produces one flat
- * buffer. Adapted here rather than by changing either side: the seam's shape is what the floor
- * check consumes, and the flat buffer is what a writer will want.
+ * A crop's samples in metres, lazily, for the floor check.
  *
- * @param {Uint8Array} rgb
- * @returns {Iterable<[number, number, number]>}
+ * @param {{ rgb: Uint8Array }} crop
+ * @returns {Iterable<number>}
  */
-function* pixelTriples(rgb) {
-  for (let i = 0; i < rgb.length; i += 3) yield [rgb[i], rgb[i + 1], rgb[i + 2]];
+export function* elevationsOf(crop) {
+  for (let i = 0; i < crop.rgb.length; i += 3) {
+    yield decodeElevation(crop.rgb[i], crop.rgb[i + 1], crop.rgb[i + 2]);
+  }
+}
+
+/** Where the archive's non-licence metadata is asserted to live, for the attribution check. */
+export const METADATA_ENTRY_PATH = "metadata.json";
+
+/**
+ * The build's `writeArchive` seam, over a real PMTiles archive.
+ *
+ * Two jobs, and keeping them here is what lets `archive.mjs` stay ignorant of licences. It
+ * composes the archive's JSON metadata from what the build hands it, and it exposes the
+ * `entries()` view the licence and attribution checks assert over — a PMTiles archive has tiles
+ * and a metadata blob rather than named files, so "what the archive carries" has to be projected
+ * onto that shape somewhere, and the writer is the wrong place for it.
+ *
+ * The attribution strings must land **outside** the `LICENSE` entry, which is why the licence
+ * text and the rest of the metadata are separate entries rather than one blob: they are drawn
+ * from the licence, so a single entry containing both would satisfy the check by carrying the
+ * document the strings came from.
+ *
+ * @param {{ tileType?: "png" | "mvt", compression?: "none" | "gzip" }} [options]
+ */
+export function createArchiveWriter(options = {}) {
+  return async (path, tiles, meta) => {
+    const { licenceText, attribution, ...rest } = meta;
+    const metadata = { ...rest, attribution };
+    await writeArchive(path, tiles, { ...metadata, license: licenceText }, options);
+    return {
+      entries: () => [
+        { path: LICENCE_ENTRY_PATH, text: licenceText ?? "" },
+        { path: METADATA_ENTRY_PATH, text: JSON.stringify(metadata) },
+      ],
+    };
+  };
 }

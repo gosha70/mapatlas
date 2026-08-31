@@ -235,6 +235,10 @@ export async function runBuild(paths, deps, options = {}) {
         bounds: declaration.bounds,
         minzoom: declaration.minZoom,
         maxzoom: declaration.maxZoom,
+        // Passed rather than inferred from an empty licence: a writer guessing the mode from
+        // whether a string is blank would put a development archive one truthiness bug away
+        // from looking distributable.
+        distributable,
         licenceText,
         attribution,
       }),

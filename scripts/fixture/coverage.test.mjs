@@ -10,6 +10,7 @@ import {
   assertCoverage,
   assertSnapshotFresh,
   loadCoverageSnapshot,
+  parseTileId,
   requiredTiles,
   tileId,
 } from "./coverage.mjs";
@@ -39,6 +40,53 @@ describe("tile naming", () => {
     { south: -3, west: -2, id: "S03W002" },
   ])("names the cell at $south,$west as $id", ({ south, west, id }) => {
     expect(tileId(south, west)).toBe(id);
+  });
+
+  it.each([
+    { south: 45, west: 6, id: "N45E006" },
+    { south: 0, west: 0, id: "N00E000" },
+    { south: -90, west: -180, id: "S90W180" },
+    { south: -3, west: -2, id: "S03W002" },
+  ])("reads $id back as the cell at $south,$west", ({ south, west, id }) => {
+    expect(parseTileId(id)).toEqual({ south, west });
+  });
+
+  it("round-trips all 64,800 cells of the 1° grid", () => {
+    // The unit under test here is the **pair**, not either function: "inverts" is a relational
+    // property, and no amount of testing one side reaches it. A parser that drifted from its
+    // formatter would fetch the wrong object and decode it perfectly, which is the one failure
+    // in the source reader that is otherwise silent.
+    //
+    // Exhaustive, and the count is asserted. An earlier version stepped the grid by 7 and 13
+    // under this same name — a sample calling itself a sweep, which is the kind of claim that
+    // survives review precisely because the name reads as stronger than the loop. Mismatches
+    // are collected rather than asserted per cell so that being exhaustive costs no time.
+    const mismatches = [];
+    let checked = 0;
+    for (let south = -90; south <= 89; south += 1) {
+      for (let west = -180; west <= 179; west += 1) {
+        const { south: gotSouth, west: gotWest } = parseTileId(tileId(south, west));
+        if (gotSouth !== south || gotWest !== west)
+          mismatches.push([south, west, gotSouth, gotWest]);
+        checked += 1;
+      }
+    }
+    expect(mismatches).toEqual([]);
+    expect(checked).toBe(64800);
+  });
+
+  it.each([
+    { id: "n45e006", why: "lower case" },
+    { id: "N45E06", why: "a two-digit longitude" },
+    { id: "N45E006 ", why: "trailing space" },
+    { id: "X45E006", why: "an unknown hemisphere letter" },
+  ])("refuses $id — $why", ({ id }) => {
+    expect(() => parseTileId(id)).toThrow(/is not of the form N45E006/);
+  });
+
+  it("refuses a well-formed id naming a cell outside WGS84", () => {
+    expect(() => parseTileId("N91E006")).toThrow(/outside WGS84/);
+    expect(() => parseTileId("N45E180")).toThrow(/outside WGS84/);
   });
 });
 

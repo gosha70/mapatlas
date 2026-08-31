@@ -73,6 +73,31 @@ export function tileId(south, west) {
 }
 
 /**
+ * The south-west corner a tile id names — the inverse of {@link tileId}.
+ *
+ * It lives beside its constructor rather than with the reader that needs it, so the pair can be
+ * round-tripped in one test. A parser that drifts from the formatter it inverts fails by
+ * fetching the wrong object and decoding it successfully, which is the silent-wrong-answer shape
+ * this fixture exists to refuse; keeping both in view is what makes the drift visible.
+ *
+ * @param {string} id
+ * @returns {{ south: number, west: number }}
+ */
+export function parseTileId(id) {
+  const match = /^([NS])(\d{2})([EW])(\d{3})$/.exec(id);
+  if (match === null) {
+    throw new CoverageError(`tile id "${id}" is not of the form N45E006`, "unexpected");
+  }
+  const [, ns, lat, ew, lon] = match;
+  const south = (ns === "S" ? -1 : 1) * Number(lat);
+  const west = (ew === "W" ? -1 : 1) * Number(lon);
+  if (south < -90 || south > 89 || west < -180 || west > 179) {
+    throw new CoverageError(`tile id "${id}" names a cell outside WGS84`, "unexpected");
+  }
+  return { south, west };
+}
+
+/**
  * Every source tile a cut needs, in a stable order.
  *
  * The upper edges are **half-open**: a cut whose north edge is exactly 46 needs no `N46` tile,

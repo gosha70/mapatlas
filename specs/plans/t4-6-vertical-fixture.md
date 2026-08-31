@@ -25,6 +25,7 @@ drives the build through injected fakes.
 | COG source reader | yes | yes | **no** | bound behind `readTile` by `deps.mjs` |
 | PMTiles writer | yes | **no** | **no** | `archive.mjs` writes and reads back; the build has no z/x/y tiles to give it yet |
 | Mercator addressing + envelope | yes | **no** | **no** | `mercator.mjs`; coverage still computed over the declaration, not the envelope |
+| Bilinear resampler | yes | **no** | **no** | `resample.mjs`; nothing calls it — the build produces no tiles yet |
 | Build ordering | yes | — | **no** | `writeArchive` still has nothing behind it |
 
 **Remaining T4.6 implementation scope.** The source reader is built and is now bound behind
@@ -794,6 +795,43 @@ and south taken from the wrong tile.
 **Still to do before this discharges anything:** coverage is computed over `declaration.bounds`
 and must move to the production envelope, which is a change to the build's ordering. Until it
 does, a build for this region would check `N45E006` and then read `N45E007` unchecked.
+
+### The resampler, as built
+
+`scripts/fixture/resample.mjs` implements the ordering the bars fixed, and is arranged so the
+forbidden step is *unavailable* rather than merely discouraged: `decodeGrid` is the only door in,
+and everything past it holds `Float32Array` metres with no bytes in sight. Interpolating terrarium
+channels is not a rule to remember here; there is nothing to interpolate.
+
+`Float32Array` is deliberate: its ulp near 3,000 m is about 0.00024 m, some sixteen times finer
+than the 1/256 m the encoding it round-trips through can represent, so storage is not the limiting
+factor for anything that matters.
+
+*The three oracles stay separate*, as the bars require, because each fails on its own account:
+
+| oracle | what it can catch alone |
+| --- | --- |
+| projection (`mercator.test.mjs`) | a wrong formula, against an independently written restatement |
+| interpolation (`resample.test.mjs`) | positions chosen directly in lon/lat, so **no projection is involved at all** |
+| integration | both together — and never the only proof, since either could otherwise hide in the other |
+
+The affine plane is `400·lon − 300·lat + 14000`. Its coefficients differ in magnitude on purpose:
+with equal ones a transposed stencil would be invisible. The tolerance is 0.002 m, two orders of
+magnitude below the ~0.055 m a nearest-neighbour implementation is off by on this plane, so the
+oracle stays discriminating rather than merely satisfiable.
+
+*Author verification.* 15 tests, 11 mutations killed — including the two the bars name by name,
+nearest-neighbour and interpolating encoded RGB, plus clamping into the grid on either axis,
+transposed weights, a wrong stencil corner, an inverted latitude axis, and a `decodeGrid` that
+does not decode.
+
+**Two mutations first reported as survivors, and both were the harness.** The patterns did not
+match — prettier had reflowed one target onto a single line, and the other was indented
+differently than the pattern assumed — so nothing was mutated and the suite passed for the most
+boring possible reason. The runner now **compares the file before and after** and reports
+`NOT APPLIED` rather than a verdict. The asymmetry is worth stating: a `killed` result is
+self-verifying, because an unapplied mutation cannot fail the suite, so only `SURVIVED` was ever
+ambiguous — but that is exactly the direction in which a false result is reassuring.
 
 ## Fixture composition
 

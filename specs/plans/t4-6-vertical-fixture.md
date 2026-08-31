@@ -9,22 +9,24 @@ recollection.
 ## Status — read this before any progress claim
 
 Four levels, because collapsing them is how a series of true green reports adds up to a false
-impression. **Nothing below has been run against real data end to end**: the build orchestrator
-has never touched a network or a filesystem, and every integration test drives it through
-injected fakes.
+impression. **No committed path has produced a real archive, and no row below is discharged.**
+The orchestrator's fetching seams are bound to the real source and a scratchpad run has driven it
+against S3 and a real COG — so the older statement here, that it had never touched a network, is
+no longer what makes the column read "no". What makes it read "no" is that the archive stage is
+still a fake writer, nothing is written, no committed path reproduces that run, and every suite
+drives the build through injected fakes.
 
 | | unit-tested | wired into `build.mjs` | discharged end-to-end | notes |
 | --- | --- | --- | --- | --- |
-| Terrarium codec | yes | yes | **no** | now run on a real COG's pixels, but by the reader standalone, not by a build |
-| Region declaration + floor (ob. 4) | yes | yes | **no** | never run on decoded real tiles |
-| Coverage + gap classification (ob. 2, 3) | yes | yes | **no** | probe is injected; never run against S3 |
-| Licence rule (ob. 1) | yes | yes | **no** | strings now sourced; never run on a real archive |
-| COG source reader | yes | **no** | **no** | decodes the real object standalone; `readTile` still has nothing behind it |
-| Build ordering | yes | — | **no** | no writer behind `writeArchive`, and the reader is not wired to `readTile` |
+| Terrarium codec | yes | yes | **no** | real COG pixels have passed through it, in a scratchpad run — no committed path does this |
+| Region declaration + floor (ob. 4) | yes | yes | **no** | same run: real decoded samples cleared the 2,500 m floor at 2,560.80 m |
+| Coverage + gap classification (ob. 2, 3) | yes | yes | **no** | the probe now really reaches S3, but only the **present** path — see below |
+| Licence rule (ob. 1) | yes | yes | **no** | strings check against the real document; the archive half still sees a fake archive |
+| COG source reader | yes | yes | **no** | bound behind `readTile` by `deps.mjs` |
+| Build ordering | yes | — | **no** | `writeArchive` still has nothing behind it |
 
-**Remaining T4.6 implementation scope.** The source reader is now built and has decoded the
-real object (see *The source reader* below), but it is not wired into `build.mjs`, so it moves
-no row to *discharged*. Still outstanding: wiring the reader behind `readTile`; the GeoJSON→MVT
+**Remaining T4.6 implementation scope.** The source reader is built and is now bound behind
+`readTile` (see *The source reader* and *The async wiring* below). Still outstanding: the GeoJSON→MVT
 contour toolchain; the PMTiles writer (`s2-pmtiles` is well-evidenced but uncommitted and
 unconfirmed at fixture scale); producing an actual archive; measuring its size (ADR-0024
 criterion 6); the fixture track (≥5k points, two-segment pause, two event marks); the `/lab`
@@ -279,6 +281,92 @@ identical if the property were broken.
 
 The instructive part is that in both cases the *name* of the check was accurate about intent and
 wrong about reach, and reading it would not have shown that. Only breaking the subject did.
+
+## The async wiring
+
+**[verified 2026-08-30]** Two of the build's seams really fetch, so `runBuild`, `assertCoverage`
+and `assertMinimumElevation` are async and `scripts/fixture/deps.mjs` binds the real probe and
+reader behind them. The writer, the contour source and archive production are deliberately not
+part of this.
+
+`assertMinimumElevation` takes an **async** iterable rather than having the build resolve every
+read first. That is what preserves the property the signature was chosen for: a tile is fetched
+only when the floor check asks for the next one, so a cut over many source tiles holds one crop
+at a time rather than all of them.
+
+*Two traps, both of which produce a working-looking build.*
+
+- **The probe must not reuse the range reader.** A reader that throws on a non-2xx turns a 404
+  into a thrown probe, and `assertCoverage` classifies a thrown probe as `unreachable` — so an
+  unpublished tile would arrive as a transport failure, telling a reader to retry a tile that
+  will never exist and quietly retiring the distinction the coverage snapshot exists to draw.
+  They are two functions on purpose. Confirmed against the bucket: `N45E006` → 206, `S90W180` →
+  206, `N00E000` → **404 as a status**, not a throw.
+- **Each tile is read for its own share.** A cut spanning two cells cannot hand its full bounds
+  to either — the second tile's crop would begin west of its own raster. `clipBoundsToTile` gives
+  each tile its part, and the parts meet *exactly* because `cropWindow` is half-open at its east
+  and south edges: the column on a shared meridian belongs to the tile east of it and to that
+  tile only. That is a property of the **pair**, so it is tested on the pair; neither clip alone
+  can show it.
+
+*The real-network boundary, hardened after review.* A status alone proves nothing about which
+bytes arrived, and each of these decodes into plausible terrain rather than into an error, so
+`rangeFetcher` now checks all of them: **200 is refused** (a server that ignores `Range` returns
+the whole 42 MB object, whose opening bytes parse perfectly as the header they are not);
+**`Content-Range`'s first byte must be the byte requested** (a correctly sized window from the
+wrong offset inflates, because another internal tile is also a valid deflate stream, and yields
+real terrain in the wrong place); and **the body's length must match what `Content-Range`
+claims**. A range answered short *at the end of the object* is legitimate — HTTP returns the
+intersection, so a 64 KB header window over a smaller object comes back smaller — and is accepted
+only when the response says the object ended there; truncation mid-object is refused. The probe
+also releases its one-byte body rather than walking away from it, since an unconsumed body keeps
+its connection checked out, and the build makes one probe per required tile, serially.
+
+*And a cleanup failure no longer eats the build failure.* `discardArchive` is `fs.rm` on a path a
+failing build just wrote, so it can reject — and it rejects *after* the real failure, so a raw
+rethrow replaced "the archive carries no LICENSE" with "permission denied" and dropped the stage
+with it. Both are kept now: the stage stands and the cause becomes an `AggregateError`, original
+first.
+
+**The bug CI caught, and the regression test that first failed to catch it.** `undoFloatPredictor`
+ended with `new Float32Array(bytes.slice().buffer)` under a comment claiming it copied. It does
+not: `inflateSync` returns a **Buffer**, and `Buffer.prototype.slice` is the one method on Buffer
+that disagrees with its `Uint8Array` namesake — it returns a *view*. `.buffer` was therefore the
+whole allocation pool, and the floats were read from the pool's origin rather than from the tile.
+Whether that was wrong depended entirely on where the allocator put the buffer: correct at offset
+zero, which is what a large unpooled allocation gives, and silently another tile's bytes
+otherwise. **The real 4 MB tiles were fine and the 64-byte synthetic ones were not**, on CI's
+Node and not on this machine — so the local suite was green, the real-data run was green, and the
+code was wrong. Fixed by copying into an `ArrayBuffer` the function owns.
+
+The regression test is the part worth remembering. Written first with a `Uint8Array` view at a
+deliberately unaligned offset, it looked exactly like a test for this and **passed against the
+broken code**, because `Uint8Array.prototype.slice` copies. Only a `Buffer` view reproduces it.
+Third instance in this task of the same shape: a check that names the property, looks thorough,
+and cannot observe the defect. The mutation is what said so.
+
+*Author verification.* 26 mutations killed across this increment — 15 for the wiring, in the
+three classes the review named (dropped `await`, wrong tile, first-tile-only), and 11 for the
+hardening above, including reverting the decode to the exact CI failure. One survived first: the
+`await` on
+`discardArchive` is invisible against a synchronous fake. Rather than keep a guard nobody can
+check, the fake now defers over a **timer**, since microtasks drain completely before any timer
+fires — so an unawaited discard is deterministically still pending when the rejection surfaces.
+It matters once `discardArchive` is `fs.rm`, where a rejection nobody awaits is fatal in current
+Node. The build suite's fakes are async by default for the same reason: against synchronous
+fakes, every `await` in the build could be deleted without a single test noticing.
+
+*What a scratchpad run showed, and what it does not establish.* Driven against real inputs — the
+checked-in licence, attribution, region and coverage snapshot, a real S3 probe, a real COG read —
+the assembled build reaches the archive stage and reports `mont-blanc-summit`, one tile
+`N45E006`, lowest sample **2,560.80 m** at index 49,247. Re-run after the hardening above, the
+live bucket satisfies every new check and the crop is unchanged. **No row moves to
+*discharged*, for three separate reasons, and any one of them is sufficient:** the archive stage
+was a **fake writer** and nothing was written; the run lives in a scratchpad, so no committed
+path reproduces it; and only coverage's **present** branch was exercised, because every tile the
+declared region needs is published — obligation 3's gap path cannot be reached by this region at
+all. The run is evidence that the wiring is right, which is a different claim from an obligation
+being met.
 
 ## Contours
 

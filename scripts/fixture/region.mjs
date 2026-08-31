@@ -127,13 +127,24 @@ export function loadRegionDeclaration(path) {
  * a violation so the error names the true lowest sample rather than whichever low value happened
  * to be encountered first.
  *
+ * **Async-iterable**, because the real reader fetches. `for await` pulls one tile at a time, so
+ * a build over many source tiles still holds one crop in memory rather than all of them — the
+ * streaming property this signature was chosen for in the first place, preserved rather than
+ * traded away for the convenience of resolving every read up front. Each tile's own samples stay
+ * a plain iterable: a crop arrives whole, so there is nothing to stream inside one.
+ *
  * @param {RegionDeclaration} declaration
- * @param {Iterable<ElevationTile>} tiles
- * @returns {{ elevationM: number, tileId: string, sampleIndex: number }}
+ * @param {AsyncIterable<ElevationTile> | Iterable<ElevationTile>} tiles
+ * @returns {Promise<{ elevationM: number, tileId: string, sampleIndex: number }>}
  */
-export function assertMinimumElevation(declaration, tiles) {
+export async function assertMinimumElevation(declaration, tiles) {
   const region = parseRegionDeclaration(declaration);
-  if (tiles === null || tiles === undefined || typeof tiles[Symbol.iterator] !== "function") {
+  if (
+    tiles === null ||
+    tiles === undefined ||
+    (typeof tiles[Symbol.asyncIterator] !== "function" &&
+      typeof tiles[Symbol.iterator] !== "function")
+  ) {
     throw new ElevationFloorError(`region "${region.id}": elevation tiles must be iterable`);
   }
 
@@ -141,7 +152,7 @@ export function assertMinimumElevation(declaration, tiles) {
   let lowest = null;
   let tileCount = 0;
 
-  for (const tile of tiles) {
+  for await (const tile of tiles) {
     tileCount += 1;
     if (!isRecord(tile) || typeof tile.tileId !== "string" || tile.tileId.trim() === "") {
       throw new ElevationFloorError(

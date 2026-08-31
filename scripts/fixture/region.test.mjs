@@ -49,8 +49,8 @@ describe("region declaration validation", () => {
 });
 
 describe("the minimum-elevation floor", () => {
-  it("checks every tile and returns the cut's true lowest sample", () => {
-    const lowest = assertMinimumElevation(REGION, [
+  it("checks every tile and returns the cut's true lowest sample", async () => {
+    const lowest = await assertMinimumElevation(REGION, [
       { tileId: "N45E006", elevationsM: new Float32Array([3100, 2800, 2700]) },
       { tileId: "N45E007", elevationsM: new Float32Array([2900, 2550, 2600]) },
     ]);
@@ -58,59 +58,59 @@ describe("the minimum-elevation floor", () => {
     expect(lowest).toEqual({ elevationM: 2550, tileId: "N45E007", sampleIndex: 1 });
   });
 
-  it("names the first tile holding an equal minimum, not the last", () => {
+  it("names the first tile holding an equal minimum, not the last", async () => {
     // Ties would otherwise be decided by whichever comparison the implementation happened to
     // use, and "the failure names the tile" is an obligation rather than a nicety: with the
     // same minimum in two tiles, `<=` would report N45E007 and `<` reports N45E006, so an
     // unrelated reordering of the cut would change the tile a reader is sent to. Pinned to
     // first-encountered because that is the rule someone can predict.
     expect(
-      assertMinimumElevation(REGION, [
+      await assertMinimumElevation(REGION, [
         { tileId: "N45E006", elevationsM: new Float32Array([3000, 2700]) },
         { tileId: "N45E007", elevationsM: new Float32Array([2700, 3100]) },
       ]),
     ).toEqual({ elevationM: 2700, tileId: "N45E006", sampleIndex: 1 });
   });
 
-  it("accepts a sample exactly on the declared floor", () => {
+  it("accepts a sample exactly on the declared floor", async () => {
     expect(
-      assertMinimumElevation(REGION, [
+      await assertMinimumElevation(REGION, [
         { tileId: "N45E006", elevationsM: new Float32Array([2500]) },
       ]),
     ).toEqual({ elevationM: 2500, tileId: "N45E006", sampleIndex: 0 });
   });
 
-  it("fails with the lowest sample, its tile, and the declared floor", () => {
-    expect(() =>
+  it("fails with the lowest sample, its tile, and the declared floor", async () => {
+    await expect(
       assertMinimumElevation(REGION, [
         { tileId: "N45E006", elevationsM: new Float32Array([2499, 2401]) },
         { tileId: "N45E007", elevationsM: new Float32Array([2302, 2700]) },
       ]),
-    ).toThrow(
+    ).rejects.toThrow(
       'region "test-region": lowest sample 2302 m at N45E007[0] is below the declared floor 2500 m',
     );
   });
 
-  it("refuses a non-finite sample instead of letting the comparison pass vacuously", () => {
-    expect(() =>
+  it("refuses a non-finite sample instead of letting the comparison pass vacuously", async () => {
+    await expect(
       assertMinimumElevation(REGION, [
         { tileId: "N45E006", elevationsM: new Float32Array([2700, Number.NaN]) },
       ]),
-    ).toThrow("N45E006[1] is not a finite elevation: NaN");
+    ).rejects.toThrow("N45E006[1] is not a finite elevation: NaN");
   });
 
-  it("refuses an empty tile even when another tile has samples", () => {
-    expect(() =>
+  it("refuses an empty tile even when another tile has samples", async () => {
+    await expect(
       assertMinimumElevation(REGION, [
         { tileId: "N45E006", elevationsM: new Float32Array([2700]) },
         { tileId: "N45E007", elevationsM: new Float32Array() },
       ]),
-    ).toThrow("N45E007 contains no elevation samples");
+    ).rejects.toThrow("N45E007 contains no elevation samples");
   });
 
-  it("refuses an empty cut instead of declaring it above the floor", () => {
-    expect(() => assertMinimumElevation(REGION, [])).toThrow(ElevationFloorError);
-    expect(() => assertMinimumElevation(REGION, [])).toThrow(
+  it("refuses an empty cut instead of declaring it above the floor", async () => {
+    await expect(assertMinimumElevation(REGION, [])).rejects.toThrow(ElevationFloorError);
+    await expect(assertMinimumElevation(REGION, [])).rejects.toThrow(
       "cannot check the declared floor without elevation samples",
     );
   });

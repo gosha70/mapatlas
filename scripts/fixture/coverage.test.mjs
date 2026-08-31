@@ -129,29 +129,30 @@ describe("an absent tile is classified, not merely detected", () => {
 
   it.each([
     { status: 200, note: "a whole-object read" },
-    { status: 206, note: "a range read, which is what the build actually performs" },
-  ])("accepts $status — $note", ({ status }) => {
-    // Measured against the live release on 2026-08-30: a one-byte range GET on N45E006
-    // answers 206. Coverage is discovered during the COG range reads the build has to make
-    // anyway, so accepting only 200 would reject every successful read it performs.
-    expect(assertCoverage(BOUNDS, () => ({ status }), snapshotOf(["N45E006"]))).toEqual([
+    { status: 206, note: "the one-byte range GET the probe actually performs" },
+  ])("accepts $status — $note", async ({ status }) => {
+    // Measured against the live release on 2026-08-30 and again on 2026-08-31: a one-byte
+    // range GET on N45E006 answers 206. That probe is a request of its own rather than a
+    // by-product of the reader's — see `PRESENT_STATUSES` — so accepting only 200 would
+    // reject every successful probe the build makes.
+    expect(await assertCoverage(BOUNDS, () => ({ status }), snapshotOf(["N45E006"]))).toEqual([
       "N45E006",
     ]);
   });
 
-  it("reads a 404 for an unlisted tile as the release not publishing it", () => {
+  it("reads a 404 for an unlisted tile as the release not publishing it", async () => {
     // "Choose another region." The 404 and the snapshot agree, so the region is the problem.
-    const error = catchCoverage(() =>
+    const error = await catchCoverage(() =>
       assertCoverage(BOUNDS, () => ({ status: 404 }), snapshotOf([])),
     );
     expect(error.kind).toBe("unpublished");
     expect(error.message).toContain("N45E006");
   });
 
-  it("reads a 404 for a listed tile as the source having changed, not the region", () => {
+  it("reads a 404 for a listed tile as the source having changed, not the region", async () => {
     // Same status code, opposite action. Only the snapshot separates them, which is the whole
     // reason it is not optional — detection alone cannot tell these two apart.
-    const error = catchCoverage(() =>
+    const error = await catchCoverage(() =>
       assertCoverage(BOUNDS, () => ({ status: 404 }), snapshotOf(["N45E006"])),
     );
     expect(error.kind).toBe("unexpected");
@@ -159,19 +160,19 @@ describe("an absent tile is classified, not merely detected", () => {
     expect(error.message).toContain("has changed");
   });
 
-  it("reads anything else as a transport failure that does not implicate the region", () => {
-    const error = catchCoverage(() =>
+  it("reads anything else as a transport failure that does not implicate the region", async () => {
+    const error = await catchCoverage(() =>
       assertCoverage(BOUNDS, () => ({ status: 503 }), snapshotOf(["N45E006"])),
     );
     expect(error.kind).toBe("unreachable");
     expect(error.message).toContain("503");
   });
 
-  it("classifies a probe that throws as a transport failure, not as an absence", () => {
+  it("classifies a probe that throws as a transport failure, not as an absence", async () => {
     // A timeout, a reset socket or a DNS failure is the same class as a 5xx and must arrive
     // as one. Escaping raw would hand the only caller that distinguishes these three cases an
     // error carrying no `kind`.
-    const error = catchCoverage(() =>
+    const error = await catchCoverage(() =>
       assertCoverage(
         BOUNDS,
         () => {
@@ -185,7 +186,7 @@ describe("an absent tile is classified, not merely detected", () => {
     expect(error.message).toContain("N45E006");
   });
 
-  it("refuses bounds that would enumerate no tiles at all", () => {
+  it("refuses bounds that would enumerate no tiles at all", async () => {
     // The vacuous pass: invalid bounds enumerate nothing, the loop runs zero times, and
     // coverage reports success having probed nothing. Rejected by validating the box with the
     // same rule the region declaration uses.
@@ -196,7 +197,7 @@ describe("an absent tile is classified, not merely detected", () => {
       [6, 45, 7],
     ]) {
       let probed = 0;
-      expect(() =>
+      await expect(
         assertCoverage(
           bounds,
           () => {
@@ -205,7 +206,7 @@ describe("an absent tile is classified, not merely detected", () => {
           },
           snapshotOf([]),
         ),
-      ).toThrow();
+      ).rejects.toThrow();
       expect(probed, JSON.stringify(bounds)).toBe(0);
     }
   });
@@ -223,9 +224,9 @@ describe("an absent tile is classified, not merely detected", () => {
     }
   });
 
-  it("probes every required tile rather than stopping at the first", () => {
+  it("probes every required tile rather than stopping at the first", async () => {
     const asked = [];
-    assertCoverage(
+    await assertCoverage(
       [6.5, 45.5, 7.5, 46.5],
       (id) => {
         asked.push(id);
@@ -236,14 +237,14 @@ describe("an absent tile is classified, not merely detected", () => {
     expect(asked).toEqual(["N45E006", "N45E007", "N46E006", "N46E007"]);
   });
 
-  it("has no path that fills or skips an absent tile", () => {
+  it("has no path that fills or skips an absent tile", async () => {
     // The refusal is the absence of a branch rather than a guard around one: there is no
     // argument, flag or status that makes this return a tile it could not read.
     // 204 is deliberately here rather than among the accepted statuses: it is a success code
     // carrying no bytes, and treating "success" as presence would let an empty answer stand in
     // for a tile.
     for (const status of [204, 301, 403, 404, 500, 503]) {
-      expect(() => assertCoverage(BOUNDS, () => ({ status }), snapshotOf([]))).toThrow(
+      await expect(assertCoverage(BOUNDS, () => ({ status }), snapshotOf([]))).rejects.toThrow(
         CoverageError,
       );
     }
@@ -260,10 +261,10 @@ describe("the snapshot's own freshness", () => {
     ).not.toThrow();
   });
 
-  it("fails past it, rather than leaving a reader to judge a date", () => {
+  it("fails past it, rather than leaving a reader to judge a date", async () => {
     // A retrieval date alone asks someone to do arithmetic and then make a call they have no
     // basis for. The threshold is declared, so the check fires instead of the reader.
-    const error = catchCoverage(() =>
+    const error = await catchCoverage(() =>
       assertSnapshotFresh(
         snapshotOf([], { retrievedAt: "2024-01-01", maxAgeDays: 365 }),
         new Date("2026-08-30"),
@@ -278,8 +279,8 @@ describe("the snapshot's own freshness", () => {
     ).toThrow(CoverageError);
   });
 
-  it("refuses a retrievedAt in the future, which would never expire", () => {
-    const error = catchCoverage(() =>
+  it("refuses a retrievedAt in the future, which would never expire", async () => {
+    const error = await catchCoverage(() =>
       assertSnapshotFresh(snapshotOf([], { retrievedAt: "2027-01-01" }), new Date("2026-08-30")),
     );
     expect(error.message).toContain("in the future");
@@ -365,9 +366,9 @@ describe("the checked-in snapshot", () => {
 });
 
 /** @returns {CoverageError} */
-function catchCoverage(fn) {
+async function catchCoverage(fn) {
   try {
-    fn();
+    await fn();
   } catch (error) {
     if (error instanceof CoverageError) return error;
     throw error;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The committed entry point for the vertical fixture's terrain archive (T4.6).
+ * The committed entry point for the vertical fixture's archives (T4.6).
  *
  * **Why this file exists at all.** Every obligation had been met end to end against the real
  * release before it did — but from a scratchpad runner, so nothing in the repository reproduced
@@ -13,7 +13,7 @@
  * synthetic source with no network — which is a different claim from "the release still has the
  * data", and only the latter needs the network.
  *
- * Not run by `npm run verify` or by CI: it fetches, and it writes an archive. `*.pmtiles` is
+ * Not run by `npm run verify` or by CI: it fetches, and it writes archives. `*.pmtiles*` is
  * ignored by git, so the repository never carries map tiles (`CLAUDE.md`).
  */
 
@@ -31,11 +31,14 @@ export const DEFAULT_PATHS = Object.freeze({
   snapshotPath: "fixtures/vertical/coverage-snapshot.json",
   licencePath: "fixtures/vertical/licence/COP-DEM-GLO-30.txt",
   attributionPath: "fixtures/vertical/attribution.json",
-  archivePath: "build/fixture/terrain.pmtiles",
+  // Two archives, because PMTiles v3 carries one tile type and one compression per file
+  // (ADR-0025). A renderer wants them as two sources in any case.
+  terrainArchivePath: "build/fixture/terrain.pmtiles",
+  contourArchivePath: "build/fixture/contours.pmtiles",
 });
 
 /**
- * Build the terrain archive.
+ * Build the fixture's archives — terrain and contours, two files by ADR-0025.
  *
  * @param {{
  *   paths?: typeof DEFAULT_PATHS,
@@ -44,7 +47,7 @@ export const DEFAULT_PATHS = Object.freeze({
  *   io?: object,
  *   now?: () => Date,
  * }} [options]
- * @returns {Promise<object>} the build report, plus the archive's size in bytes.
+ * @returns {Promise<object>} the build report, with each archive's size in bytes.
  */
 export async function buildFixture(options = {}) {
   const {
@@ -55,7 +58,9 @@ export async function buildFixture(options = {}) {
     now = () => new Date(),
   } = options;
 
-  io.mkdirSync(dirname(paths.archivePath), { recursive: true });
+  for (const path of [paths.terrainArchivePath, paths.contourArchivePath]) {
+    io.mkdirSync(dirname(path), { recursive: true });
+  }
   const source = createSourceDeps({ fetchImpl });
   const report = await runBuild(
     paths,
@@ -65,7 +70,9 @@ export async function buildFixture(options = {}) {
       io,
       probe: source.probe,
       readTile: source.readTile,
-      writeArchive: createArchiveWriter({ tileType: "png", compression: "none" }),
+      // The build chooses each archive's payload type and compression per call; the writer holds
+      // no opinion about which archives exist.
+      writeArchive: createArchiveWriter(),
       // The archive is named only once every check has passed; until then it is a `.partial`
       // that `/lab` and the browser scenario do not read.
       finaliseArchive: (from, to) => io.renameSync(from, to),
@@ -76,7 +83,13 @@ export async function buildFixture(options = {}) {
     { distributable },
   );
 
-  return { ...report, archiveBytes: io.statSync(report.outputPath).size };
+  return {
+    ...report,
+    archives: report.archives.map((archive) => ({
+      ...archive,
+      bytes: io.statSync(archive.path).size,
+    })),
+  };
 }
 
 /** The real filesystem, as one injectable object. */
@@ -110,9 +123,8 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
           sourceCells: report.sourceCells,
           envelope: report.envelope.map((v) => Number(v.toFixed(6))),
           lowestM: Number(report.lowest.elevationM.toFixed(3)),
-          tiles: report.tileCount,
-          archive: report.outputPath,
-          archiveBytes: report.archiveBytes,
+          archives: report.archives,
+          totalBytes: report.archives.reduce((n, a) => n + a.bytes, 0),
           distributable: report.distributable,
         },
         null,

@@ -26,6 +26,9 @@ const REGION = {
   minElevationJustification: "above the reported treeline",
   minZoom: 14,
   maxZoom: 14,
+  zoomJustification: "one z14 tile keeps the suite fast",
+  contourIntervalM: 100,
+  contourIntervalJustification: "100 m across the test ramp gives several levels",
 };
 /**
  * A cut lying **wholly west of 7°E** whose production envelope does not.
@@ -57,7 +60,8 @@ const PATHS = {
   snapshotPath: "snapshot.json",
   licencePath: "LICENCE.txt",
   attributionPath: "attribution.json",
-  archivePath: "out.pmtiles",
+  terrainArchivePath: "out.pmtiles",
+  contourArchivePath: "out-contours.pmtiles",
 };
 
 /**
@@ -97,13 +101,32 @@ function cropFor(tileId, region, elevationAt) {
   };
 }
 
-/** A gentle slope, well clear of the floor. */
-const slope = (lon, lat) => 3000 + (lon - 6.5) * 400 + (lat - 45.5) * 300;
+/**
+ * A slope well clear of the floor, with enough relief to carry contours.
+ *
+ * The gradient is steep because the test region is 0.01° across: at a gentler one the whole
+ * region spanned 7 m, which contains no multiple of the 100 m interval, and the build refused it
+ * — correctly. Here it spans some 700 m, so several levels fall inside.
+ */
+const slope = (lon, lat) => 3000 + (lon - 6.5) * 40000 + (lat - 45.5) * 30000;
+
+/**
+ * Terrain whose minimum is **exactly** `base`, with relief above it.
+ *
+ * Flat test terrain used to be enough, and is not any more: a region containing no multiple of
+ * the contour interval has no contour lines, and the build now refuses that rather than shipping
+ * an empty vector layer. The western part is held flat at `base` so a floor failure can still
+ * name an exact metre value, while the east rises far enough to cross several interval
+ * multiples.
+ */
+const ramp = (region, base) => (lon) =>
+  base + Math.max(0, (lon - (region.bounds[0] + 0.003)) * 100000);
 
 function harness(overrides = {}) {
   const calls = {
     readTile: [],
     readBounds: [],
+    order: [],
     probe: [],
     wrote: [],
     finalised: [],
@@ -137,21 +160,28 @@ function harness(overrides = {}) {
     },
     writeArchive: (path, tiles, meta) => {
       calls.wrote.push(path);
+      calls.order.push(`wrote:${path}`);
       calls.archived.push({ path, tiles, meta });
       return (
         overrides.writeArchive ??
         ((_p, _t, m) => ({
-          entries: () => [
-            { path: "LICENSE", text: m.licenceText },
-            {
-              path: "metadata.json",
-              text: JSON.stringify({ ...m, licenceText: undefined }),
-            },
-          ],
+          entries: () =>
+            m.distributable
+              ? [
+                  { path: "LICENSE", text: m.licenceText },
+                  { path: "metadata.json", text: JSON.stringify({ ...m, licenceText: undefined }) },
+                ]
+              : [
+                  { path: "NOT-FOR-DISTRIBUTION", text: "dev" },
+                  { path: "metadata.json", text: JSON.stringify({ ...m, licenceText: undefined }) },
+                ],
         }))
       )(path, tiles, meta);
     },
-    finaliseArchive: (from, to) => calls.finalised.push([from, to]),
+    finaliseArchive: (from, to) => {
+      calls.order.push(`finalised:${to}`);
+      calls.finalised.push([from, to]);
+    },
     discardArchive: (path) => calls.discarded.push(path),
     now: () => new Date("2026-08-30"),
     // The snapshot loader is the one collaborator reached through `io`; a stub keeps this suite
@@ -200,6 +230,7 @@ describe("the order of the checks", () => {
       "coverage",
       "elevation",
       "tiles",
+      "contours",
       "archive",
     ]);
   });
@@ -211,13 +242,21 @@ describe("the order of the checks", () => {
     const report = await runBuild(PATHS, deps);
 
     expect(report.sourceCells).toEqual(["N45E006"]);
-    expect(report.tileCount).toBeGreaterThan(0);
+    expect(report.archives.map((a) => a.kind)).toEqual(["terrain", "contours"]);
     expect(report.lowest.tileId).toBe("N45E006");
     expect(report.lowest.elevationM).toBeGreaterThanOrEqual(REGION.minElevationM);
     // Written partial, then named as the archive only once every check has passed.
-    expect(calls.wrote).toEqual(["out.pmtiles.partial"]);
-    expect(calls.finalised).toEqual([["out.pmtiles.partial", "out.pmtiles"]]);
+    // Both archives, and **every partial written before any is renamed**. A build that
+    // finalised terrain and then failed on contours would leave a half-built stack that looks
+    // complete.
+    expect(calls.wrote).toEqual(["out.pmtiles.partial", "out-contours.pmtiles.partial"]);
+    expect(calls.finalised).toEqual([
+      ["out.pmtiles.partial", "out.pmtiles"],
+      ["out-contours.pmtiles.partial", "out-contours.pmtiles"],
+    ]);
     expect(calls.discarded).toEqual([]);
+    expect(report.archives.map((a) => a.kind)).toEqual(["terrain", "contours"]);
+    for (const archive of report.archives) expect(archive.tiles).toBeGreaterThan(0);
   });
 
   it("fails at the licence before touching the network or any tile", async () => {
@@ -248,7 +287,7 @@ describe("the order of the checks", () => {
   });
 
   it("writes nothing when the floor is breached", async () => {
-    const { deps, calls } = harness({ readTile: (id) => cropFor(id, REGION, () => 2400) });
+    const { deps, calls } = harness({ readTile: (id) => cropFor(id, REGION, ramp(REGION, 2400)) });
     withSnapshot(deps, ["N45E006"]);
 
     const error = await catchBuild(() => runBuild(PATHS, deps));
@@ -371,7 +410,7 @@ describe("every source cell is read, and read as itself", () => {
     const { deps, calls } = seamHarness({
       readTile: (id) => {
         if (id === "N45E006") throw new Error("range read failed");
-        return cropFor(id, SEAM_REGION, () => 3000);
+        return cropFor(id, SEAM_REGION, ramp(SEAM_REGION, 3000));
       },
     });
 
@@ -394,12 +433,14 @@ describe("every source cell is read, and read as itself", () => {
         // has its longitude reconstructed by multiplication, which lands a hair below the
         // bound — so a strict predicate here marks an in-region sample as outside and the test
         // fails on its own arithmetic rather than on the build's.
+        // In-region terrain must carry relief, or there are no contour levels and the build
+        // refuses the fixture — flat ground genuinely has no contours.
         cropFor(id, region, (lon, lat) =>
           lon >= region.bounds[0] - SPACING / 2 &&
           lon < region.bounds[2] + SPACING / 2 &&
           lat >= region.bounds[1] - SPACING / 2 &&
           lat < region.bounds[3] + SPACING / 2
-            ? 3000
+            ? ramp(region, 3000)(lon)
             : 200,
         ),
     });
@@ -412,6 +453,121 @@ describe("every source cell is read, and read as itself", () => {
 });
 
 describe("what the build hands the writer", () => {
+  it("writes and checks every archive before naming any of them", async () => {
+    // The set-level version of "a failed build must not leave a usable-looking artifact". If
+    // terrain were finalised before contours were even written, a contour failure would leave a
+    // half-built stack that looks complete to anything reading the finalised paths. Asserted on
+    // the interleaving, because the per-archive assertions pass either way.
+    const { deps, calls } = harness();
+    withSnapshot(deps, ["N45E006"]);
+
+    await runBuild(PATHS, deps);
+
+    const firstFinalise = calls.order.findIndex((e) => e.startsWith("finalised:"));
+    const lastWrite = calls.order.map((e) => e.startsWith("wrote:")).lastIndexOf(true);
+    expect(calls.order).toHaveLength(4);
+    expect(lastWrite).toBeLessThan(firstFinalise);
+  });
+
+  it("derives the contour levels from the declared region, not from the envelope it read", async () => {
+    // **Not observable in the tiles.** A level below the region's minimum traces a contour that
+    // lies outside the region, and tiling clips it away — so region-derived and envelope-derived
+    // levels produce byte-identical output and differ only in work done. The levels the build
+    // reports are the only place the requirement can be seen, which is why it reports them.
+    const { deps } = harness();
+    withSnapshot(deps, ["N45E006"]);
+
+    const report = await runBuild(PATHS, deps);
+    const envelopeRange = { lowest: Infinity, highest: -Infinity };
+    // The envelope reaches beyond the region on both sides, so its range strictly contains the
+    // region's — asserted, so this cannot pass by the two happening to coincide.
+    for (const lon of [report.envelope[0], report.envelope[2]]) {
+      const value = slope(lon, (report.envelope[1] + report.envelope[3]) / 2);
+      envelopeRange.lowest = Math.min(envelopeRange.lowest, value);
+      envelopeRange.highest = Math.max(envelopeRange.highest, value);
+    }
+    expect(envelopeRange.lowest).toBeLessThan(Math.min(...report.contourLevels));
+    expect(envelopeRange.highest).toBeGreaterThan(Math.max(...report.contourLevels));
+
+    // Every reported level lies inside the region's own range.
+    const region = { lowest: report.lowest.elevationM };
+    for (const level of report.contourLevels) {
+      expect(level).toBeGreaterThanOrEqual(region.lowest);
+      expect(level % REGION.contourIntervalM).toBe(0);
+    }
+    expect(report.contourLevels.length).toBeGreaterThan(0);
+  });
+
+  it("unpublishes the first archive when a later promotion fails", async () => {
+    // **Promotion is not atomic and cannot be made so**: renaming several files is several
+    // operations. The earlier test fails *every* rename, so it only ever exercises the first and
+    // says nothing about this — terrain renamed successfully and stayed published while contours
+    // did not, leaving half a stack that looks complete to anything reading the finalised paths.
+    let renames = 0;
+    const { deps, calls } = harness({
+      deps: {
+        finaliseArchive: (from, to) => {
+          renames += 1;
+          calls.finalised.push([from, to]);
+          if (renames === 2) throw new Error("rename failed");
+        },
+      },
+    });
+    withSnapshot(deps, ["N45E006"]);
+
+    const error = await catchBuild(() => runBuild(PATHS, deps));
+
+    expect(error.stage).toBe("archive");
+    expect(renames).toBe(2); // the second was attempted, so the first had already published
+    // Both the promoted final path and every partial are cleaned up.
+    expect(calls.discarded).toContain("out.pmtiles");
+    expect(calls.discarded).toContain("out.pmtiles.partial");
+    expect(calls.discarded).toContain("out-contours.pmtiles.partial");
+  });
+
+  it("attempts every cleanup even when the first one fails", async () => {
+    // A loop that awaited each discard in turn stopped at the first rejection, so a failure
+    // cleaning up terrain left the contour partial on disk — the cleanup's own failure becoming
+    // a second leak, silently.
+    const attempted = [];
+    const { deps } = harness({
+      writeArchive: () => {
+        throw new Error("disk full");
+      },
+      deps: {
+        discardArchive: (path) => {
+          attempted.push(path);
+          if (attempted.length === 1) return Promise.reject(new Error("permission denied"));
+          return Promise.resolve();
+        },
+      },
+    });
+    withSnapshot(deps, ["N45E006"]);
+
+    const error = await catchBuild(() => runBuild(PATHS, deps));
+
+    expect(attempted).toEqual(["out.pmtiles.partial", "out-contours.pmtiles.partial"]);
+    // The build failure is still the story, with the cleanup failure kept alongside it.
+    expect(error.stage).toBe("archive");
+    expect(error.cause).toBeInstanceOf(AggregateError);
+    expect(error.cause.errors[0].message).toBe("disk full");
+  });
+
+  it("refuses a region with too little relief to carry a contour at the declared interval", async () => {
+    // Flat ground genuinely has no contours, and `levelsFor` says so by returning nothing. What
+    // to do about that is the build's judgement: a fixture whose vector layer is empty does not
+    // demonstrate contours, which is what the archive exists for. The message names the
+    // declaration as the thing to change, since the terrain is not wrong.
+    const { deps } = harness({ readTile: (id) => cropFor(id, REGION, () => 3000) });
+    withSnapshot(deps, ["N45E006"]);
+
+    const error = await catchBuild(() => runBuild(PATHS, deps));
+
+    expect(error.stage).toBe("contours");
+    expect(error.message).toContain("no multiple of the declared 100 m contour interval");
+    expect(error.message).toContain("declare a smaller interval");
+  });
+
   it("advertises the declared region, not the production envelope it had to read", async () => {
     // The envelope is how complete tiles were produced; the bounds are what a consumer asked
     // for. Publishing the envelope would invite a renderer to request tiles outside the region,
@@ -524,7 +680,7 @@ describe("a seam that rejects is still that stage's failure", () => {
     expect(error).toBeInstanceOf(BuildError);
     expect(error.stage).toBe("archive");
     expect(error.cause.message).toBe("disk full");
-    expect(calls.discarded).toEqual(["out.pmtiles.partial"]);
+    expect(calls.discarded).toEqual(["out.pmtiles.partial", "out-contours.pmtiles.partial"]);
     expect(calls.finalised).toEqual([]);
   });
 
@@ -553,7 +709,8 @@ describe("a seam that rejects is still that stage's failure", () => {
     await catchBuild(() => runBuild(PATHS, deps));
     order.push("reported");
 
-    expect(order).toEqual(["discarded", "reported"]);
+    // Two archives, so two discards — and both must complete before the failure surfaces.
+    expect(order).toEqual(["discarded", "discarded", "reported"]);
   });
 
   it("keeps the archive failure when the cleanup fails too, rather than reporting only the cleanup", async () => {
@@ -572,7 +729,20 @@ describe("a seam that rejects is still that stage's failure", () => {
 
     expect(error.stage).toBe("archive");
     expect(error.cause).toBeInstanceOf(AggregateError);
-    expect(error.cause.errors.map((e) => e.message)).toEqual(["disk full", "permission denied"]);
+    // The build failure first, then **one entry per path that could not be cleaned up** — two,
+    // because there are two archives and this discard rejects for both. Flat rather than nested,
+    // so the reason the build failed is not buried under a wrapper describing the cleanup.
+    // Each cleanup failure **names the path it could not remove**, with the raw rejection kept
+    // as its cause: `discardArchive` is injected and nothing obliges its errors to identify
+    // anything, so three bare "permission denied"s would say nothing about what is still there.
+    expect(error.cause.errors[0].message).toBe("disk full");
+    expect(error.cause.errors.slice(1).map((e) => e.message)).toEqual([
+      "could not discard out.pmtiles.partial",
+      "could not discard out-contours.pmtiles.partial",
+    ]);
+    for (const failure of error.cause.errors.slice(1)) {
+      expect(failure.cause.message).toBe("permission denied");
+    }
   });
 
   it("resolves an awaited probe's status rather than carrying the promise into the check", async () => {
@@ -655,14 +825,14 @@ describe("the codec and the floor are actually wired together", () => {
   // to the floor — is invisible until here. RGB(128,0,0) is sea level, so undecoded bytes
   // would compare as ~128 m and breach a 2,500 m floor with a nonsense number.
   it("compares decoded metres against the declared floor, not raw channel values", async () => {
-    const { deps } = harness({ readTile: (id) => cropFor(id, REGION, () => 2550) });
+    const { deps } = harness({ readTile: (id) => cropFor(id, REGION, ramp(REGION, 2550)) });
     withSnapshot(deps, ["N45E006"]);
 
     expect((await runBuild(PATHS, deps)).lowest.elevationM).toBeCloseTo(2550, 2);
   });
 
   it("reports the breaching elevation in metres, so the failure is readable", async () => {
-    const { deps } = harness({ readTile: (id) => cropFor(id, REGION, () => 2412.5) });
+    const { deps } = harness({ readTile: (id) => cropFor(id, REGION, ramp(REGION, 2412.5)) });
     withSnapshot(deps, ["N45E006"]);
 
     const error = await catchBuild(() => runBuild(PATHS, deps));
@@ -689,8 +859,14 @@ describe("the licence gate is on distribution, not on execution", () => {
 
     expect(report.distributable).toBe(false);
     expect(report.roles).toEqual([]);
-    expect(report.outputPath).toBe("out.pmtiles.dev");
-    expect(calls.finalised).toEqual([["out.pmtiles.dev.partial", "out.pmtiles.dev"]]);
+    expect(report.archives.map((a) => a.path)).toEqual([
+      "out.pmtiles.dev",
+      "out-contours.pmtiles.dev",
+    ]);
+    expect(calls.finalised).toEqual([
+      ["out.pmtiles.dev.partial", "out.pmtiles.dev"],
+      ["out-contours.pmtiles.dev.partial", "out-contours.pmtiles.dev"],
+    ]);
   });
 
   it("refuses a development archive that does not say it is one", async () => {
@@ -765,33 +941,71 @@ describe("the archive must carry what it was built under", () => {
     expect(received).toEqual(ATTRIBUTION);
   });
 
-  it.each([
-    {
-      note: "the writer itself throws",
-      overrides: {
-        writeArchive: () => {
-          throw new Error("disk full");
-        },
+  it("discards only the partials when the writer fails before promotion", async () => {
+    // Promotion never begins, so a previous build's pair is untouched and still consistent with
+    // itself. Removing it because an unrelated rebuild failed early would be gratuitous.
+    const { deps, calls } = harness({
+      writeArchive: () => {
+        throw new Error("disk full");
       },
-    },
-    {
-      note: "finalising fails",
-      overrides: {
-        deps: {
-          finaliseArchive: () => {
-            throw new Error("rename failed");
-          },
-        },
-      },
-    },
-  ])("discards the partial when $note", async ({ overrides }) => {
-    const { deps, calls } = harness(overrides);
+    });
     withSnapshot(deps, ["N45E006"]);
 
     await catchBuild(() => runBuild(PATHS, deps));
 
-    expect(calls.discarded).toEqual(["out.pmtiles.partial"]);
+    expect(calls.discarded).toEqual(["out.pmtiles.partial", "out-contours.pmtiles.partial"]);
     expect(calls.finalised).toEqual([]);
+  });
+
+  it("discards only the partials when the first rename fails", async () => {
+    // The transaction boundary, on its early side. A rename that **throws has modified
+    // nothing**, so a previous build's pair is still whole — deleting it would destroy good
+    // output over a failure that touched none of it. This is distinct from the writer failing:
+    // here promotion was attempted and did not take.
+    const { deps, calls } = harness({
+      deps: {
+        finaliseArchive: () => {
+          throw new Error("rename failed");
+        },
+      },
+    });
+    withSnapshot(deps, ["N45E006"]);
+
+    await catchBuild(() => runBuild(PATHS, deps));
+
+    expect(calls.discarded).toEqual(["out.pmtiles.partial", "out-contours.pmtiles.partial"]);
+  });
+
+  it("discards every final and every partial once a rename has landed", async () => {
+    // The late side. Once one rename succeeds the pair on disk is a mixture of this build and
+    // the last, whatever happens next — so a failure leaves **no** archive. Removing only what
+    // this build promoted would leave a previous counterpart published beside nothing, which is
+    // the same half-built stack assembled from two builds.
+    let renames = 0;
+    const { deps, calls } = harness({
+      deps: {
+        finaliseArchive: (from, to) => {
+          renames += 1;
+          calls.finalised.push([from, to]);
+          if (renames === 2) throw new Error("rename failed");
+        },
+      },
+    });
+    withSnapshot(deps, ["N45E006"]);
+
+    await catchBuild(() => runBuild(PATHS, deps));
+
+    expect(renames).toBe(2);
+    // **Order is the assertion, not just membership.** Finals are the only paths a consumer can
+    // see, so all of them go before any effort is spent on a `.partial` nothing reads — an
+    // interleaved order leaves the contour archive visible for as long as the terrain partial's
+    // removal takes.
+    expect(calls.discarded).toEqual([
+      "out.pmtiles",
+      "out-contours.pmtiles",
+      "out.pmtiles.partial",
+      "out-contours.pmtiles.partial",
+    ]);
   });
 
   it("uses one licence entry name for both halves of the obligation", async () => {
@@ -826,7 +1040,7 @@ describe("the archive must carry what it was built under", () => {
 
     await catchBuild(() => runBuild(PATHS, deps));
 
-    expect(calls.discarded).toEqual(["out.pmtiles.partial"]);
+    expect(calls.discarded).toEqual(["out.pmtiles.partial", "out-contours.pmtiles.partial"]);
     expect(calls.finalised).toEqual([]);
   });
 });

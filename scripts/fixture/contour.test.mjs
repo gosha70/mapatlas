@@ -192,9 +192,16 @@ describe("levels are anchored to multiples of the interval", () => {
     expect(levelsFor(2600, 2810.7, 100)).toEqual([2600, 2700, 2800]);
   });
 
+  it("returns nothing for a range too narrow to contain a multiple", () => {
+    // A fact about the terrain, not an error: flat ground has no contours. Whether that is
+    // acceptable belongs to whoever asked — the build refuses it, this does not.
+    expect(levelsFor(3000, 3000, 100)).toEqual([]);
+    expect(levelsFor(2910, 2990, 100)).toEqual([]);
+  });
+
   it.each([
     { note: "a zero interval", args: [0, 100, 0], expected: /positive number of metres/ },
-    { note: "an empty range", args: [100, 100, 10], expected: /range is empty/ },
+    { note: "an inverted range", args: [200, 100, 10], expected: /range is inverted/ },
   ])("refuses $note", ({ args, expected }) => {
     expect(() => levelsFor(...args)).toThrow(expected);
   });

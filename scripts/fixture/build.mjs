@@ -8,6 +8,7 @@ import {
   assertArchiveCarriesLicence,
   assertStringsBackedByLicence,
 } from "./licence.mjs";
+import { contourTiles, levelsFor, traceContours } from "./contour.mjs";
 import { productionEnvelope, tilesInRange } from "./mercator.mjs";
 import { encodePng } from "./png.mjs";
 import { assertMinimumElevation, parseRegionDeclaration } from "./region.mjs";
@@ -63,6 +64,7 @@ export const BUILD_STAGES = Object.freeze([
   "coverage",
   "elevation",
   "tiles",
+  "contours",
   "archive",
 ]);
 
@@ -108,23 +110,30 @@ async function at(stage, work) {
 /**
  * Run the obligations in order and report what each established.
  *
- * @param {{ regionPath: string, snapshotPath: string, licencePath: string, attributionPath: string, archivePath: string }} paths
+ * @param {{ regionPath: string, snapshotPath: string, licencePath: string, attributionPath: string, terrainArchivePath: string, contourArchivePath: string }} paths
  * @param {{
  *   readText: (path: string) => string,
  *   readJson: (path: string) => unknown,
  *   io: object,
  *   probe: (tileId: string) => { status: number } | Promise<{ status: number }>,
  *   readTile: (tileId: string, bounds: [number, number, number, number]) => Promise<object>,
- *   writeArchive: (path: string, tiles: string[], licenceText: string, attribution: Record<string, string>) => { entries: () => Iterable<{ path: string, text: string }> },
- *   finaliseArchive: (from: string, to: string) => void,
- *   discardArchive: (path: string) => void,
+ *   writeArchive: (path: string, tiles: Array<{ z: number, x: number, y: number, bytes: Uint8Array }>, meta: object) => Promise<{ entries: () => Iterable<{ path: string, text: string }> }>,
+ *   finaliseArchive: (from: string, to: string) => void | Promise<void>,
+ *   discardArchive: (path: string) => void | Promise<void>,
  *   now: () => Date,
  * }} deps
  *
- * `discardArchive` must tolerate a path that was never created: it is called whenever the
- * archive stage fails, including when the writer itself threw before producing anything.
+ * `writeArchive` receives canonical `z/x/y` tiles and one `meta` object carrying the bounds, the
+ * zoom range, the payload type and compression, the distributable flag and the licence inputs —
+ * rather than the positional licence arguments it took when there was one archive of one kind.
  *
- * @returns {Promise<{ roles: string[], distributable: boolean, outputPath: string, region: string, tiles: string[], lowest: object }>}
+ * `discardArchive` must tolerate a path that was never created, and **what it is called with
+ * depends on how far promotion got**: before any rename has succeeded, only the partials, since a
+ * previous build's finals are still whole and consistent; once one has landed, every final —
+ * including paths written by a previous build — followed by every partial. It is never called
+ * with nothing.
+ *
+ * @returns {Promise<{ roles: string[], distributable: boolean, region: string, envelope: number[], sourceCells: string[], contourLevels: number[], archives: Array<{ kind: string, path: string, tiles: number }>, lowest: object }>}
  */
 export async function runBuild(paths, deps, options = {}) {
   const distributable = options.distributable ?? true;
@@ -189,7 +198,9 @@ export async function runBuild(paths, deps, options = {}) {
     ),
   );
 
-  const rasterTiles = await at("tiles", () => {
+  const addresses = [...tilesInRange(declaration.bounds, declaration.minZoom, declaration.maxZoom)];
+
+  const { surface, rasterTiles } = await at("tiles", () => {
     for (const crop of crops) {
       if (crop.pixelScaleDeg !== SOURCE_SAMPLE_SPACING_DEG) {
         // The halo was sized from the declared spacing before any header was read. A source at
@@ -201,80 +212,189 @@ export async function runBuild(paths, deps, options = {}) {
         );
       }
     }
-    const surface = stitchSurface(crops);
-    return [...tilesInRange(declaration.bounds, declaration.minZoom, declaration.maxZoom)].map(
-      ({ z, x, y }) => ({
+    const stitched = stitchSurface(crops);
+    return {
+      surface: stitched,
+      rasterTiles: addresses.map(({ z, x, y }) => ({
         z,
         x,
         y,
-        bytes: encodePng(TILE_SIZE, TILE_SIZE, renderTerrariumTile(surface, z, x, y)),
-      }),
-    );
+        bytes: encodePng(TILE_SIZE, TILE_SIZE, renderTerrariumTile(stitched, z, x, y)),
+      })),
+    };
   });
 
-  // Written to a partial path and only named as the archive once it has passed. A build that
-  // fails its licence checks after writing leaves a licence-violating archive on disk, which
-  // `/lab` or the browser scenario would then pick up — a failed build producing a usable-looking
-  // artifact is worse than one producing nothing.
-  // A development archive is named so it cannot be mistaken for a shippable one, and the name
-  // is not cosmetic: it is what stops a local run's output being picked up by `/lab` or the
-  // browser scenario, which read the distributable path.
-  const outputPath = distributable ? paths.archivePath : `${paths.archivePath}.dev`;
-  const partialPath = `${outputPath}.partial`;
-  try {
-    // The writer is inside the `try` too: one that fails midway leaves a partial behind just as
-    // a failing check does. The `.partial` suffix already keeps `/lab` and the browser scenario
-    // from picking it up, so this is tidiness rather than safety — but a leftover whose only
-    // protection is a naming convention is one rename away from being a real one.
-    const archive = await at("archive", () =>
-      deps.writeArchive(partialPath, rasterTiles, {
-        // **The declared region, not the envelope.** The bounds advertise what a consumer asked
-        // for and what a renderer should request tiles within; the envelope is an implementation
-        // detail of how complete tiles were produced, and publishing it would invite requests
-        // for tiles outside the region.
-        bounds: declaration.bounds,
-        minzoom: declaration.minZoom,
-        maxzoom: declaration.maxZoom,
-        // Passed rather than inferred from an empty licence: a writer guessing the mode from
-        // whether a string is blank would put a development archive one truthiness bug away
-        // from looking distributable.
-        distributable,
-        licenceText,
-        attribution,
-      }),
-    );
-    if (distributable) {
-      await at("archive", () =>
-        assertArchiveCarriesLicence(archive, licenceText, LICENCE_ENTRY_PATH),
+  const contours = await at("contours", () => {
+    // **Levels come from the declared region; the surface stays the envelope.** Interpolation
+    // and tiling need the wider grid — a contour crossing the region's edge has to be traced
+    // from terrain on both sides of it — but a level is a statement about the region, and
+    // deriving them from the envelope would generate lines for valley floors the fixture does
+    // not cover, only to clip every one of them away.
+    // No cross-check here against the floor stage's minimum. It was written — the two scan the
+    // same samples by different routes — and removed, because no input this build can receive
+    // makes them disagree: it would take a defect inside `stitchSurface`, which is not injectable
+    // and is tested directly. A guard nothing can reach is a claim nobody can check.
+    const range = regionRange(surface, declaration.bounds);
+    const levels = levelsFor(range.lowestM, range.highestM, declaration.contourIntervalM);
+    if (levels.length === 0) {
+      // The declaration, not the terrain, is what is wrong here — and saying so is the whole
+      // point of the message. A fixture whose contour layer is empty does not demonstrate
+      // contours, which is what this archive exists for (ADR-0024, criterion 4).
+      throw new Error(
+        `the declared region spans ${(range.highestM - range.lowestM).toFixed(1)} m ` +
+          `(${range.lowestM.toFixed(1)}..${range.highestM.toFixed(1)}), which contains no multiple ` +
+          `of the declared ${String(declaration.contourIntervalM)} m contour interval — ` +
+          `declare a smaller interval or a region with more relief`,
       );
-      // The second half of obligation 1: the strings were checked against the document above,
-      // and this is where they are confirmed to have reached the archive rather than stopping
-      // at the validation.
-      await at("archive", () =>
-        assertArchiveCarriesAttribution(
-          archive,
-          /** @type {Record<string, string>} */ (attribution),
-          LICENCE_ENTRY_PATH,
-        ),
-      );
-    } else {
-      await at("archive", () => assertNotForDistribution(archive));
     }
-    await at("archive", () => deps.finaliseArchive(partialPath, outputPath));
+    // The levels are reported, not just used. Whether they came from the region or the envelope
+    // is **invisible in the tiles**: an envelope-derived level below the region's minimum traces
+    // a contour outside the region, which tiling then clips away. The output is identical and
+    // the work is not — 43 levels against 23 on the real region — so the only place the
+    // requirement can be observed is in what the build says it traced.
+    return { levels, tiles: contourTiles(traceContours(surface, levels), addresses) };
+  });
+
+  // **Two archives, and neither is named until both have passed.** PMTiles v3 carries one
+  // archive-level tile type and one compression, so raster terrain and vector contours cannot
+  // share one (ADR-0025). They are still one fixture: a build that finalised terrain and then
+  // failed on contours would leave `/lab` and the browser scenario a half-built stack that looks
+  // complete, which is the same failure as leaving a licence-violating archive on disk, one level
+  // up. So every partial is written and checked first, and only then are they all renamed.
+  //
+  // A development build is named so it cannot be mistaken for a shippable one, and the name is
+  // not cosmetic: it is what stops a local run's output being read by anything that expects the
+  // distributable path.
+  const outputs = [
+    {
+      kind: "terrain",
+      path: distributable ? paths.terrainArchivePath : `${paths.terrainArchivePath}.dev`,
+      tiles: rasterTiles,
+      tileType: "png",
+      // PNG is already deflated; gzipping it again buys nothing and costs a decode.
+      compression: "none",
+    },
+    {
+      kind: "contours",
+      path: distributable ? paths.contourArchivePath : `${paths.contourArchivePath}.dev`,
+      tiles: contours.tiles,
+      tileType: "mvt",
+      // Vector tiles are protobuf and compress well; this is the whole reason the two cannot
+      // share an archive even setting the tile type aside.
+      compression: "gzip",
+    },
+  ].map((output) => ({ ...output, partialPath: `${output.path}.partial` }));
+
+  /**
+   * Whether any rename has **succeeded**, which decides what a failure has to clean up.
+   *
+   * Before promotion starts, a previous build's pair is untouched and still consistent with
+   * itself — destroying it because an unrelated rebuild failed early would be gratuitous, and
+   * a rename that *threw* has modified nothing, so it counts as early. Once one has landed, the
+   * pair on disk is a mixture of two builds whatever happens next, and only removing all of it
+   * restores an honest state.
+   */
+  let promotionStarted = false;
+
+  try {
+    for (const output of outputs) {
+      // The writer is inside the `try` too: one that fails midway leaves a partial behind just
+      // as a failing check does. The `.partial` suffix already keeps consumers from picking it
+      // up, so this is tidiness rather than safety — but a leftover whose only protection is a
+      // naming convention is one rename away from being a real one.
+      const archive = await at("archive", () =>
+        deps.writeArchive(output.partialPath, output.tiles, {
+          // **The declared region, not the envelope.** The bounds advertise what a consumer
+          // asked for and what a renderer should request tiles within; the envelope is an
+          // implementation detail of how complete tiles were produced, and publishing it would
+          // invite requests for tiles outside the region.
+          bounds: declaration.bounds,
+          minzoom: declaration.minZoom,
+          maxzoom: declaration.maxZoom,
+          tileType: output.tileType,
+          compression: output.compression,
+          // Passed rather than inferred from an empty licence: a writer guessing the mode from
+          // whether a string is blank would put a development archive one truthiness bug away
+          // from looking distributable.
+          distributable,
+          licenceText,
+          attribution,
+        }),
+      );
+      // **Both archives are derived works**, so both carry the notices. Checking only the one
+      // that happens to hold the elevation data would ship contours traced from the same source
+      // with no attribution at all.
+      if (distributable) {
+        await at("archive", () =>
+          assertArchiveCarriesLicence(archive, licenceText, LICENCE_ENTRY_PATH),
+        );
+        // The second half of obligation 1: the strings were checked against the document above,
+        // and this is where they are confirmed to have reached the archive rather than stopping
+        // at the validation.
+        await at("archive", () =>
+          assertArchiveCarriesAttribution(
+            archive,
+            /** @type {Record<string, string>} */ (attribution),
+            LICENCE_ENTRY_PATH,
+          ),
+        );
+      } else {
+        await at("archive", () => assertNotForDistribution(archive));
+      }
+    }
+    // Promotion is a sequence of renames, and a filesystem offers no way to make several of them
+    // one operation — so if a later one fails, the earlier ones have already published. Tracked
+    // and rolled back rather than left: half a stack on disk looks complete to anything reading
+    // the finalised paths, which is the failure this whole dance exists to prevent.
+    for (const output of outputs) {
+      await at("archive", () => deps.finaliseArchive(output.partialPath, output.path));
+      // **After the rename, not before.** A first rename that throws has modified nothing, so
+      // the previous pair is still whole and consistent — setting the flag ahead of the call
+      // deleted it anyway, which is exactly the case the flag exists to spare.
+      promotionStarted = true;
+    }
   } catch (error) {
-    try {
-      await deps.discardArchive(partialPath);
-    } catch (cleanupError) {
+    // **Every path is attempted, and failures are collected rather than thrown from inside the
+    // loop.** A `for` that awaited each in turn stopped at the first rejection and left every
+    // later partial on disk — the cleanup's own failure quietly becoming a second leak. Promoted
+    // finals come first: they are the ones a consumer could already be reading.
+    //
+    // **Every final path, not only the ones this build renamed.** A rebuild finds both finals
+    // already present; if terrain is replaced and contours then fails, removing only what this
+    // build promoted leaves the *previous* contour archive published beside no terrain at all —
+    // the same half-built stack, assembled from two builds instead of one. The invariant is
+    // therefore: **once promotion has begun, a failure leaves no archive on disk.**
+    const cleanupFailures = [];
+    // **All finals first, then all partials** — not interleaved per archive. Finals are the only
+    // paths a consumer can see, so every one of them goes before any effort is spent on a
+    // `.partial` nothing reads. `flatMap` over the outputs produced terrain-final,
+    // terrain-partial, contour-final, contour-partial, which leaves the contour archive visible
+    // for as long as the terrain partial's removal takes — or forever, if it hangs.
+    const doomed = promotionStarted
+      ? [...outputs.map((output) => output.path), ...outputs.map((output) => output.partialPath)]
+      : outputs.map((output) => output.partialPath);
+    for (const path of doomed) {
+      try {
+        await deps.discardArchive(path);
+      } catch (failure) {
+        // Wrapped with the path it could not remove. `discardArchive` is injected and nothing
+        // obliges its errors to name anything, so several raw `permission denied`s are
+        // indistinguishable — and which archive is still on disk is the one thing a reader needs.
+        cleanupFailures.push(new Error(`could not discard ${path}`, { cause: failure }));
+      }
+    }
+    if (cleanupFailures.length > 0) {
       // A cleanup that fails must not become the story. `discardArchive` is `fs.rm` on a path a
       // failing build just wrote, so rejecting is entirely plausible — and letting it propagate
       // raw would replace "the archive carries no LICENSE" with "permission denied", losing both
-      // the reason the build failed and the stage that names it. Both are kept: the stage stands,
-      // and the cause becomes the pair, original first.
+      // the reason the build failed and the stage that names it. Everything is kept, flat and
+      // original first: nesting these would bury the cause a reader needs under a wrapper.
       throw new BuildError(
         error.stage,
         new AggregateError(
-          [error.cause, cleanupError],
-          `the ${error.stage} stage failed and the partial at ${partialPath} could not be discarded`,
+          [error.cause, ...cleanupFailures],
+          `the ${error.stage} stage failed and ${String(cleanupFailures.length)} archive path(s) ` +
+            `could not be cleaned up`,
         ),
       );
     }
@@ -284,11 +404,11 @@ export async function runBuild(paths, deps, options = {}) {
   return {
     roles,
     distributable,
-    outputPath,
     region: declaration.id,
     envelope,
     sourceCells,
-    tileCount: rasterTiles.length,
+    contourLevels: contours.levels,
+    archives: outputs.map(({ kind, path, tiles }) => ({ kind, path, tiles: tiles.length })),
     lowest,
   };
 }
@@ -332,6 +452,36 @@ async function* readCrops(tileIds, readTile, envelope, region, collected) {
   // at least one crop always intersects it — and were that ever false, yielding nothing reaches
   // `assertMinimumElevation`'s own "cannot check the declared floor without elevation samples",
   // which is tested. A guard here would have been a claim no input could reach.
+}
+
+/**
+ * The lowest and highest samples of the declared region, read off the stitched surface.
+ *
+ * Scans the region rather than the envelope, because a contour level is a statement about the
+ * region. The envelope reaches a tile's width beyond it, which around a summit means valley
+ * floors — deriving levels from that generates lines for terrain the fixture does not cover, and
+ * then throws every one of them away at tiling.
+ *
+ * @param {import("./resample.mjs").ElevationGrid} surface
+ * @param {[west: number, south: number, east: number, north: number]} region
+ * @returns {{ lowestM: number, highestM: number }}
+ */
+function regionRange(surface, region) {
+  const window = regionWindow(surface, region);
+  if (window === null) {
+    throw new Error("the stitched surface does not cover the declared region");
+  }
+  let lowestM = Infinity;
+  let highestM = -Infinity;
+  for (let r = 0; r < window.rows; r += 1) {
+    const base = (window.row0 + r) * surface.width + window.col0;
+    for (let c = 0; c < window.cols; c += 1) {
+      const value = surface.elevationsM[base + c];
+      if (value < lowestM) lowestM = value;
+      if (value > highestM) highestM = value;
+    }
+  }
+  return { lowestM, highestM };
 }
 
 /**

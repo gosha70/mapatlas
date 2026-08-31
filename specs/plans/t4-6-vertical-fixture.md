@@ -17,10 +17,15 @@ cuts it from the real release and reproduces it byte for byte. Every terrain row
 reads *yes*, and the qualification that used to sit here — no committed path, a fake writer,
 nothing written — no longer describes anything.
 
-**What remains unwired is contour generation.** `contour.mjs` traces isolines and cuts them to
-MVT, and nothing builds a contour archive; by ADR-0025 it must be a second one. Beyond that the
-fixture track, the `/lab` route, simulated GPS and the offline scenario are untouched, and those
-last are the acceptance criteria proper.
+**The contour archive is built too.** `npm run fixture:build` now writes **two** archives, as
+ADR-0025 requires: terrain (PNG, uncompressed, 1,493,696 bytes) and contours (MVT, gzipped,
+183,182 bytes), 8 tiles each, both advertising the declared region. Levels come from the
+region's own samples — 23 of them, 2,600 to 4,800 — while the wider envelope is still what the
+interpolation and tiling read.
+
+**What remains are the acceptance criteria proper**, and none has been touched: the fixture track
+(≥5k points, two-segment pause, two event marks), the `/lab` route, simulated GPS, the offline
+Playwright scenario, and the frame-time and memory baseline.
 
 | | unit-tested | wired into `build.mjs` | discharged end-to-end | notes |
 | --- | --- | --- | --- | --- |
@@ -34,7 +39,7 @@ last are the acceptance criteria proper.
 | Mercator addressing + envelope | yes | yes | **yes** | coverage now runs over the envelope |
 | Bilinear resampler | yes | yes | **yes** | 8 distinct PNG tiles |
 | Stitched source surface | yes | yes | **yes** | two real cells joined across 7°E |
-| Contour generation | yes | **no** | **no** | `contour.mjs`; nothing calls it — the contour archive is not built |
+| Contour generation | yes | yes | **yes** | second archive, 183,182 bytes, levels from the declared region |
 | PNG serialiser | yes | yes | **yes** | every tile in the archive is a PNG |
 | Build ordering | yes | — | **yes** | all stages ran in order against real inputs |
 
@@ -57,11 +62,10 @@ declared region, all four attribution roles present, 8 of 8 tiles found with 8 d
 and an unwritten address reading back `undefined`. That measurement discharges ADR-0024
 criterion 6, which requires archive size **measured** rather than calculated.
 
-**Remaining T4.6 implementation scope.** The terrain half is done end to end: source reader,
-async wiring, Mercator addressing, resampling, the stitched surface, PNG, the PMTiles writer and
-the committed entry point. The contour toolchain is **adopted** and `contour.mjs` traces and
-tiles, but nothing builds a contour archive. Still outstanding: **wiring the contour source in as
-a second archive** (ADR-0025); the fixture track (≥5k points, two-segment pause, two event
+**Remaining T4.6 implementation scope.** The whole data path is done end to end and discharged
+through `npm run fixture:build`: source reader, async wiring, Mercator addressing, resampling,
+the stitched surface, PNG, contours, the PMTiles writer, two archives and the committed entry
+point. Still outstanding: the fixture track (≥5k points, two-segment pause, two event
 marks); the `/lab` route; simulated GPS; the offline Playwright scenario; and the frame-time and
 memory baseline — the last of which are the actual acceptance criteria and none has been touched.
 
@@ -492,7 +496,8 @@ time: fixture scale; adopting any of these packages; and integration into the bu
 
 **[superseded 2026-08-31]** Adoption has since happened — `d3-contour` 4.0.2, `geojson-vt` 4.0.3
 and `vt-pbf` 3.1.3 are pinned dependencies and `scripts/fixture/contour.mjs` traces and tiles.
-See *Contours, as built*. Integration into the build has **not**: no contour archive is produced.
+See *Contours, as built*. **[superseded again 2026-08-31]** Integration has happened too: the
+build writes a second, MVT archive — see *Contours, wired*.
 
 The **synthetic** evaluation described in this subsection is author verification: the chain was
 selected and the test that judges it was written by the same author. Its real-geometry successor
@@ -1041,6 +1046,51 @@ latitude not inverted, axes transposed, edge artefacts kept, edge splitting disa
 not carried as a property, the addresses iterated twice (which empties a generator and silently
 emits nothing), empty tiles written, and levels anchored to the terrain rather than the interval.
 
+### Contours, wired
+
+`npm run fixture:build` writes **two** archives. Terrain is PNG, uncompressed, 1,493,696 bytes;
+contours are MVT, gzipped, 183,182 bytes — 8 tiles each, both advertising the declared region and
+both carrying the licence and all four attribution roles, because both are derived works.
+
+**Levels come from the declared region, and that is invisible downstream.** An envelope-derived
+level below the region's minimum traces a contour outside the region, which tiling then clips
+away: the tiles are byte-identical either way and only the work differs, 43 levels against 23. So
+the build *reports* the levels it traced, and the test asserts the envelope's range strictly
+contains the region's, so it cannot pass by the two coinciding.
+
+**Promotion is a transaction, and getting it right took three attempts.** Renaming several files
+is several operations, and no filesystem makes them one.
+
+1. *All partials written and checked before any is renamed.* A contour failure would otherwise
+   leave terrain already published beside nothing.
+2. *Promoted finals rolled back.* Review found the first version's claim false: the loop is
+   sequential, so a second rename failing left the first published. Only failing **every** rename
+   was tested, which exercises just the first.
+3. *Every final removed once promotion has begun — not only this build's.* Review found that too:
+   a **rebuild** finds both finals already there, so replacing terrain and then failing on
+   contours leaves the *previous* contour archive published alone. A half-built stack assembled
+   from two builds is the same defect. The invariant is now **once promotion has begun, a failure
+   leaves no archive on disk**; before it begins, a previous good pair is left untouched, because
+   destroying it over an unrelated early failure would be gratuitous.
+
+Cleanup attempts every path rather than stopping at the first rejection — a `for` that awaited
+each in turn turned one cleanup failure into a second leak — and each failure is wrapped with the
+path it could not remove, since `discardArchive` is injected and nothing obliges its errors to
+name anything.
+
+*A defect this increment introduced and fixed.* `zoomJustification` and
+`contourIntervalJustification` were declared in `region.json` and silently dropped by the parser:
+the file looked reviewable while the values reached nothing that could check them. Both are now
+validated and returned, and the suite compares the parsed and raw key sets **dynamically**, so a
+field added to the JSON and forgotten in the parser fails rather than passing an expectation
+written out by hand.
+
+*Author verification.* 15 mutations killed across the wiring and the transaction, including
+promoted finals untracked, rollback skipping finals, cleanup stopping at the first rejection,
+levels from the envelope, contours uncompressed, contours labelled raster, and each justification
+dropped from validation. Terrain reproduces byte-for-byte against the pre-contour build
+(`ce397483…`), and contours reproduce byte-for-byte across runs (`de045312…`).
+
 ## Fixture composition
 
 Per T4.6: a track of ≥5k raw points with a two-segment pause, two consumer-defined event marks,
@@ -1069,8 +1119,8 @@ Ordered by what gates what.
    `d3-contour` output from the declared crop, with Bar 2 of the latter adjudicated
    independently; both bars pass. **[2026-08-31]** The packages are now **adopted** and pinned,
    `contour.mjs` traces and tiles, and `archive.mjs` writes real archives at fixture scale — so
-   adoption and scale are no longer open. What remains is **integration**: no contour archive is
-   built, and it must be a second one (ADR-0025).
+   adoption and scale are no longer open. **[closed 2026-08-31]** Integration is done as well:
+   the build writes a second, MVT archive per ADR-0025. Nothing about this item is open.
 
    Carried forward as a constraint rather than a result: the synthetic run's ≤0.8% area
    agreement does **not** hold universally on real data — 10 of 128 cases reach 6.54%, all small

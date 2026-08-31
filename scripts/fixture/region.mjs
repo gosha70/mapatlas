@@ -10,6 +10,9 @@ import { readFileSync } from "node:fs";
  * @property {string} minElevationJustification
  * @property {number} minZoom
  * @property {number} maxZoom
+ * @property {string} zoomJustification
+ * @property {number} contourIntervalM
+ * @property {string} contourIntervalJustification
  */
 
 /**
@@ -83,7 +86,15 @@ export function parseRegionDeclaration(value, source = "region declaration") {
     throw new RegionDeclarationError(`${source}: expected an object`);
   }
 
-  const { id, bounds, minElevationM, minElevationJustification, minZoom, maxZoom } = value;
+  const {
+    id,
+    bounds,
+    minElevationM,
+    minElevationJustification,
+    minZoom,
+    maxZoom,
+    contourIntervalM,
+  } = value;
   if (typeof id !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) {
     throw new RegionDeclarationError(`${source}: id must be a non-empty kebab-case string`);
   }
@@ -91,10 +102,19 @@ export function parseRegionDeclaration(value, source = "region declaration") {
   if (!Number.isFinite(minElevationM)) {
     throw new RegionDeclarationError(`${source}: minElevationM must be a finite number`);
   }
-  if (typeof minElevationJustification !== "string" || minElevationJustification.trim() === "") {
-    throw new RegionDeclarationError(
-      `${source}: minElevationJustification must explain why the floor is above the treeline`,
-    );
+  // **Every declared choice carries its reason, and every reason is validated and returned.**
+  // Two of these were declared in the JSON and silently dropped by this parser, which is the
+  // worst of both worlds: the file looks reviewable and the value reaches nothing that could
+  // check it. A justification nobody parses is a comment wearing a field's clothing.
+  const justifications = {
+    minElevationJustification: "explain why the floor is above the treeline",
+    zoomJustification: "explain what the zoom range is chosen against",
+    contourIntervalJustification: "explain what the contour interval is chosen against",
+  };
+  for (const [field, expectation] of Object.entries(justifications)) {
+    if (typeof value[field] !== "string" || value[field].trim() === "") {
+      throw new RegionDeclarationError(`${source}: ${field} must ${expectation}`);
+    }
   }
 
   // The zoom range is a **declared input**, not a product policy, because it decides which
@@ -115,6 +135,15 @@ export function parseRegionDeclaration(value, source = "region declaration") {
     );
   }
 
+  // Declared like the zoom range, and for the same reason: a contour interval decides what the
+  // vector layer *is*, and inferring one from the terrain's range would make two fixtures over
+  // neighbouring regions disagree about where their lines are.
+  if (!Number.isFinite(contourIntervalM) || contourIntervalM <= 0) {
+    throw new RegionDeclarationError(
+      `${source}: contourIntervalM must be a positive number of metres`,
+    );
+  }
+
   return {
     id,
     bounds: [west, south, east, north],
@@ -122,6 +151,9 @@ export function parseRegionDeclaration(value, source = "region declaration") {
     minElevationJustification,
     minZoom,
     maxZoom,
+    zoomJustification: value.zoomJustification,
+    contourIntervalM,
+    contourIntervalJustification: value.contourIntervalJustification,
   };
 }
 

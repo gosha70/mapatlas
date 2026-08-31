@@ -9,8 +9,9 @@
  * inline in the build for the same reason the seams exist at all — the build's tests never want
  * these, and these want tests the build's suite cannot give them.
  *
- * Nothing here writes an archive. The writer, the contour source and archive production are a
- * separate increment.
+ * It also binds the archive writer: `createArchiveWriter` composes the metadata each archive
+ * carries and projects it onto the `entries()` view the licence checks assert over, so
+ * `archive.mjs` stays ignorant of licences and the build stays ignorant of PMTiles.
  */
 
 import { parseTileId } from "./coverage.mjs";
@@ -227,11 +228,13 @@ export const METADATA_ENTRY_PATH = "metadata.json";
  * from the licence, so a single entry containing both would satisfy the check by carrying the
  * document the strings came from.
  *
- * @param {{ tileType?: "png" | "mvt", compression?: "none" | "gzip" }} [options]
+ * The payload type and compression arrive **per call**, in `meta`, because one build writes more
+ * than one archive and they differ: PNG terrain uncompressed, MVT contours gzipped. Binding them
+ * when the writer is constructed would mean two writers, and a caller choosing between them.
  */
-export function createArchiveWriter(options = {}) {
+export function createArchiveWriter() {
   return async (path, tiles, meta) => {
-    const { licenceText, attribution, distributable, ...rest } = meta;
+    const { licenceText, attribution, distributable, tileType, compression, ...rest } = meta;
     // A development archive carries the marker **in the archive**, not merely in its filename.
     // The `.dev` suffix is a naming convention and a rename away from being nothing; a key
     // inside the metadata travels with the bytes. That is the obligation a non-distributable
@@ -246,7 +249,7 @@ export function createArchiveWriter(options = {}) {
       path,
       tiles,
       distributable ? { ...metadata, license: licenceText } : metadata,
-      options,
+      { tileType, compression },
     );
     return {
       entries: () =>

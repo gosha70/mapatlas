@@ -158,7 +158,7 @@ describe("the range reader checks it was given the interval it asked for", () =>
   it("refuses a response reaching beyond the range it was asked for", async () => {
     const over = () => Promise.resolve(partial(new Uint8Array(8), 0, 99));
     await expect(rangeFetcher(over)("u", 0, 3)).rejects.toThrow(
-      /answered bytes 0-7, beyond the range/,
+      /answered bytes 0-7 of 99, but the request intersects the object at 0-3/,
     );
   });
 
@@ -175,7 +175,7 @@ describe("the range reader checks it was given the interval it asked for", () =>
     // total. A header window stopping early would otherwise be parsed as a divergent format.
     const truncated = () => Promise.resolve(partial(payload, 0, 99999));
     await expect(rangeFetcher(truncated)("u", 0, 65535)).rejects.toThrow(
-      /answered bytes 0-3 of 99999, stopping short of both/,
+      /answered bytes 0-3 of 99999, but the request intersects the object at 0-65535/,
     );
   });
 

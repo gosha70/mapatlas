@@ -23,6 +23,7 @@ drives the build through injected fakes.
 | Coverage + gap classification (ob. 2, 3) | yes | yes | **no** | the probe now really reaches S3, but only the **present** path — see below |
 | Licence rule (ob. 1) | yes | yes | **no** | strings check against the real document; the archive half still sees a fake archive |
 | COG source reader | yes | yes | **no** | bound behind `readTile` by `deps.mjs` |
+| PMTiles writer | yes | **no** | **no** | `archive.mjs` writes and reads back; the build has no z/x/y tiles to give it yet |
 | Build ordering | yes | — | **no** | `writeArchive` still has nothing behind it |
 
 **Remaining T4.6 implementation scope.** The source reader is built and is now bound behind
@@ -551,6 +552,122 @@ question reads as an agreement not to look at it. The deferral is then self-sust
 question stays expensive precisely because it stays unexamined, and the cheapest move available
 is the one the framing discourages. Acted on here as a rule: **when something is marked blocked,
 verifying that the blocking condition is real is the first move, not a later one.**
+
+## The writer's acceptance properties — set before implementation
+
+Recorded here **before any writer code exists**, for the reason the contour bars were: a bar
+chosen after seeing what a candidate produces is a description, not a test. These come from
+review on 2026-08-31 and they are the conditions for calling `s2-pmtiles` adopted.
+
+1. **Independent readability.** A fixture archive with real raster payloads must open and read
+   through an *independent* reader path — `pmtiles` 4.5.0, the version that actually ships — not
+   through the writer's own APIs. Two implementations agreeing on a spec version is the claim;
+   a writer validating its own output is not evidence for it.
+2. **Range-read proof.** The archive must be read through the hardened `rangeFetcher`, covering
+   the header, a directory lookup, and at least one tile payload. This is the property that joins
+   the writer to the reader contract instead of proving two halves separately — and it is a
+   relational property, so it is tested on the pair.
+3. **Payload identity.** For known fixture tiles, the bytes recovered from the archive must be
+   **byte-identical** to the payloads handed to the writer. Correct metadata and a correct index
+   say nothing about whether compression or offset construction damaged the payload, which is the
+   failure that would reach a renderer as corrupt terrain rather than as an error.
+
+And four negatives, each of which must bite independently: a tile requested at the **wrong
+offset**; a **truncated archive**; a **missing tile** (which must read back as absent, not as
+empty data — obligation 3 rests on it); and a **writer finalisation failure**.
+
+The existing leaf-directory evidence stands but does not discharge any of these: it was measured
+on fifteen-byte string payloads, and payload identity at fifteen bytes is not payload identity at
+tens of kilobytes.
+
+### The confirmatory run — all three pass, and one finding that decides the sink
+
+**[author-verified 2026-08-31, scratchpad only]** `s2-pmtiles` 1.1.2 is adopted (MIT, pinned
+exactly, **no transitive dependencies** — which supersedes this plan's earlier note of one, on
+`fflate`). Confirmed at fixture scale with real raster payloads: the real N45E006 crop, cut into
+256 px terrarium **PNG** tiles of 15,208 and 121,118 bytes, padded to 4,000 tiles so leaf
+directories are genuinely in play, giving a 61 MB archive.
+
+| property | result |
+| --- | --- |
+| 1 — independent readability | `pmtiles` 4.5.0 reads it: spec version 3, tile type PNG, zooms 14–15, `leafDirectoryLength` 27,048 |
+| 2 — range-read proof | read entirely through the hardened `rangeFetcher`: 18 range requests covering header, directory and payload |
+| 3 — payload identity | 16 tiles — the first twelve and the last four, the latter resolving through a leaf — **byte-identical by sha256**, 0 mismatches |
+
+A tile never written still reads back as `undefined` rather than as empty data, now confirmed at
+fixture scale *with leaf directories present* rather than only in a four-tile archive. That is the
+reader behaviour obligation 3's second leg rests on.
+
+**The finding: `BufferWriter` is unusable at this scale, and the build must use `FileWriter`.**
+`BufferWriter.append` is `for (let i = 0; i < data.byteLength; i++) await this.#buf.push(data[i])`
+— one JS-array push *and one await* per byte. At fixture scale it threw `RangeError: Invalid
+array length` before writing anything. `FileWriter.append` is a single `write` syscall per
+payload and completed the same archive in 2.3 s. This is recorded because a first adoption
+naturally reaches for the in-memory sink, especially in tests, and it fails in a way that reads
+as a defect in the *archive* rather than in the sink.
+
+Worth stating plainly, since the run initially looked like a verdict on the candidate: the first
+failure was **the harness choosing the wrong sink**, not the writer being unfit. Suspecting the
+instrument first is what turned a rejection into a configuration detail.
+
+*What this does not establish.* The payloads are real DEM-derived PNG rasters, but their **tile
+addressing is not**: they are laid out on a simple grid, not on the web-mercator pyramid a
+renderer needs. Resampling the geographic crop into mercator tiles is the next increment, and
+nothing above depends on it — property 3 is about the writer returning the bytes it was given.
+
+### The writer, as built
+
+`scripts/fixture/archive.mjs` exposes one function and no dependency concepts:
+
+```
+writeArchive(path, tiles, metadata, options?)   // tiles: { z, x, y, bytes }
+```
+
+`FileWriter`, tile-id conversion, header and directory construction and `commit` stay behind it,
+and the payload type and compression are named in MAP-ATLAS terms (`"png" | "mvt"`,
+`"none" | "gzip"`) rather than as the dependency's enums. **It owns no raster semantics**:
+terrarium encoding, resampling and source-cell addressing are upstream, so the Web-Mercator
+increment supplies a different pyramid without this file changing.
+
+**Two ordering decisions, made here rather than inherited.** Both were left to whatever the
+dependency did with the order it was handed, which is the kind of semantics that becomes load
+bearing without anyone choosing it.
+
+- *Tiles are sorted by archive tile id.* The output is then a function of the tile set rather
+  than of the caller's iteration order — a depth-first pyramid walk and a breadth-first one
+  produce identical bytes — and writing in id order is what lets the archive declare itself
+  `clustered`, which is asserted through the independent reader rather than inferred from the
+  sort.
+- *A repeated address is refused*, identical bytes included. Two payloads at one address have no
+  correct resolution; the dependency keeps the last, which is a silent answer to an ambiguous
+  question. A caller that enumerates an address twice has a bug whether or not it is harmless
+  this time.
+
+A zero-byte payload is refused too: a tile never written reads back as `undefined`, and writing
+an empty one would put something at the address that is neither data nor absence — the
+distinction obligation 3 rests on.
+
+**One architectural consequence, worth stating before it surprises someone.** PMTiles carries a
+*single* compression setting per archive. Already-compressed PNG rasters want `none` and vector
+tiles want `gzip`, so the terrain source and the contour source **cannot share an archive**
+without one of them being wrong. They are separate sources to a renderer in any case, so the
+fixture writes separate archives.
+
+*The negatives, classified by which contract they belong to* — the distinction matters, because
+turning the dependency's internals into MAP-ATLAS architecture would be a worse outcome than the
+bugs it guards against:
+
+| negative | contract | how it is tested |
+| --- | --- | --- |
+| finalisation failure | writer | injected at the sink, where `commit` writes the header back over the file's start; `writeArchive` rejects |
+| duplicate / out-of-order input | writer | decided above, and asserted on both halves |
+| missing tile | independent readback | the archive succeeds and `pmtiles` 4.5.0 returns `undefined` |
+| wrong offset, truncation, header damage | corruption acceptance | the finished bytes are damaged and the independent reader through the hardened range path is shown to fail deterministically — no injectable wrong-offset seam inside the writer |
+
+*Author verification.* 20 tests; 11 mutations killed on the writer, **three of them
+test-of-tests**: each corruption case was re-run with its corruption removed, and each then
+failed. "Assert the digest is *not* the expected one" is exactly the shape that passes when
+nothing was corrupted at all.
 
 ## Fixture composition
 

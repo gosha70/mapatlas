@@ -9,12 +9,18 @@ recollection.
 ## Status — read this before any progress claim
 
 Four levels, because collapsing them is how a series of true green reports adds up to a false
-impression. **No committed path has produced a real archive, and no row below is discharged.**
-The orchestrator's fetching seams are bound to the real source and a scratchpad run has driven it
-against S3 and a real COG — so the older statement here, that it had never touched a network, is
-no longer what makes the column read "no". What makes it read "no" is that the archive stage is
-still a fake writer, nothing is written, no committed path reproduces that run, and every suite
-drives the build through injected fakes.
+impression — and the same discipline cuts the other way, so this now reads as it does because the
+terrain half is genuinely finished.
+
+**The terrain archive is discharged through a committed entry point.** `npm run fixture:build`
+cuts it from the real release and reproduces it byte for byte. Every terrain row below therefore
+reads *yes*, and the qualification that used to sit here — no committed path, a fake writer,
+nothing written — no longer describes anything.
+
+**What remains unwired is contour generation.** `contour.mjs` traces isolines and cuts them to
+MVT, and nothing builds a contour archive; by ADR-0025 it must be a second one. Beyond that the
+fixture track, the `/lab` route, simulated GPS and the offline scenario are untouched, and those
+last are the acceptance criteria proper.
 
 | | unit-tested | wired into `build.mjs` | discharged end-to-end | notes |
 | --- | --- | --- | --- | --- |

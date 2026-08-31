@@ -26,6 +26,7 @@ drives the build through injected fakes.
 | PMTiles writer | yes | **no** | **no** | `archive.mjs` writes and reads back; the build has no z/x/y tiles to give it yet |
 | Mercator addressing + envelope | yes | **no** | **no** | `mercator.mjs`; coverage still computed over the declaration, not the envelope |
 | Bilinear resampler | yes | **no** | **no** | `resample.mjs`; nothing calls it — the build produces no tiles yet |
+| Stitched source surface | yes | **no** | **no** | `surface.mjs`; the seam is joined, but no orchestration reads two cells yet |
 | Build ordering | yes | — | **no** | `writeArchive` still has nothing behind it |
 
 **Remaining T4.6 implementation scope.** The source reader is built and is now bound behind
@@ -832,6 +833,42 @@ boring possible reason. The runner now **compares the file before and after** an
 `NOT APPLIED` rather than a verdict. The asymmetry is worth stating: a `killed` result is
 self-verifying, because an unapplied mutation cannot fail the suite, so only `SURVIVED` was ever
 ambiguous — but that is exactly the direction in which a false result is reassuring.
+
+### The source surface, and a corrected premise about the seam
+
+An output pixel near 7°E has a stencil straddling two source cells, so the cells are joined into
+one grid *before* anything samples it and `resample.mjs` never learns that source cells exist.
+Anything that picked a cell first and interpolated inside it would have to clamp or fail at the
+boundary, which is what the edge rule forbids.
+
+**The review's premise about duplicated seam samples does not hold for this source, and checking
+was cheaper than designing around it.** GLO-30 ships 3600×3600 samples per 1° cell, so
+`N45E006`'s easternmost sample is at **6.99972222°** and `N45E007`'s westernmost at **7.0°** —
+exactly one spacing apart, continuing the same global lattice. Measured from both headers, not
+assumed. There is therefore no duplicated boundary sample to arbitrate between and no ownership
+rule needed at the join; `cropWindow`'s half-open edges already gave each sample to exactly one
+crop.
+
+What that leaves is the harder half. The two lattices must **interleave**, and a misalignment
+produces a surface that is continuous, plausible and wrong. So alignment is asserted on the
+global lattice — every crop's origin an integer number of samples from every other's — and every
+cell of the result must be written **exactly once**, which detects a gap and a double-write in the
+same pass.
+
+*A limit worth stating rather than leaving implied.* This detects a crop *placed* wrongly. It
+cannot detect a crop whose declared origin disagrees with its own pixels, because that still tiles
+perfectly. That case is caught upstream instead, by the reader's tiepoint cross-check against the
+cell the tile id names — the two guards are complementary, and neither covers the other.
+
+*Author verification.* 15 tests, 11 mutations killed. **Three survived first, all the same
+blind spot**, and it is the one this task keeps returning to: the fixture had no variation on the
+axis under test. Every crop shared one `north`, so flipping the north axis' sign changed nothing;
+and the first crop was always the north-westernmost, so an origin that ignored the union's offset
+was indistinguishable from one that did not — on longitude first, then again on latitude after
+only half the fix. A north–south pair and a reversed input order on **both** axes make all three
+observable. The vacuous-fixture failure also appeared in the tests themselves: a poison window of
+"outside columns 0..7" on an eight-column crop poisons nothing, and that test passed without a
+single poisoned sample existing.
 
 ## Fixture composition
 

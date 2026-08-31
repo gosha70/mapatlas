@@ -27,6 +27,7 @@ drives the build through injected fakes.
 | Mercator addressing + envelope | yes | **no** | **no** | `mercator.mjs`; coverage still computed over the declaration, not the envelope |
 | Bilinear resampler | yes | **no** | **no** | `resample.mjs`; nothing calls it — the build produces no tiles yet |
 | Stitched source surface | yes | **no** | **no** | `surface.mjs`; the seam is joined, but no orchestration reads two cells yet |
+| PNG serialiser | yes | **no** | **no** | `png.mjs`; nothing calls it |
 | Build ordering | yes | — | **no** | `writeArchive` still has nothing behind it |
 
 **Remaining T4.6 implementation scope.** The source reader is built and is now bound behind
@@ -869,6 +870,41 @@ only half the fix. A north–south pair and a reversed input order on **both** a
 observable. The vacuous-fixture failure also appeared in the tests themselves: a poison window of
 "outside columns 0..7" on an eight-column crop poisons nothing, and that test passed without a
 single poisoned sample existing.
+
+### PNG, as its own increment
+
+`scripts/fixture/png.mjs` takes width, height and RGB bytes and returns a PNG. It knows nothing
+about elevation, terrarium or Mercator, which is what lets a binary format be proven with no
+network, projection, archive or coverage anywhere near it.
+
+Deliberately plain: 8-bit truecolour (`colorType` 2, no alpha), non-interlaced, one `IDAT`,
+scanline filter **0** everywhere. Filtering exists to help compression, compression efficiency is
+not a fixture requirement, and a per-row filter heuristic would add a decision whose only
+observable effect is archive size — a bug in it would show up as slightly larger files and
+nothing else. Terrarium pixels are poor candidates anyway: the low byte changes constantly, so
+the usual predictors buy little. **Measured: 2.68 bytes per pixel against 3 raw**, on a 256 px
+tile of plausible alpine elevations, which is the number archive sizing should be based on rather
+than a hoped-for compression ratio.
+
+*The oracle is byte identity after decoding, not that a parser tolerated the file.* The suite
+parses from the bytes up — chunk walk, every CRC checked, `IDAT`s concatenated, inflated, filter
+byte stripped per row — and asserts the recovered RGB equals the input exactly. The CRC is
+checked against a **table-free bitwise** formulation of the same polynomial, anchored by the
+published `0xAE426082` for an empty `IEND`, so a mistake in building the encoder's table cannot
+reproduce itself in the check.
+
+The fixture pattern varies red with column, green with row and blue with both, and **the suite
+asserts its own discriminating power** — that all three channels differ at every pixel — because
+if the pattern ever became channel-symmetric, every swap mutation would quietly stop biting.
+Sizes are non-square in both directions so a width/height transpose is structural.
+
+*Author verification.* 10 tests, **14 mutations killed**: wrong height, transposed dimensions,
+alpha declared, wrong bit depth, interlacing declared, filter bytes dropped, a row written over
+its own filter byte, a source stride including the filter byte, R and B swapped, a CRC covering
+the length field, a zeroed CRC, an omitted `IDAT`, an undeflated `IDAT`, and the byte-count check
+removed. Separately and outside the suite, macOS ImageIO reads the output as 256×256, 8 bits per
+sample, 3 samples per pixel — an independent decoder, where the suite's parser is still ours.
+Whether MapLibre accepts these bytes as `raster-dem` is the browser lane's to establish.
 
 ## Fixture composition
 

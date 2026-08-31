@@ -27,7 +27,8 @@
     "verify": "npm run build && npm run typecheck && npm run lint && npm run test:coverage && npm run scan:isolation && npm run scan:spdx && npm run format:check",
     "test:coverage": "vitest run --coverage",
     "test:browser": "playwright test",
-    "test:browser:install": "playwright install --with-deps chromium"
+    "test:browser:install": "playwright install --with-deps chromium",
+    "fixture:build": "node scripts/fixture/build-fixture.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

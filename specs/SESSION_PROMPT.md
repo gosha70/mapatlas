@@ -42,8 +42,8 @@ Remaining, in dependency order:
 3. ~~A real tile reader.~~ **Done**, and bound behind `readTile` by `scripts/fixture/deps.mjs`,
    along with a real S3 probe; the build's seams are async. It moves no status row.
 4. Write the contour source into the build.
-5. **Produce an actual archive** — the hinge; it is what can move any status row off "no".
-6. Measure archive size (ADR-0024 criterion 6: measured, not calculated).
+5. ~~**Produce an actual archive**~~ **Done** — `npm run fixture:build`, 1,493,696 bytes.
+6. ~~Measure archive size~~ **Done** — 1,493,696 bytes, measured.
 7. The fixture track — ≥5k points, two-segment pause, two event marks.
 8. `/lab` route in `apps/demo`, plus simulated GPS.
 9. The offline Playwright scenario and the frame-time/memory baseline — the actual acceptance

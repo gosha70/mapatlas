@@ -139,8 +139,9 @@ working from bypassed, and assert *that* — not the absence of an alarm.
    against real inputs. It still moves **no status row**: the archive stage is a fake writer,
    nothing is written, and no committed path reproduces the run.
 4. Write the contour source into the build.
-5. **Produce an actual archive** — the hinge: it is what can move any status row off "no".
-6. Measure archive size (ADR-0024 criterion 6 requires measured, not calculated).
+5. ~~**Produce an actual archive**~~ **Done.** `npm run fixture:build` cuts the terrain
+   archive from the real release: 8 tiles, 1,493,696 bytes, reproducible byte for byte.
+6. ~~Measure archive size~~ **Done.** 1,493,696 bytes, measured (ADR-0024 criterion 6).
 7. The fixture track: ≥5k points, two-segment pause, two event marks.
 8. `/lab` route in `apps/demo`, plus simulated GPS.
 9. The offline Playwright scenario and the frame-time/memory baseline — these are the actual

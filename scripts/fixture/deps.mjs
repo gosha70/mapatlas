@@ -16,7 +16,7 @@
 import { parseTileId } from "./coverage.mjs";
 import { parseBounds } from "./region.mjs";
 import { writeArchive } from "./archive.mjs";
-import { LICENCE_ENTRY_PATH } from "./licence.mjs";
+import { LICENCE_ENTRY_PATH, NOT_FOR_DISTRIBUTION_PATH } from "./licence.mjs";
 import { cogUrl, readTerrariumCrop } from "./source.mjs";
 import { decodeElevation } from "./terrarium.mjs";
 
@@ -231,14 +231,34 @@ export const METADATA_ENTRY_PATH = "metadata.json";
  */
 export function createArchiveWriter(options = {}) {
   return async (path, tiles, meta) => {
-    const { licenceText, attribution, ...rest } = meta;
-    const metadata = { ...rest, attribution };
-    await writeArchive(path, tiles, { ...metadata, license: licenceText }, options);
+    const { licenceText, attribution, distributable, ...rest } = meta;
+    // A development archive carries the marker **in the archive**, not merely in its filename.
+    // The `.dev` suffix is a naming convention and a rename away from being nothing; a key
+    // inside the metadata travels with the bytes. That is the obligation a non-distributable
+    // build trades the licence checks for, so it has to be as hard to lose.
+    const metadata = distributable
+      ? { ...rest, attribution }
+      : {
+          ...rest,
+          [NOT_FOR_DISTRIBUTION_PATH]: "built without the licence checks; do not publish",
+        };
+    await writeArchive(
+      path,
+      tiles,
+      distributable ? { ...metadata, license: licenceText } : metadata,
+      options,
+    );
     return {
-      entries: () => [
-        { path: LICENCE_ENTRY_PATH, text: licenceText ?? "" },
-        { path: METADATA_ENTRY_PATH, text: JSON.stringify(metadata) },
-      ],
+      entries: () =>
+        distributable
+          ? [
+              { path: LICENCE_ENTRY_PATH, text: licenceText },
+              { path: METADATA_ENTRY_PATH, text: JSON.stringify(metadata) },
+            ]
+          : [
+              { path: NOT_FOR_DISTRIBUTION_PATH, text: metadata[NOT_FOR_DISTRIBUTION_PATH] },
+              { path: METADATA_ENTRY_PATH, text: JSON.stringify(metadata) },
+            ],
     };
   };
 }

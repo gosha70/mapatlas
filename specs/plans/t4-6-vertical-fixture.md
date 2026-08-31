@@ -18,23 +18,29 @@ drives the build through injected fakes.
 
 | | unit-tested | wired into `build.mjs` | discharged end-to-end | notes |
 | --- | --- | --- | --- | --- |
-| Terrarium codec | yes | yes | **once** | real COG pixels through the whole chain into a real archive |
-| Region declaration + floor (ob. 4) | yes | yes | **once** | real decoded samples cleared the 2,500 m floor at 2,560.80 m |
-| Coverage (ob. 2) | yes | yes | **once** | both cells probed against S3 and admitted before any read |
-| Gap rule (ob. 3) | yes | yes | **once** | no fill path exists, and an unwritten tile reads back `undefined` from the real archive |
-| Licence rule (ob. 1) | yes | yes | **once** | checked against the real document *and* the real archive's own metadata |
-| COG source reader | yes | yes | **once** | bound behind `readTile` by `deps.mjs` |
-| PMTiles writer | yes | yes | **once** | 1.49 MB archive, read back by `pmtiles` 4.5.0 |
-| Mercator addressing + envelope | yes | yes | **once** | coverage now runs over the envelope |
-| Bilinear resampler | yes | yes | **once** | 8 distinct PNG tiles |
-| Stitched source surface | yes | yes | **once** | two real cells joined across 7°E |
-| PNG serialiser | yes | yes | **once** | every tile in the archive is a PNG |
-| Build ordering | yes | — | **once** | all stages ran in order against real inputs |
+| Terrarium codec | yes | yes | **yes** | real COG pixels through the whole chain into a real archive |
+| Region declaration + floor (ob. 4) | yes | yes | **yes** | real decoded samples cleared the 2,500 m floor at 2,560.80 m |
+| Coverage (ob. 2) | yes | yes | **yes** | both cells probed against S3 and admitted before any read |
+| Gap rule (ob. 3) | yes | yes | **yes** | no fill path exists, and an unwritten tile reads back `undefined` from the real archive |
+| Licence rule (ob. 1) | yes | yes | **yes** | checked against the real document *and* the real archive's own metadata |
+| COG source reader | yes | yes | **yes** | bound behind `readTile` by `deps.mjs` |
+| PMTiles writer | yes | yes | **yes** | 1.49 MB archive, read back by `pmtiles` 4.5.0 |
+| Mercator addressing + envelope | yes | yes | **yes** | coverage now runs over the envelope |
+| Bilinear resampler | yes | yes | **yes** | 8 distinct PNG tiles |
+| Stitched source surface | yes | yes | **yes** | two real cells joined across 7°E |
+| PNG serialiser | yes | yes | **yes** | every tile in the archive is a PNG |
+| Build ordering | yes | — | **yes** | all stages ran in order against real inputs |
 
-**"once" is not "yes", and the gap is reproducibility.** Every obligation above has been met, end
-to end, against the real release — but by a **scratchpad runner**, so nothing in the repository
-reproduces it and CI cannot. A committed entry point is the next increment, and until it exists
-these rows say what happened rather than what a reader can re-run.
+**These are "yes" because the path is committed.** `npm run fixture:build` runs the whole chain
+against the real release and reproduces the archive **byte for byte** — sha256 `ce397483…`,
+identical to the scratchpad run that first produced it, which is two independently written
+runners agreeing rather than one script agreeing with itself.
+
+*What CI covers, stated precisely, because the two claims differ.* The suite drives the same
+committed entry point against a **synthetic** source with no network, so "the assembled pipeline
+works" is checked on every push. "The release still publishes this data" is a fact about the
+world; it needs the network and is checked by running the command. Neither substitutes for the
+other, and only the first belongs in CI.
 
 **The chain produced a real archive on 2026-08-31.** `mont-blanc-summit`, source cells
 `N45E006` **and** `N45E007`, envelope 6.679–7.032 °E against a declared region ending at 6.905,
@@ -949,6 +955,41 @@ one cell, the halo dropped, the spacing assumption unchecked, the read bounds re
 on the region window. One survived and was **removed rather than kept**: a guard for "no cell
 contributed a sample" is unreachable, since the envelope contains the region by construction, and
 `assertMinimumElevation`'s own tested empty-cut guard covers the impossible case anyway.
+
+### The entry point
+
+`npm run fixture:build` → `scripts/fixture/build-fixture.mjs`. It composes and nothing else: real
+filesystem, real S3 probe, real range reads, real writer — each injectable, so the assembled path
+is exercised in the suite against a synthetic 200 × 200 COG with no network.
+
+It exists because an obligation discharged by a script nobody else can run is a claim about one
+afternoon rather than a property of the build.
+
+*Two things the suite found that the earlier scratchpad runner had not.* Neither is exotic; both
+are paths the ad-hoc runner simply never took.
+
+- **The not-for-distribution marker was never emitted.** A `distributable: false` build trades
+  the licence checks for that marker, and the real writer had no idea it existed — the mode had
+  only ever been exercised against a fake `writeArchive`. It now travels *in the archive's
+  metadata* rather than only in the `.dev` filename, which is a rename away from being nothing.
+  The build passes `distributable` explicitly instead of the writer inferring it from a blank
+  licence string, so a development archive is not one truthiness bug from looking shippable.
+- **The archive stage's discard was untested.** The obvious failure to reach for is a floor
+  breach, which fails *before* anything is written — so `discardArchive` never ran and could have
+  been deleted with the suite green. Failing the rename instead is a failure at the archive stage
+  with a real partial already on disk.
+
+*A fixture that had to be computed rather than chosen.* The synthetic region first sat at 6.01°E,
+which lands on a z14 tile straddling the 6°E cell edge — so the envelope reached into `N45E005`
+and the build correctly failed at coverage for a cell no synthetic raster served. The bounds now
+sit inside tile `14/8466/5829`, whose whole footprint plus halo falls within the raster. The
+build was right and the fixture was wrong, which is the outcome to hope for.
+
+*Author verification.* 7 tests, 6 mutations killed: the archive never promoted from `.partial`,
+a failed archive stage leaving its partial behind, development mode ignored, the archive
+labelled as vector tiles, the marker never emitted, and the output directory not created. Two of
+those needed the tests fixed first — the discard case for the reason above, and the tile-type
+case because asserting PNG *payloads* passes whatever the archive declares itself to be.
 
 ## Fixture composition
 

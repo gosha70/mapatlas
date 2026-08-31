@@ -151,7 +151,13 @@ vite.config.ts.timestamp-*
 !.vscode/extensions.json
 
 # Local map data — tiles and PMTiles archives are never committed (ADR-0004, ADR-0017)
+# Map tile archives are never carried in the repository (CLAUDE.md guardrail). The glob covers
+# the suffixed variants the fixture build writes — `.partial` before its checks pass and `.dev`
+# for a non-distributable build — because `*.pmtiles` alone matches neither, and `git add -A`
+# staged a 1.5 MB `terrain.pmtiles.dev` once because of it.
 *.pmtiles
+*.pmtiles.*
+build/fixture/
 *.mbtiles
 /tmp/
 

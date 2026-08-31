@@ -8,6 +8,8 @@ import { readFileSync } from "node:fs";
  * @property {[west: number, south: number, east: number, north: number]} bounds
  * @property {number} minElevationM
  * @property {string} minElevationJustification
+ * @property {number} minZoom
+ * @property {number} maxZoom
  */
 
 /**
@@ -81,7 +83,7 @@ export function parseRegionDeclaration(value, source = "region declaration") {
     throw new RegionDeclarationError(`${source}: expected an object`);
   }
 
-  const { id, bounds, minElevationM, minElevationJustification } = value;
+  const { id, bounds, minElevationM, minElevationJustification, minZoom, maxZoom } = value;
   if (typeof id !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) {
     throw new RegionDeclarationError(`${source}: id must be a non-empty kebab-case string`);
   }
@@ -95,11 +97,31 @@ export function parseRegionDeclaration(value, source = "region declaration") {
     );
   }
 
+  // The zoom range is a **declared input**, not a product policy, because it decides which
+  // source cells the build must have: this region's z11 tiles reach past 7°E and z10's would
+  // cross 46°N. Baking a default in would make a coverage requirement change silently with a
+  // resolution preference.
+  for (const [name, zoom] of [
+    ["minZoom", minZoom],
+    ["maxZoom", maxZoom],
+  ]) {
+    if (!Number.isInteger(zoom) || zoom < 0 || zoom > 24) {
+      throw new RegionDeclarationError(`${source}: ${name} must be an integer in 0..24`);
+    }
+  }
+  if (maxZoom < minZoom) {
+    throw new RegionDeclarationError(
+      `${source}: maxZoom ${String(maxZoom)} precedes minZoom ${String(minZoom)}`,
+    );
+  }
+
   return {
     id,
     bounds: [west, south, east, north],
     minElevationM,
     minElevationJustification,
+    minZoom,
+    maxZoom,
   };
 }
 

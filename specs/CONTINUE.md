@@ -130,7 +130,10 @@ working from bypassed, and assert *that* — not the absence of an alarm.
    evaluated (both bars pass; Bar 2 independently adjudicated) but **not adopted**.
 2. Confirm the PMTiles writer (`s2-pmtiles`) at fixture scale with real raster payloads. This is
    the only remaining item that can still change the shape rather than fill it in.
-3. A real tile reader behind the build's `readTile` seam.
+3. ~~A real tile reader.~~ **Built** — `scripts/fixture/source.mjs` range-reads a GLO-30 COG,
+   crops it and terrarium-encodes it, with no GeoTIFF dependency (`node:zlib` plus predictor 3).
+   It has decoded the real object and reproduces the recorded crop control. It is **not wired
+   behind `readTile`**, so it moves no status row. Wiring it is what remains.
 4. Write the contour source into the build.
 5. **Produce an actual archive** — the hinge: it is what can move any status row off "no".
 6. Measure archive size (ADR-0024 criterion 6 requires measured, not calculated).

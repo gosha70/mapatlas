@@ -15,19 +15,21 @@ injected fakes.
 
 | | unit-tested | wired into `build.mjs` | discharged end-to-end | notes |
 | --- | --- | --- | --- | --- |
-| Terrarium codec | yes | yes | **no** | never run on a real COG's pixels |
+| Terrarium codec | yes | yes | **no** | now run on a real COG's pixels, but by the reader standalone, not by a build |
 | Region declaration + floor (ob. 4) | yes | yes | **no** | never run on decoded real tiles |
 | Coverage + gap classification (ob. 2, 3) | yes | yes | **no** | probe is injected; never run against S3 |
 | Licence rule (ob. 1) | yes | yes | **no** | strings now sourced; never run on a real archive |
-| Build ordering | yes | — | **no** | no writer and no tile reader behind the seams |
+| COG source reader | yes | **no** | **no** | decodes the real object standalone; `readTile` still has nothing behind it |
+| Build ordering | yes | — | **no** | no writer behind `writeArchive`, and the reader is not wired to `readTile` |
 
-**Remaining T4.6 implementation scope**, none of it implemented or integrated — investigation
-has happened, which is why the writer and toolchain sections below carry evidence: the
-GeoJSON→MVT contour toolchain; the PMTiles writer (`s2-pmtiles` is well-evidenced but
-uncommitted and unconfirmed at fixture scale); a real tile reader; producing an actual
-archive; measuring its size (ADR-0024 criterion 6); the fixture track (≥5k points, two-segment
-pause, two event marks); the `/lab` route; simulated GPS; the offline Playwright scenario; and
-the frame-time and memory baseline. That is most of the task by volume.
+**Remaining T4.6 implementation scope.** The source reader is now built and has decoded the
+real object (see *The source reader* below), but it is not wired into `build.mjs`, so it moves
+no row to *discharged*. Still outstanding: wiring the reader behind `readTile`; the GeoJSON→MVT
+contour toolchain; the PMTiles writer (`s2-pmtiles` is well-evidenced but uncommitted and
+unconfirmed at fixture scale); producing an actual archive; measuring its size (ADR-0024
+criterion 6); the fixture track (≥5k points, two-segment pause, two event marks); the `/lab`
+route; simulated GPS; the offline Playwright scenario; and the frame-time and memory baseline.
+That is still most of the task by volume.
 
 **On verification claims in this plan and in commit messages:** gate runs and mutation results
 are *author verification* — real and reproducible, but run by whoever wrote the code, not an
@@ -214,6 +216,69 @@ This measurement selects the region; it
 does not discharge the build obligation. The build still computes the lowest decoded sample and
 fails against the declaration every time, so a later source or bounds change cannot inherit the
 selection-time answer.
+
+## The source reader
+
+**[verified 2026-08-30] Built, unit-tested, and run against the real object — standalone.**
+`scripts/fixture/source.mjs` range-reads a GLO-30 COG, crops it to the declared bounds and
+terrarium-encodes the samples. Nothing in `build.mjs` calls it yet, so it discharges no
+obligation; what it does is remove the reason the elevation stage had nothing behind it.
+
+**No GeoTIFF dependency, because the format turned out not to be the hard problem it looked
+like.** `N45E006`'s IFD, read from a 64 KB range: little-endian classic TIFF, 3600×3600, one
+float32 sample per pixel, compression 8 (deflate) with predictor 3 (floating point), tiled
+1024×1024, EPSG:4326, `RasterPixelIsPoint`, 1 arcsec spacing, tied at (6, 46). Decoding that is
+`node:zlib` plus the predictor's inverse. A general reader would have been a dependency whose
+value is precisely the formats this build must refuse, so every structural assumption is
+asserted instead and names the tag that diverged — an upstream format change fails loudly rather
+than being accommodated into a wrong surface.
+
+*The real-data control.* The reader reproduces the crop figures this plan already records from a
+separately written probe: **288 × 180 = 51,840 samples, 0 non-finite**, spanning
+**2,560.80–4,810.72 m** — the reader's own figures are 2,560.8046875 and 4,810.71875, those
+values quantised to the encoding's 1/256 m step, which is the terrarium round trip and not a
+discrepancy. It reads **3 ranges totalling 3.9 MB** of a 42 MB object in ~2.4 s: the header
+window, then the two internal tiles the crop overlaps. That the figures match a probe written
+from different code is corroboration; that this reader was written from the TIFF specification
+rather than from that probe is why it is worth anything.
+
+*The silent failures, checked.* Every other divergence here is loud. Three are not, and each is
+guarded because it would otherwise produce a plausible surface rather than an error.
+
+- **The wrong object.** It decodes perfectly and puts correct-looking terrain in the wrong place.
+  The reader cross-checks the file's tiepoint against the corner the tile id names, and
+  `parseTileId` lives beside the `tileId` that formats it, round-tripped over the **whole**
+  64,800-cell grid as a pair — "inverts" is a relational property, so the unit under test is the
+  pair, not either function.
+- **A crop edge that is not sample-aligned.** Found in review. The first version rounded the west
+  and north edges and took a *width*, so a west bound of 6.1 at 0.25° spacing selected the sample
+  at 6.0 — outside the requested cut — and the east bound was never consulted at all. Every index
+  now comes from its own endpoint by ceiling, with a 1e-6-sample tolerance so an exactly aligned
+  bound cannot step to the next sample. The declared region is aligned, which is exactly why the
+  defect was invisible: **the fixture's own bounds could not have exposed it**, and the real crop
+  is byte-identical before and after the fix.
+- **An internal tile that inflates to the wrong length.** Also found in review. An over-long tile
+  is the dangerous direction: the predictor decodes it happily and the surplus samples are simply
+  never indexed, so a source that changed its tiling would yield a plausible surface instead of a
+  failure. The decompressed length is now asserted against the declared tiling before decoding.
+
+*Author verification, and what the mutations found.* **34 mutations, all killed** — 29 against
+the reader, 5 against `parseTileId`. Four of those kills only exist because a test was fixed
+first, and all four are the same mistake: a check whose passing result would have looked
+identical if the property were broken.
+
+- The check that the reader fetches only the internal tiles a crop overlaps first placed the crop
+  at the raster's north-west corner, where "start from the overlapping tile" and "start from tile
+  zero" issue identical requests; then in a 2 × 2 internal grid, where every tile touches both a
+  first and a last edge. Only a crop strictly inside a 3 × 3 grid observes all four bounds.
+- The round-trip over the tile-id grid was named "every cell" while stepping by 7 and 13 — a
+  sample calling itself a sweep. Measured rather than argued: the step-7 loop visited **26 of 180
+  latitude bands**, neither 7 nor −7, so a parser wrong in exactly one band survived it. The
+  exhaustive loop kills that mutation and costs 29 ms, because mismatches are collected rather
+  than asserted per cell.
+
+The instructive part is that in both cases the *name* of the check was accurate about intent and
+wrong about reach, and reading it would not have shown that. Only breaking the subject did.
 
 ## Contours
 

@@ -19,11 +19,14 @@ vocabulary may enter any package — not in code, not in comments, not in test f
 
 ## Where the work is
 
-**T4.6, the vertical acceptance fixture.** Four obligations are implemented, unit-tested and
-wired into a build orchestrator whose fetching seams are now bound to the real source: a
-scratchpad run has driven it against S3 and a real COG. **No committed path has produced a real
-archive**, the archive stage is still a fake writer, and every suite drives the build through
-injected fakes — so **no build obligation or status-table row is discharged end to end.**
+**T4.6, the vertical acceptance fixture.** All four obligations are **discharged end to end for
+terrain**, through a committed entry point: `npm run fixture:build` cuts the archive from the
+real release — 8 tiles, 1,493,696 bytes — and reproduces it byte for byte, while the suite drives
+that same entry point against a synthetic source with no network.
+
+**Contour generation is built but unwired**, and by ADR-0025 needs a second archive. The
+acceptance criteria proper — the fixture track, `/lab`, simulated GPS, the offline scenario and
+the frame-time baseline — remain untouched.
 
 Track four levels separately and never collapse them, because a series of individually-true
 "done" reports is how a false impression of progress gets built:
@@ -40,7 +43,7 @@ Remaining, in dependency order:
 2. ~~Confirm the PMTiles writer at fixture scale.~~ **Done** — `s2-pmtiles` adopted; the build
    produces a real 1.49 MB terrain archive.
 3. ~~A real tile reader.~~ **Done**, and bound behind `readTile` by `scripts/fixture/deps.mjs`,
-   along with a real S3 probe; the build's seams are async. It moves no status row.
+   along with a real S3 probe; the build's seams are async. Part of the discharged terrain path.
 4. Wire the contour source in, as a **second archive** (ADR-0025), with levels derived from the
    declared region rather than the envelope.
 5. ~~**Produce an actual archive**~~ **Done** — `npm run fixture:build`, 1,493,696 bytes.

@@ -19,11 +19,14 @@ impression of overall progress. Keep them separate:
 3. discharged end-to-end (run against real data)
 4. remaining scope
 
-As of the last session, **nothing is at level 3.** The orchestrator's seams are now bound to the
-real source and a scratchpad run has driven it against S3 and a real COG — so "it has never
-touched a network" is no longer the reason. The reason is narrower and unchanged in effect: **no
-committed path has produced a real archive**, the archive stage is still a fake writer, and every
-suite drives the build through injected fakes.
+**The terrain half is at level 3.** `npm run fixture:build` cuts the terrain archive from the
+real release — 8 tiles, 1,493,696 bytes, reproducible byte for byte — and the suite drives that
+same committed entry point against a synthetic source with no network. Every terrain row in the
+plan's status table reads *yes*.
+
+**Contour generation is at level 1.** `contour.mjs` traces and tiles, and nothing calls it; no
+contour archive is built. The acceptance criteria proper — the fixture track, `/lab`, simulated
+GPS, the offline scenario and the frame-time baseline — are untouched.
 
 ---
 
@@ -137,9 +140,7 @@ working from bypassed, and assert *that* — not the absence of an alarm.
    unusable at scale.
 3. ~~A real tile reader, and wiring it in.~~ **Done.** `scripts/fixture/source.mjs` range-reads a
    GLO-30 COG with no GeoTIFF dependency; `scripts/fixture/deps.mjs` binds it and a real S3 probe
-   behind the build's seams, which are now async. A scratchpad run drives the assembled build
-   against real inputs. It still moves **no status row**: the archive stage is a fake writer,
-   nothing is written, and no committed path reproduces the run.
+   behind the build's seams, which are async. It is part of the discharged terrain path.
 4. Wire the contour source into the build, as a **second archive** (ADR-0025: PMTiles v3 carries
    one archive-level tile type *and* one compression, so PNG and MVT cannot share one). Derive
    the levels from the **declared region's** samples while still reading the larger envelope for

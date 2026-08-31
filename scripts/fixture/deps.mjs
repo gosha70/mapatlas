@@ -36,11 +36,12 @@ const TILE_DEGREES = 1;
  * - **The body's length must match what `Content-Range` claims.** Checked against the header
  *   rather than against the request, for the reason below.
  *
- * A range may legitimately be answered **short at the end of the object**: HTTP returns the
- * intersection of the request with what exists, so a 64 KB header window over a smaller object
- * comes back smaller. That is accepted only when the response says the object ended there — a
- * server truncating mid-object is refused, since a header window stopping early would be parsed
- * as a divergent format rather than recognised as a short read.
+ * Stated as one rule rather than a list of policies: the returned interval must equal the
+ * **requested interval intersected with the representation** — `first === start` and
+ * `last === min(endInclusive, total - 1)` — with the body carrying exactly that many bytes.
+ * A range answered short at the end of an object is legitimate under it (a 64 KB header window
+ * over a smaller object comes back smaller), while truncation mid-object, an over-long response
+ * and a reversed interval all fail without needing a rule of their own.
  *
  * Throws on all of these, because every caller of *this* wants the bytes and has no use for a
  * status. That is the opposite of what {@link createProbe} needs, and the two are deliberately
@@ -76,15 +77,16 @@ export function rangeFetcher(fetchImpl = globalThis.fetch) {
           `bytes from the wrong offset decodes as valid data in the wrong place`,
       );
     }
-    if (last > endInclusive) {
+    // The whole contract in one comparison: the returned interval must be the requested one
+    // intersected with the representation. Reaching past the range, stopping short of it
+    // mid-object, and a reversed or nonsensical interval all fall out of this rather than
+    // needing a policy each — and the legitimate short read at the end of the object is exactly
+    // the case where the intersection is shorter than the request.
+    const expectedLast = Math.min(endInclusive, total - 1);
+    if (last !== expectedLast) {
       throw new Error(
-        `${where}: answered bytes ${String(first)}-${String(last)}, beyond the range`,
-      );
-    }
-    if (last < endInclusive && last !== total - 1) {
-      throw new Error(
-        `${where}: answered bytes ${String(first)}-${String(last)} of ${String(total)}, stopping ` +
-          `short of both the range and the object`,
+        `${where}: answered bytes ${String(first)}-${String(last)} of ${String(total)}, but the ` +
+          `request intersects the object at ${String(first)}-${String(expectedLast)}`,
       );
     }
 

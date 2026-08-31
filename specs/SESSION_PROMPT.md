@@ -35,13 +35,14 @@ Track four levels separately and never collapse them, because a series of indivi
 
 Remaining, in dependency order:
 
-1. Adopt the contour toolchain as dependencies — `d3-contour`, `geojson-vt`, `vt-pbf` are
-   evaluated and passing but **not adopted**; nothing is in `package.json`.
-2. Confirm the PMTiles writer (`s2-pmtiles`) at fixture scale with real raster payloads. The
-   only remaining item that can still change the shape rather than fill it in.
+1. ~~Adopt the contour toolchain.~~ **Done** — `d3-contour`, `geojson-vt`, `vt-pbf` pinned, and
+   `scripts/fixture/contour.mjs` traces and tiles. Not wired in.
+2. ~~Confirm the PMTiles writer at fixture scale.~~ **Done** — `s2-pmtiles` adopted; the build
+   produces a real 1.49 MB terrain archive.
 3. ~~A real tile reader.~~ **Done**, and bound behind `readTile` by `scripts/fixture/deps.mjs`,
    along with a real S3 probe; the build's seams are async. It moves no status row.
-4. Write the contour source into the build.
+4. Wire the contour source in, as a **second archive** (ADR-0025), with levels derived from the
+   declared region rather than the envelope.
 5. ~~**Produce an actual archive**~~ **Done** — `npm run fixture:build`, 1,493,696 bytes.
 6. ~~Measure archive size~~ **Done** — 1,493,696 bytes, measured.
 7. The fixture track — ≥5k points, two-segment pause, two event marks.

@@ -129,16 +129,21 @@ working from bypassed, and assert *that* — not the absence of an alarm.
 
 ## What remains in T4.6, in dependency order
 
-1. Adopt the contour toolchain as dependencies — `d3-contour`, `geojson-vt`, `vt-pbf` are
-   evaluated (both bars pass; Bar 2 independently adjudicated) but **not adopted**.
-2. Confirm the PMTiles writer (`s2-pmtiles`) at fixture scale with real raster payloads. This is
-   the only remaining item that can still change the shape rather than fill it in.
+1. ~~Adopt the contour toolchain as dependencies.~~ **Done.** `d3-contour` 4.0.2, `geojson-vt`
+   4.0.3 and `vt-pbf` 3.1.3 are pinned dependencies, and `scripts/fixture/contour.mjs` traces
+   isolines and cuts them to MVT. It is **not wired in**: no contour archive is built.
+2. ~~Confirm the PMTiles writer at fixture scale.~~ **Done.** `s2-pmtiles` 1.1.2 is adopted and
+   `scripts/fixture/archive.mjs` writes real archives, over `FileWriter` — `BufferWriter` is
+   unusable at scale.
 3. ~~A real tile reader, and wiring it in.~~ **Done.** `scripts/fixture/source.mjs` range-reads a
    GLO-30 COG with no GeoTIFF dependency; `scripts/fixture/deps.mjs` binds it and a real S3 probe
    behind the build's seams, which are now async. A scratchpad run drives the assembled build
    against real inputs. It still moves **no status row**: the archive stage is a fake writer,
    nothing is written, and no committed path reproduces the run.
-4. Write the contour source into the build.
+4. Wire the contour source into the build, as a **second archive** (ADR-0025: PMTiles v3 carries
+   one archive-level tile type *and* one compression, so PNG and MVT cannot share one). Derive
+   the levels from the **declared region's** samples while still reading the larger envelope for
+   interpolation and tiling.
 5. ~~**Produce an actual archive**~~ **Done.** `npm run fixture:build` cuts the terrain
    archive from the real release: 8 tiles, 1,493,696 bytes, reproducible byte for byte.
 6. ~~Measure archive size~~ **Done.** 1,493,696 bytes, measured (ADR-0024 criterion 6).

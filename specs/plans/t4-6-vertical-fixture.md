@@ -51,13 +51,13 @@ declared region, all four attribution roles present, 8 of 8 tiles found with 8 d
 and an unwritten address reading back `undefined`. That measurement discharges ADR-0024
 criterion 6, which requires archive size **measured** rather than calculated.
 
-**Remaining T4.6 implementation scope.** The source reader is built and is now bound behind
-`readTile` (see *The source reader* and *The async wiring* below). Still outstanding: the GeoJSON→MVT
-contour toolchain; the PMTiles writer (`s2-pmtiles` is well-evidenced but uncommitted and
-unconfirmed at fixture scale); producing an actual archive; measuring its size (ADR-0024
-criterion 6); the fixture track (≥5k points, two-segment pause, two event marks); the `/lab`
-route; simulated GPS; the offline Playwright scenario; and the frame-time and memory baseline.
-That is still most of the task by volume.
+**Remaining T4.6 implementation scope.** The terrain half is done end to end: source reader,
+async wiring, Mercator addressing, resampling, the stitched surface, PNG, the PMTiles writer and
+the committed entry point. The contour toolchain is **adopted** and `contour.mjs` traces and
+tiles, but nothing builds a contour archive. Still outstanding: **wiring the contour source in as
+a second archive** (ADR-0025); the fixture track (≥5k points, two-segment pause, two event
+marks); the `/lab` route; simulated GPS; the offline Playwright scenario; and the frame-time and
+memory baseline — the last of which are the actual acceptance criteria and none has been touched.
 
 **On verification claims in this plan and in commit messages:** gate runs and mutation results
 are *author verification* — real and reproducible, but run by whoever wrote the code, not an
@@ -480,13 +480,13 @@ distance-within-a-tolerance are different predicates, and this probe used the fi
 reasoning about the second. Every one of the five produced the same signature — an open chain
 with negative area error — which is why the residual could not be attributed from inside.
 
-**What this does not establish.** The evaluation exercises the *tiling stage*. Explicitly
-outstanding: fixture scale; adoption of any of these packages as dependencies, which has not
-happened and is not proposed here; and integration into the build, where the contour source
-remains unwritten. `d3-contour`'s output and real DEM-derived geometry were outstanding until
-the real-geometry probe above and are no longer. The status table is unchanged regardless: an
-evaluated tiling stage is not a built contour source, and nothing here moves an obligation to
-*discharged*.
+**What this does not establish** — *written before adoption, and left standing as the record of
+what the evaluation alone proved.* It exercises the **tiling stage** only. Outstanding at the
+time: fixture scale; adopting any of these packages; and integration into the build.
+
+**[superseded 2026-08-31]** Adoption has since happened — `d3-contour` 4.0.2, `geojson-vt` 4.0.3
+and `vt-pbf` 3.1.3 are pinned dependencies and `scripts/fixture/contour.mjs` traces and tiles.
+See *Contours, as built*. Integration into the build has **not**: no contour archive is produced.
 
 The **synthetic** evaluation described in this subsection is author verification: the chain was
 selected and the test that judges it was written by the same author. Its real-geometry successor
@@ -1058,13 +1058,13 @@ regression visible, and a threshold picked now would be invented.
 
 Ordered by what gates what.
 
-1. **The contour toolchain beyond its tiling stage.** The candidate evaluation is done, on
-   synthetic geometry under author verification and then on real `d3-contour` output from the
-   declared crop, with Bar 2 of the latter adjudicated independently — both bars pass, recorded
-   in the contours section above with the measurements. What remains open is what neither run touched:
-   **adopting any of those packages as dependencies**, which has not happened and is a separate
-   decision; **fixture scale**; and **integration into the build**, where the contour source is
-   still unwritten and `writeArchive` has nothing behind it.
+1. **The contour toolchain beyond its tiling stage.** ***Mostly closed.*** The candidate
+   evaluation was done on synthetic geometry under author verification and then on real
+   `d3-contour` output from the declared crop, with Bar 2 of the latter adjudicated
+   independently; both bars pass. **[2026-08-31]** The packages are now **adopted** and pinned,
+   `contour.mjs` traces and tiles, and `archive.mjs` writes real archives at fixture scale — so
+   adoption and scale are no longer open. What remains is **integration**: no contour archive is
+   built, and it must be a second one (ADR-0025).
 
    Carried forward as a constraint rather than a result: the synthetic run's ≤0.8% area
    agreement does **not** hold universally on real data — 10 of 128 cases reach 6.54%, all small

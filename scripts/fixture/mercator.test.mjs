@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import * as oracle from "./mercator-oracle.mjs";
 import {
   MercatorError,
   TILE_SIZE,
@@ -19,28 +20,6 @@ const REGION = JSON.parse(
 const BOUNDS = REGION.bounds;
 /** The source's sample spacing, 1 arcsecond — the halo bilinear needs. */
 const ARCSEC = 1 / 3600;
-
-/**
- * The projection oracle, written from a **different formulation** than the implementation.
- *
- * `mercator.mjs` inverts with `atan(sinh(...))`. This uses the Gudermannian in its
- * `2·atan(exp(y)) − π/2` form, and the forward direction through `ln(tan(π/4 + φ/2))`. The two
- * are mathematically equal and textually unrelated, so a transcription slip in one does not
- * reproduce itself in the other. Testing a projection against its own formula restated would
- * prove only that the restatement was faithful.
- */
-const oracle = {
-  lonToX: (lon, z) => (2 ** z * (lon + 180)) / 360,
-  latToY: (lat, z) => {
-    const merc = Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
-    return 2 ** z * (0.5 - merc / (2 * Math.PI));
-  },
-  xToLon: (x, z) => (360 * x) / 2 ** z - 180,
-  yToLat: (y, z) => {
-    const merc = 2 * Math.PI * (0.5 - y / 2 ** z);
-    return ((2 * Math.atan(Math.exp(merc)) - Math.PI / 2) * 180) / Math.PI;
-  },
-};
 
 describe("the projection, against an independently written oracle", () => {
   it.each([

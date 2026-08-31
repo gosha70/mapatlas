@@ -113,18 +113,32 @@ describe("the traced geometry lies where the surface says it does", () => {
     // Where the data stops is not where the terrain reaches an elevation. d3-contour closes its
     // regions along the raster edge, and those vertices are placed on the edge rather than at an
     // interpolated crossing.
+    //
+    // **The bounds are the transformed edges, not a loose window round them.** An earlier version
+    // allowed anything within one sample of `WEST`, while d3's `x = 0` maps to `WEST − 0.5·SPACING`
+    // — so the assertion permitted precisely the vertices it claimed to exclude and would have
+    // passed with every artefact present.
     const grid = gridOf(plane);
-    const east = WEST + (grid.width - 1) * SPACING;
-    const south = NORTH - (grid.height - 1) * SPACING;
+    const edge = {
+      west: WEST - D3_GRID_OFFSET_SAMPLES * SPACING,
+      east: WEST + (grid.width - D3_GRID_OFFSET_SAMPLES) * SPACING,
+      north: NORTH + D3_GRID_OFFSET_SAMPLES * SPACING,
+      south: NORTH - (grid.height - D3_GRID_OFFSET_SAMPLES) * SPACING,
+    };
+    // A hundredth of a sample: far below any real vertex spacing, far above float noise.
+    const margin = SPACING / 100;
 
+    let checked = 0;
     for (const feature of traceContours(grid, levelsFor(2950, 2957.5, 0.5)).features) {
       for (const [lon, lat] of feature.geometry.coordinates) {
-        expect(lon).toBeGreaterThan(WEST - SPACING);
-        expect(lon).toBeLessThan(east + SPACING);
-        expect(lat).toBeLessThan(NORTH + SPACING);
-        expect(lat).toBeGreaterThan(south - SPACING);
+        expect(lon).toBeGreaterThan(edge.west + margin);
+        expect(lon).toBeLessThan(edge.east - margin);
+        expect(lat).toBeLessThan(edge.north - margin);
+        expect(lat).toBeGreaterThan(edge.south + margin);
+        checked += 1;
       }
     }
+    expect(checked).toBeGreaterThan(100);
   });
 
   it("closes a ring that lies wholly inside the raster, at the radius the level implies", () => {
@@ -204,18 +218,22 @@ describe("tiling, decoded by an independent reader", () => {
     return { layerNames: Object.keys(tile.layers), features };
   }
 
-  it("writes one layer, carrying the elevation of every feature", () => {
+  it("writes one layer, and every requested level survives encoding", () => {
+    // Per-feature membership is not enough: a tile set carrying only the 2,900 m contour
+    // satisfies "every elevation is one of these" while two thirds of the layer is missing.
+    // What has to hold is that the set of elevations that came back is *exactly* the set asked
+    // for, aggregated across the tiles rather than checked within each.
     const tiles = contourTiles(collection, tilesInRange(bounds, 14, 15));
 
     expect(tiles.length).toBeGreaterThan(0);
+    const recovered = new Set();
     for (const tile of tiles) {
       const { layerNames, features } = decode(tile.bytes);
       expect(layerNames).toEqual([CONTOUR_LAYER]);
       expect(features.length).toBeGreaterThan(0);
-      for (const feature of features) {
-        expect([2900, 3000, 3100]).toContain(feature.properties.elevation);
-      }
+      for (const feature of features) recovered.add(feature.properties.elevation);
     }
+    expect([...recovered].sort((a, b) => a - b)).toEqual([2900, 3000, 3100]);
   });
 
   it("keeps geometry inside the tile's extent, plus the declared buffer", () => {

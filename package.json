@@ -32,21 +32,26 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@mapbox/vector-tile": "2.0.3",
     "@playwright/test": "1.62.1",
     "@types/node": "26.4.0",
     "@types/react": "19.2.18",
     "@vitest/coverage-v8": "4.1.11",
+    "d3-contour": "4.0.2",
     "eslint": "10.9.1",
     "eslint-config-prettier": "10.1.8",
     "fake-indexeddb": "6.2.5",
+    "geojson-vt": "4.0.3",
     "globals": "17.11.0",
     "happy-dom": "20.11.13",
+    "pbf": "4.0.1",
     "prettier": "3.9.6",
     "react": "19.2.8",
     "s2-pmtiles": "1.1.2",
     "typescript": "6.0.3",
     "typescript-eslint": "8.68.0",
     "vite": "8.2.2",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "vt-pbf": "3.1.3"
   }
 }

@@ -28,6 +28,7 @@ drives the build through injected fakes.
 | Mercator addressing + envelope | yes | yes | **yes** | coverage now runs over the envelope |
 | Bilinear resampler | yes | yes | **yes** | 8 distinct PNG tiles |
 | Stitched source surface | yes | yes | **yes** | two real cells joined across 7°E |
+| Contour generation | yes | **no** | **no** | `contour.mjs`; nothing calls it — the contour archive is not built |
 | PNG serialiser | yes | yes | **yes** | every tile in the archive is a PNG |
 | Build ordering | yes | — | **yes** | all stages ran in order against real inputs |
 
@@ -990,6 +991,49 @@ a failed archive stage leaving its partial behind, development mode ignored, the
 labelled as vector tiles, the marker never emitted, and the output directory not created. Two of
 those needed the tests fixed first — the discard case for the reason above, and the tile-type
 case because asserting PNG *payloads* passes whatever the archive declares itself to be.
+
+### Contours, as built
+
+`scripts/fixture/contour.mjs` traces isolines over the decoded surface and cuts them to MVT. The
+toolchain the plan evaluated is now **adopted**: `d3-contour` 4.0.2, `geojson-vt` 4.0.3,
+`vt-pbf` 3.1.3, all pinned exactly, with `@mapbox/vector-tile` 2.0.3 and `pbf` 4.0.1 as the
+suite's *independent* decoder — the tiles are read back by something other than `vt-pbf` run
+backwards.
+
+**Two oracles, because neither reaches what the other does.** An affine plane makes every contour
+a straight line, so each vertex must satisfy `a·lon + b·lat + c = level` exactly; that one
+assertion kills a half-cell offset, a transposed axis, a wrong scale and edge artefacts at once.
+A radially symmetric dome makes every contour a circle, which is the only way to state that a
+small loop *closes* and encloses the right area — the property the toolchain was evaluated for.
+
+**`d3-contour`'s grid space is offset half a sample from the lattice**, measured rather than read:
+on `value = 10·x`, the level-15 crossing belongs at sample index 1.5 and `d3-contour` reports 2.0.
+Ignoring it shifts the entire layer uniformly north-west, which is invisible on a map.
+
+**The finding: `d3-contour` returns regions, not lines.** It treats everything outside the raster
+as below every threshold, so a region reaching the edge is closed *along* that edge — and those
+vertices sit on the boundary rather than at an interpolated crossing. Emitted as contours they
+draw a rectangle around the data. The affine oracle caught it at once, **7.6 m off the plane**,
+the full range of the fixture.
+
+The first fix was wrong in an instructive way: dropping segments with both ends on the *same*
+edge left the diagonals cutting each raster corner — `(39.5, 0) → (40, 0.5)` has its ends on two
+different edges and survived, still 7.6 m off. The rule is **per vertex, not per segment**. With
+it the worst vertex is 6.1 × 10⁻⁵ m off, which is float32 noise.
+
+*On the real surface* — the 1,268 × 884 envelope, 43 levels at 100 m — the tracer yields **504
+features, 227,817 vertices, 324 closed rings** in 0.55 s, cutting to 8 tiles totalling 234 KB
+against terrain's 1.49 MB.
+
+*A wiring decision this defers.* Levels are an explicit input, and the real run above derived them
+from the **envelope's** range (554–4,810 m), which produces levels that exist only outside the
+declared region and are then clipped away. Harmless but wasteful, and it should be the region's
+own range when the build owns the call.
+
+*Author verification.* 15 tests, 10 mutations killed: the half-cell offset dropped and doubled,
+latitude not inverted, axes transposed, edge artefacts kept, edge splitting disabled, the level
+not carried as a property, the addresses iterated twice (which empties a generator and silently
+emits nothing), empty tiles written, and levels anchored to the terrain rather than the interval.
 
 ## Fixture composition
 

@@ -1098,11 +1098,134 @@ a DEM + hillshade + contour source stack, and the archive persisted locally. Gen
 deterministically from a seed so the archive and the track are reproducible, and shared between
 the Playwright scenario and `/lab` rather than duplicated.
 
+## The fixture track's bars — set before generating one
+
+Recorded before any generator exists. A track is easy to make *look* right and hard to make
+*mean* right, and the acceptance criteria turn on properties a plausible-looking polyline can
+fail silently.
+
+1. **Deterministic in one runtime, and byte-equal between the two this project actually runs.**
+   The same seed must give the same track in the Playwright scenario and in `/lab`, or the two
+   are testing different things. `Math.random` is therefore out, and the seeded stream is integer
+   arithmetic.
+
+   **The bar is empirical equality between the CI-pinned Node and the Playwright Chromium build,
+   discharged by comparing them — not portability across arbitrary engines.** An earlier version
+   of this bar demanded the latter, by forbidding any dependence on floating-point library
+   differences, while the generator's walk uses `atan2`, `cos`, `sin` and `hypot` over
+   accumulated floats. That is a bar the implementation cannot meet and never claimed to: real
+   portability would need fixed-point coordinate generation, which is a different design and not
+   one this fixture needs. Stating the achievable version is what lets the browser comparison
+   actually discharge it; the previous wording could only have been discharged by rewriting the
+   generator. Node-to-Node determinism is asserted in the unit suite today; the cross-runtime half
+   is open until the scenario serialises the browser's track.
+2. **A real `Track`, not a shape that resembles one.** It goes through `finalizeTrack`, so
+   `assertValidTrackGeometry` passes, `stats` and `simplifiedSegments` are the engine's own
+   output, and the fixture cannot drift from what the engine accepts. A hand-built object would
+   pass tests the engine would reject.
+3. **≥5,000 raw points**, per T4.6. The number is the point: it is what makes the frame-time
+   baseline mean anything, and a fixture that quietly shrank would make a regression look like an
+   improvement. Asserted, not assumed.
+4. **Two segments, and the pause is a gap in *time and space*.** Every point belongs to a segment
+   — the validator requires it — so the pause is the interval between `segments[0].endedAt` and
+   `segments[1].startedAt`, during which nothing was recorded. The walker **moves** across it, so
+   the two segments do not meet: a renderer that bridged the gap would draw a straight line no
+   sampled point lies on, which is exactly what the acceptance criterion "the pause shows as a
+   gap" exists to catch. A pause with no displacement would render identically whether bridged or
+   not, and could not.
+5. **Two consumer-defined event marks**, carrying `category` — the presentation seam keys off it
+   — and no domain vocabulary, since none may enter this repository.
+6. **Wholly inside the declared region.** The terrain and contour archives cover
+   `[6.825, 45.815, 6.905, 45.865]` and nothing else, so a track leaving it would render over
+   blank basemap and the offline scenario would be testing the wrong thing.
+
+Timing and speed are plausible rather than arbitrary: a track whose points imply 300 m/s produces
+`stats` no reviewer can sanity-check, and makes `maxSpeedMps` useless as a regression signal.
+
 ## `/lab` and simulated GPS
 
 Reached through the packages' public entry points, so it exercises what a consumer imports;
 `e2e/harness` stays automation-only. Simulated GPS replays the fixture track through the same
 `TrackRecorder` seam the browser implementation satisfies, so the demo is operable from a desk.
+
+## `/lab` and the offline scenario — bars set before building
+
+Recorded before the route exists. These are the acceptance criteria themselves, so the risk is
+not a wrong number but a scenario that passes while showing nothing — the whole point of the
+fixture is to be the thing that would notice.
+
+1. **A real served `/lab`, through package exports only.** `apps/demo` is currently a stub
+   library with no page; it becomes an app. The route imports from `@mapatlas/*` entry points and
+   nothing deeper, so it exercises what a consumer actually gets — `e2e/harness` stays
+   automation-only and is not the thing under test. Enforced rather than intended: the route's
+   imports are checked, because "we meant to use the public API" is not a property.
+2. **Synthetic PMTiles, cut by the real writer, kept out of the tree.** The browser lane must not
+   reach S3 and must not carry tracked tiles (`CLAUDE.md`). So the scenario generates a small
+   archive pair through `archive.mjs` — the same writer the real build uses, not a mock — into a
+   temporary directory, and serves it. A hand-rolled stub archive would prove the renderer can
+   read a stub.
+3. **Simulated GPS replays through `TrackRecorder`.** Not injected as a finished `Track`: the
+   points go through the same seam the browser implementation satisfies, and what comes out must
+   be **5,400 points and exactly two segments**. Handing the recorder's output straight to the
+   renderer would skip the seam the demo exists to exercise.
+4. **Render evidence, per layer and per feature.** Terrain, contours, both event marks, and
+   **two separate track geometries**.
+
+   *The no-bridge evidence needs stating carefully, because the obvious formulations are wrong in
+   several directions at once.* "No rendered vertex lies on the straight line between the pause
+   endpoints" rejects correct geometry — both endpoints lie on that line by definition — and
+   excluding the endpoints then accepts the defect, because a bridge is a **single edge** between
+   them with no interior vertex at all. Bridging is a property of edges, not of vertices.
+
+   Nor can the app simply report what the renderer holds. `MapController` is write-only for
+   rendering — `renderTrack`, `renderEvents`, no source getter — so a `/lab` diagnostic would
+   have to re-derive the two LineStrings from the same `Track` the renderer was given, which
+   asserts the app's own logic rather than the renderer's. That is the shared-premise failure
+   again, in a new place. The alternative, a hook at the controller-to-MapLibre `setData`
+   boundary, would mean adding engine surface that exists only for a test.
+
+   So the two halves are split by what each can honestly see:
+
+   - *Input topology, asserted directly.* The exact `Track` handed to `renderTrack` has two
+     segments, and its `points[endIndex]` and `points[startIndex]` across the pause are the two
+     endpoints. That is a property of the input, checkable with no renderer internals, and it
+     claims nothing about what was drawn.
+   - *Rendering, adjudicated differentially in pixels — no projection getter needed.* Three
+     captures: **background** with `renderTrack(null)`, **correct** with the two-segment fixture,
+     and a **deliberately bridged control** — the same points as a single segment spanning the
+     pause, which is a valid `Track` and which the renderer must draw across. Then:
+     the correct render must add a non-empty set of stroke pixels over background (the track drew
+     something at all); the bridged control must add a further non-empty set over the correct
+     render (the bridge drew something, so the oracle has a signal); and on **that** set the
+     correct render must equal background (the bridge is absent from it).
+
+     The bridge-only pixels are therefore **measured from the control**, not computed from
+     geometry. That removes the trap in the version this replaces: a corridor derived by
+     arithmetic could contain real geometry and fail spuriously, or be empty and pass vacuously,
+     and would need its own non-emptiness proof. Here non-emptiness *is* one of the assertions.
+
+     Compared with a tolerance, since antialiasing is not bit-stable; the control makes the
+     signal a whole stroke rather than a subtle one, which is what keeps a tolerance from
+     swallowing it.
+
+   Neither half subsumes the other: input topology holds even if the layer never painted, and
+   pixels alone cannot say which track was handed over.
+
+5. **The network is disabled before any map source is read**, and an unexpected request **fails
+   the test** rather than being tolerated. A scenario that merely runs offline proves the tiles
+   were cached; one that fails on egress proves they were never wanted.
+6. **A documented warm-up and sampling protocol, and no invented thresholds.** How many frames
+   are discarded, over what interval frame time is sampled, and what memory figure is read — all
+   written down, because a baseline whose method is unrecorded cannot be compared against
+   anything later. The numbers are **recorded, not asserted**: a threshold picked now would be a
+   guess, and a guess that fails a future run teaches nothing about the run.
+
+*Two things these bars deliberately do not claim.* The archives the scenario serves are
+synthetic, so this establishes that the stack renders a conforming archive, not that the real
+1.5 MB pair renders — that is what `npm run fixture:build` plus a manual `/lab` visit covers.
+And Node↔browser byte identity of the fixture track is **open** (see the track's bars): the
+scenario is where it can finally be settled, by serialising the browser's own track and comparing
+it against Node's.
 
 ## Acceptance
 

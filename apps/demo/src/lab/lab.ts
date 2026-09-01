@@ -33,6 +33,13 @@ const BLANK_STYLE = {
   layers: [{ id: "background", type: "background", paint: { "background-color": "#eceff1" } }],
 };
 
+/** Vertices the `draw=on` view authors, as offsets in degrees from the recording's first point. */
+const DRAFT_OFFSETS: readonly (readonly [number, number])[] = [
+  [0, 0],
+  [0.0006, 0.0004],
+  [0.0012, 0.0002],
+];
+
 export interface LabHandles {
   readonly controller: MapController;
   /** The track the recorder produced, once the replay has finished. */
@@ -74,6 +81,16 @@ export interface LabSources {
    * the wrong subject for a claim about the *line*.
    */
   marks?: boolean | undefined;
+  /**
+   * Whether the map enters draw mode over a small draft.
+   *
+   * `/lab` exists so the *composition* can be checked, and the draft-vertex accessibility
+   * contract could not be checked here at all while nothing on the route ever rendered one:
+   * the engine proves that contract in isolation on the browser harness page, and this is what
+   * lets the same check run against a consumer app assembled from package entry points
+   * (`specs/tasks.md`, T4.7 clause 10).
+   */
+  draw?: boolean | undefined;
 }
 
 /**
@@ -109,6 +126,9 @@ export type LabFocus = "track" | "pause";
  */
 const PAUSE_FOCUS_ZOOM = 17;
 
+/** Close enough that the three draft vertices are separate, reachable hit targets. */
+const DRAW_FOCUS_ZOOM = 16;
+
 /**
  * Read archive locations from a URL's query string.
  *
@@ -123,6 +143,9 @@ export function readLabSources(from: URL): LabSources {
     // mistyped parameter renders the normal map rather than a quietly different one.
     hillshade: from.searchParams.get("hillshade") !== "off",
     marks: from.searchParams.get("marks") !== "off",
+    // Opt-in, unlike the others: a route that entered draw mode by default would put a hand
+    // authoring surface in front of anyone opening `/lab` to look at the fixture.
+    draw: from.searchParams.get("draw") === "on",
   };
 }
 
@@ -365,12 +388,35 @@ export async function mountLab(
     controller.fitTrack(track);
   }
 
+  // Draw mode last, so it is entered over a map that already has everything else on it — which
+  // is the composition the check is about. The handlers are the ones a consumer writes: a move
+  // updates the draft it owns and re-renders it.
+  let exitDraw: (() => void) | undefined;
+  if (sources.draw === true) {
+    const origin = track.points[0];
+    if (origin === undefined) throw new Error("/lab: draw=on needs a recording with a point");
+    const draft = DRAFT_OFFSETS.map(([dLat, dLng]) => ({
+      lat: origin.lat + dLat,
+      lng: origin.lng + dLng,
+    }));
+    controller.renderDraft(draft);
+    controller.recenter({ lat: draft[1]!.lat, lng: draft[1]!.lng }, DRAW_FOCUS_ZOOM);
+    exitDraw = controller.enterDrawMode({
+      onVertexAdd: () => undefined,
+      onVertexMove: (index, to) => {
+        draft[index] = to;
+        controller.renderDraft(draft);
+      },
+    });
+  }
+
   return {
     controller,
     track,
     rendered,
     events,
     destroy() {
+      exitDraw?.();
       controller.destroy();
     },
   };

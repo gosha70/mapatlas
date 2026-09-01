@@ -868,6 +868,28 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   T4.6's `/lab` route, and T4.6 waits on the region input, so an exit criterion naming it could
   not be satisfied in this order. T4.6 re-runs the same check against `/lab` when it exists.
 
+  **Done** (2026-09-01). Audit: [`specs/plans/t4-7-interaction-a11y.md`](plans/t4-7-interaction-a11y.md).
+
+  - *Nine of the ten clauses were already discharged before this task began*, most of them by the
+    draw-mode work merged earlier in Phase 4 — reduced motion through the camera seam in both
+    states, the grab released by blur and by a reconcile that removes the focused vertex, vertices
+    focusable and tab-reachable with a name saying which they are, the 1 px and 10 px steps
+    asserted numerically, `onEventClick` firing alone in the unit lane with the DOM relationship
+    built so the assertion cannot pass vacuously, and the tap order asked at the pointer. The
+    audit names the test and the failure mode for each rather than restating the implementation.
+  - *The deferred `/lab` obligation above is discharged here*, by `e2e/lab-a11y.e2e.ts`, asserting
+    **the same contract** as the harness check — one tab stop, an accessible name per vertex,
+    focus reached through the browser's real tab order, a computed focus ring. No accessibility
+    engine and no new dependency: "the same check" is not a licence to turn a named contract into
+    a standards scan. Both checks are kept — the harness proves the engine in isolation, `/lab`
+    proves the shipped composition did not break it.
+  - *That new proof is non-vacuous.* Taking every vertex out of the tab order, and removing the
+    visible focus ring, each make it fail.
+  - *A sequencing correction.* This task's summary says it "puts `createMapController` on the
+    package barrel". It was already exported before T4.7 began, because **T4.6 required it** —
+    `/lab` is assembled from package entry points only. The backlog's assumption about the order
+    was overtaken by earlier implementation; the export was not touched to make history match it.
+
 ## Phase 5 — `@mapatlas/react`
 - **T5.1 Hooks.** `useTrackRecorder` (live `channels`, `markLap`, `recovered`), `useEventLog`,
   `useOfflineRegions`. _AC:_ tested with fakes.

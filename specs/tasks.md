@@ -709,6 +709,25 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   _AC:_ renders with no network egress permitted; the pause shows as a gap;
   frame time and memory are recorded as a baseline. Its purpose is to surface renderer and
   data-format assumptions here, in Phase 4, rather than in Phase 7 when they are expensive.
+
+  **Done** (2026-09-01, PR #9 and #10). Each criterion, and what discharges it:
+
+  - *No external egress.* `e2e/lab.e2e.ts` guards both seams — `page.route` for HTTP and
+    `page.routeWebSocket` for sockets it never sees — failing rather than counting an unexpected
+    request, and each guard falsified by a decoy origin that shares a textual prefix with an
+    allowed one. Both archives are read by range, asserted per archive.
+  - *The pause shows as a gap.* `e2e/render-differential.e2e.ts` proves it as a set relation:
+    the two-segment render's track pixels are exactly the union of each segment's, measured at
+    0 added and 0 lost, while a deliberately bridged control contributes 827 pixels of its own
+    in the corridor that the real render does not contain.
+  - *A recorded baseline.* `e2e/performance-baseline.e2e.ts`, with macOS and Ubuntu columns in
+    the plan and **no thresholds** — deliberately, since two consecutive CI runs of unchanged
+    code measured medians of 33.4 ms and 50.0 ms.
+
+  **Follow-up — DEM tile-size fidelity.** Removing `tileSize: 256` still renders terrain and
+  hillshade, but at a different scale; current evidence proves presence, not which rendering is
+  spatially correct. This is **not** a blocker for T4.6 and remains an explicit future fidelity
+  acceptance property.
 - **T4.7 Interaction + a11y.** `onMapTap`, `onEventClick`; controls keyboard-reachable, visible
   focus, `prefers-reduced-motion` respected. Completes `MapController`, so this is the task that
   puts `createMapController` on the package barrel and makes `api.md`'s declaration true.

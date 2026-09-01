@@ -22,7 +22,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { setWorkerUrl } from "maplibre-gl";
 
-import { mountLab, readLabSources } from "./lab/lab.js";
+import { mountLab, readLabFocus, readLabSegments, readLabSources } from "./lab/lab.js";
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -37,7 +37,8 @@ if (window.location.pathname === "/lab") {
   map.id = "map";
   app.append(status, map);
 
-  mountLab(map, readLabSources(new URL(window.location.href)))
+  const here = new URL(window.location.href);
+  mountLab(map, readLabSources(here), readLabSegments(here), readLabFocus(here))
     .then((lab) => {
       // **Not "ready".** This resolves when the recording is finished and the controller has
       // been told what to draw; MapLibre installs sources and layers later, when its style
@@ -47,6 +48,7 @@ if (window.location.pathname === "/lab") {
       status.dataset["points"] = String(lab.track.points.length);
       status.dataset["segments"] = String(lab.track.segments.length);
       status.dataset["events"] = String(lab.events.length);
+      status.dataset["rendered"] = String(lab.rendered.points.length);
       status.textContent =
         `${String(lab.track.points.length)} points, ` +
         `${String(lab.track.segments.length)} segments, ` +

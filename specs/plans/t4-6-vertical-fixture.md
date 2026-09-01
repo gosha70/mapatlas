@@ -1470,14 +1470,83 @@ the spec rather than inherited from a device profile. A bare-page control alone 
 *which* archive painted, since either one accounts for the difference, so the stack is also
 compared against itself missing each source in turn.
 
-*What this does not prove, from a mutation rather than a guess.* Removing the DEM's
-`tileSize: 256` — which makes MapLibre request a zoom the archive does not contain, leaving the
-hillshade nothing to shade from — leaves every assertion here green, including the DEM's own
-control. Declaring the DEM also enables terrain, and terrain changes the scene whether or not a
-hillshade pixel was drawn. So these controls establish that each source reaches the renderer and
-changes the image; they do **not** establish that the hillshade shaded from real elevation.
+*What this does not prove.* Declaring the DEM also enables terrain, and terrain changes the scene
+whether or not a hillshade pixel was drawn. So these controls establish that each source reaches
+the renderer and changes the image; they do **not** establish that the hillshade *layer* drew.
 Separating a layer from its source is per-layer evidence, and closing this is a requirement on
 the pause differential, not an optional extra.
+
+*A correction to how that gap was described.* This section originally said the `tileSize: 256`
+mutation survived "because the hillshade shades from nothing" at a zoom the archive lacks. The
+first claim is right and the reason was not, and the differential increment measured it:
+with the line removed the hillshade still draws — 99.6% of pixels differ from a no-hillshade
+render, against 95.9% with it — because the request lands on a zoom the archive does have, at
+the wrong scale. The cost is fidelity, not presence. That makes `tileSize` a **separate**
+unverified property rather than the thing the layer differential closes, and it is still
+unverified: nothing in the suite says which of the two maps is correct.
+
+### The differentials, as built
+
+Two claims, two comparisons, kept apart because neither can carry the other.
+
+**The pause is a gap, stated as a set relation.** The pixels the two-segment render draws are
+exactly the union of what each segment draws alone: measured `added = 0` and `lost = 0` against
+2,817 track pixels, so the relation holds with no slack at all on this machine. A bridged
+control — the two points either side of the pause as one two-point segment, a track the renderer
+*must* draw across — contributes 827 pixels of its own in a 26 × 224 corridor, and the real
+render contains none of them. The tolerance that exists (1%, floor 16 px) is for coverage that
+differs between platforms; it is two orders of magnitude below what a bridge draws.
+
+*Three things had to be removed from the picture before that relation meant anything, and each
+was found by measurement rather than foreseen.*
+
+1. **Marks are not the line.** `renderTrack` anchors start and finish pins to the ends of
+   *whatever it is handed*, so rendering one segment puts a finish pin exactly where the pause
+   is — 176 pixels of purple sitting on the subject, breaking the union relation for a reason
+   that has nothing to do with geometry. That is the renderer behaving correctly. `/lab` gained
+   `marks=off`, which suppresses the event marks by not rendering them and the start and finish
+   pins through an `EventPresentation` returning `null` — a documented consumer decision, not
+   engine surface added for a test.
+2. **A camera fitted to the selection is not a camera.** `fitTrack` now always frames the whole
+   recording, whatever subset is drawn; fitting the selection would give every capture its own
+   projection and make every pixel differ for the wrong reason.
+3. **The gap has to be big enough to hold a bridge.** At the whole-track zoom the 94.6 m pause is
+   about 13 pixels, and the bridged control's strictly-new ink came to **zero** — the line landed
+   entirely inside the antialiased ends of the two segments. A corridor that cannot hold a bridge
+   cannot show its absence either. `focus=pause` frames the gap at z17, where it is 224 px.
+
+*And one that had to be removed for a reason worth recording.* The pause views carry **no
+basemap**. With terrain enabled at z17 the camera sits about 900 m above the map plane while the
+ground here is over 3,000 m, so it ends up inside the mountain and the canvas comes back blank —
+measured, in white, with no error on the console. The pause claim is about the line, so the stack
+that makes the gap unreachable is left out.
+
+**The hillshade layer draws, with its source held fixed.** This is the obligation the
+rendered-state controls could not discharge: the same archive drives terrain, and terrain alone
+accounts for a difference. Here the source, the terrain, the contours, the track and the camera
+are identical and the **layer** is the only variable — 883,485 of 921,600 pixels change (95.9%),
+and each of five 120 × 120 probes spread across the viewport changes by between 7,036 and 14,400.
+
+**The predicate is pinned on known colours, not on a render.** Track ink is recognised by
+blue-minus-red, because the line is `#0969da`, the style background is near-neutral, the contour
+is warm `#795548`, and hillshade only darkens what it covers. An exact-value rule would drop most
+of a 3-pixel antialiased line and would differ between platforms whose coverage differs by a
+fraction — correct geometry, red suite, nothing learned. The threshold is asserted against
+synthetic pixels at known blends rather than against the map, so the rule is checked where it
+cannot be flaky.
+
+*Author verification: seven mutations, six killed.*
+
+| mutation | result |
+| --- | --- |
+| the two segments joined across the pause | killed — 1,414 px drawn that neither segment draws, against a tolerance of 28 |
+| segment one suppressed | killed |
+| segment two suppressed | killed |
+| `hillshade=off` no longer removes the layer | killed — 0% changed |
+| the hillshade layer declared but invisible | killed — 0% changed |
+| the predicate admits every pixel | killed — two tests |
+| the predicate demands the exact line colour | killed |
+| the DEM's `tileSize: 256` removed | **survived**, and see the correction above |
 
 ## Acceptance
 

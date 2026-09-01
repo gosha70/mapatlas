@@ -24,6 +24,9 @@ interface FakeLog extends EventLog {
   failNext?: { kind: "add" | "update" | "remove"; error: Error } | undefined;
   /** When set, `list` resolves immediately with this rather than waiting to be answered. */
   auto?: MapEvent[] | undefined;
+  /** Hold `add` open until {@link FakeLog.releaseAdd} is called. */
+  parkAdd?: boolean | undefined;
+  releaseAdd?: (() => void) | undefined;
 }
 
 function fakeLog(): FakeLog {
@@ -43,6 +46,8 @@ function fakeLog(): FakeLog {
     listed,
     failNext: undefined,
     auto: undefined,
+    parkAdd: undefined,
+    releaseAdd: undefined,
     list: (trackId) => {
       calls.push("list");
       listed.push(trackId);
@@ -56,7 +61,16 @@ function fakeLog(): FakeLog {
       calls.push("add");
       const failure = reject("add");
       if (failure !== undefined) return Promise.reject(failure);
-      return Promise.resolve({ ...input, id: "minted-by-core" } as MapEvent);
+      const created = { ...input, id: "minted-by-core" } as MapEvent;
+      // Parked when asked, so a mutation can still be running when the store or trackId changes.
+      if (log.parkAdd === true) {
+        return new Promise<MapEvent>((resolve) => {
+          log.releaseAdd = () => {
+            resolve(created);
+          };
+        });
+      }
+      return Promise.resolve(created);
     },
     update: () => {
       calls.push("update");
@@ -117,7 +131,7 @@ describe("useEventLog — loading", () => {
   });
 
   it("does not let an older track's list overwrite a newer one", async () => {
-    // **The hazard the generation counter exists for.** A list for A resolving after one for B
+    // **The hazard the context token exists for.** A list for A resolving after one for B
     // leaves the component showing another track's events, with nothing anywhere reporting an
     // error. Ordering is decided here rather than hoped for: B is answered first, then A.
     const log = fakeLog();
@@ -133,6 +147,61 @@ describe("useEventLog — loading", () => {
     await harness.settle();
 
     expect(harness.current.events).toEqual([event("from-b")]);
+    await harness.unmount();
+  });
+
+  it("cannot let a slow initial list undo a completed add", async () => {
+    // Two loads in the *same* context, resolving out of order — neither the store nor the
+    // trackId changes, so a context token cannot separate them. The initial list is parked, the
+    // add's re-read publishes, and only then does the initial snapshot arrive with the world as
+    // it was before the add. A context-only guard would admit it and undo the add.
+    const log = fakeLog();
+    const shared = store();
+    const harness = await mount({ store: shared, trackId: "t1", createLog: () => log });
+    expect(log.calls.filter((call) => call === "list")).toHaveLength(1);
+
+    log.auto = [event("added")];
+    await harness.current.addEvent(event("added") as never);
+    await harness.settle();
+    expect(harness.current.events.map((e) => e.id)).toEqual(["added"]);
+
+    // The initial list finally answers, with the pre-add world.
+    log.auto = undefined;
+    log.answer("t1", []);
+    await harness.settle();
+
+    expect(harness.current.events.map((e) => e.id)).toEqual(["added"]);
+    await harness.unmount();
+  });
+
+  it("cannot publish events from a mutation that outlived its trackId", async () => {
+    // **The race the initial-effect test does not reach.** An add against trackId A is still in
+    // flight when the component switches to B. Its re-read must fail the context guard, and
+    // only does if the context token was captured *before* the add was awaited — sampling it
+    // afterwards reads B's token and lets A's events win.
+    const log = fakeLog();
+    log.auto = [event("from-a")];
+    log.parkAdd = true;
+    const shared = store();
+
+    const harness = await mount({ store: shared, trackId: "a", createLog: () => log });
+    const inFlight = harness.current.addEvent(event("pending") as never);
+    await harness.settle();
+
+    log.auto = [event("from-b")];
+    await harness.rerender({ store: shared, trackId: "b", createLog: () => log });
+    expect(harness.current.events.map((e) => e.id)).toEqual(["from-b"]);
+
+    log.auto = [event("from-a")];
+    const listedSoFar = log.calls.filter((call) => call === "list").length;
+    log.releaseAdd?.();
+    await inFlight;
+    await harness.settle();
+
+    expect(harness.current.events.map((e) => e.id)).toEqual(["from-b"]);
+    // The stale mutation issues no re-read at all: the guard would discard its answer, and a
+    // request whose answer can only be discarded should not be made.
+    expect(log.calls.filter((call) => call === "list")).toHaveLength(listedSoFar);
     await harness.unmount();
   });
 

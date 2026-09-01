@@ -26,6 +26,16 @@ const payload = (z, x, y, size = 64) =>
   Uint8Array.from({ length: size }, (_, i) => (z * 7 + x * 13 + y * 29 + i) % 251);
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
+/** Every archive needs bounds: they go in the header, and a renderer rejects a degenerate box. */
+const BOUNDS = [6.825, 45.815, 6.905, 45.865];
+const META = { name: "fixture", bounds: BOUNDS, minzoom: 10, maxzoom: 14 };
+
+/** A small, valid tile set for tests whose subject is the metadata rather than the tiles. */
+const SOME_TILES = [
+  { z: 14, x: 8504, y: 5839, bytes: payload(14, 8504, 5839) },
+  { z: 10, x: 531, y: 364, bytes: payload(10, 531, 364) },
+];
+
 /**
  * Read an archive through the **independent** reader, sourced through the hardened range path.
  *
@@ -71,7 +81,7 @@ describe("the writer's contract", () => {
       { z: 10, x: 531, y: 364, bytes: payload(10, 531, 364) },
     ];
 
-    await expect(writeArchive(path, tiles, { name: "fixture" })).resolves.toEqual({
+    await expect(writeArchive(path, tiles, META)).resolves.toEqual({
       path,
       tileCount: 3,
     });
@@ -90,8 +100,8 @@ describe("the writer's contract", () => {
     const forward = scratch();
     const reversed = scratch();
 
-    await writeArchive(forward, tiles, { name: "fixture" });
-    await writeArchive(reversed, [...tiles].reverse(), { name: "fixture" });
+    await writeArchive(forward, tiles, META);
+    await writeArchive(reversed, [...tiles].reverse(), META);
 
     expect(digest(readFileSync(forward))).toBe(digest(readFileSync(reversed)));
   });
@@ -106,7 +116,7 @@ describe("the writer's contract", () => {
         { z: 14, x: 8505, y: 5839, bytes: payload(14, 8505, 5839) },
         { z: 10, x: 531, y: 364, bytes: payload(10, 531, 364) },
       ],
-      { name: "fixture" },
+      META,
     );
 
     const { archive } = openIndependently(path);
@@ -123,7 +133,7 @@ describe("the writer's contract", () => {
           { z: 14, x: 8504, y: 5839, bytes: payload(14, 8504, 5839) },
           { z: 14, x: 8504, y: 5839, bytes: payload(1, 1, 1) },
         ],
-        {},
+        META,
       ),
     ).rejects.toThrow(/14\/8504\/5839 was supplied more than once/);
   });
@@ -133,7 +143,7 @@ describe("the writer's contract", () => {
     // line happens to throw a TypeError would read the same in a message assertion, and would
     // stop working the moment that line changed.
     await expect(
-      writeArchive(scratch(), [{ z: 0, x: 0, y: 0, bytes: new Uint8Array(0) }], {}),
+      writeArchive(scratch(), [{ z: 0, x: 0, y: 0, bytes: new Uint8Array(0) }], META),
     ).rejects.toBeInstanceOf(ArchiveError);
   });
 
@@ -147,7 +157,7 @@ describe("the writer's contract", () => {
           { z: 14, x: 8504, y: 5839, bytes },
           { z: 14, x: 8504, y: 5839, bytes },
         ],
-        {},
+        META,
       ),
     ).rejects.toThrow(/more than once/);
   });
@@ -170,7 +180,7 @@ describe("the writer's contract", () => {
     },
   ])("refuses $note", async ({ tile, expected }) => {
     await expect(
-      writeArchive(scratch(), [{ ...tile, bytes: payload(0, 0, 0) }], {}),
+      writeArchive(scratch(), [{ ...tile, bytes: payload(0, 0, 0) }], META),
     ).rejects.toThrow(expected);
   });
 
@@ -178,12 +188,54 @@ describe("the writer's contract", () => {
     // A tile never written reads back as `undefined`; a zero-byte tile would put something at
     // the address that is neither data nor absence, and obligation 3 rests on the distinction.
     await expect(
-      writeArchive(scratch(), [{ z: 0, x: 0, y: 0, bytes: new Uint8Array(0) }], {}),
+      writeArchive(scratch(), [{ z: 0, x: 0, y: 0, bytes: new Uint8Array(0) }], META),
     ).rejects.toThrow(/an absent tile is written by not writing it/);
   });
 
+  it.each([
+    { note: "no bounds at all", bounds: undefined },
+    { note: "too few numbers", bounds: [6.8, 45.8, 6.9] },
+    { note: "a non-finite edge", bounds: [6.8, 45.8, Number.NaN, 45.9] },
+    { note: "reversed longitude", bounds: [6.9, 45.8, 6.8, 45.9] },
+    { note: "reversed latitude", bounds: [6.8, 45.9, 6.9, 45.8] },
+    // Ordered and finite, and nowhere on Earth. The first is the one that matters most: 300°
+    // is 3 × 10⁹ in the header's degrees × 10⁷, past `Int32`'s 2.147 × 10⁹, so it wraps to a
+    // negative longitude and the archive claims a box in the opposite hemisphere — a wrong
+    // answer rather than a rejected one, which is the shape this whole file exists to refuse.
+    { note: "an eastern longitude that wraps the Int32 field", bounds: [200, 45.8, 300, 45.9] },
+    { note: "a western longitude past the antimeridian", bounds: [-200, 45.8, -190, 45.9] },
+    { note: "a latitude past the north pole", bounds: [6.8, 45.8, 6.9, 91] },
+    { note: "a latitude past the south pole", bounds: [6.8, -91, 6.9, 45.9] },
+  ])("refuses $note rather than writing a header a renderer rejects", async ({ bounds }) => {
+    // **A successful write must mean a renderer-valid archive.** The patcher used to return
+    // quietly on any of these, leaving the same `0,0,0,0` header the fix exists to prevent —
+    // and `writeArchive` resolving as though it had succeeded.
+    await expect(writeArchive(scratch(), SOME_TILES, { ...META, bounds })).rejects.toThrow(
+      /metadata\.bounds/,
+    );
+  });
+
+  it("patches the header through an injected sink too", async () => {
+    // Reopening the path would have left every custom sink unpatched — the one case a caller
+    // cannot observe, since a fake sink has no file to inspect.
+    const writes = [];
+    const failing = () => ({
+      append: () => Promise.resolve(),
+      appendSync: () => {},
+      write: (data, offset) => {
+        writes.push({ offset, length: data.length });
+        return Promise.resolve();
+      },
+    });
+
+    await writeArchive(scratch(), SOME_TILES, META, { createSink: failing });
+
+    // 102 is where PMTiles v3 keeps `minLon`; 25 bytes covers bounds, centre and centre zoom.
+    expect(writes).toContainEqual({ offset: 102, length: 25 });
+  });
+
   it("refuses an empty tile set rather than producing an empty archive", async () => {
-    await expect(writeArchive(scratch(), [], {})).rejects.toThrow(/no tiles/);
+    await expect(writeArchive(scratch(), [], META)).rejects.toThrow(/no tiles/);
   });
 
   it.each([
@@ -195,7 +247,7 @@ describe("the writer's contract", () => {
     },
   ])("refuses an unknown $field", async ({ options, expected }) => {
     await expect(
-      writeArchive(scratch(), [{ z: 0, x: 0, y: 0, bytes: payload(0, 0, 0) }], {}, options),
+      writeArchive(scratch(), [{ z: 0, x: 0, y: 0, bytes: payload(0, 0, 0) }], META, options),
     ).rejects.toThrow(expected);
   });
 
@@ -212,12 +264,9 @@ describe("the writer's contract", () => {
     });
 
     await expect(
-      writeArchive(
-        path,
-        [{ z: 0, x: 0, y: 0, bytes: payload(0, 0, 0) }],
-        {},
-        { createSink: failing },
-      ),
+      writeArchive(path, [{ z: 0, x: 0, y: 0, bytes: payload(0, 0, 0) }], META, {
+        createSink: failing,
+      }),
     ).rejects.toThrow("no space left on device");
   });
 });
@@ -231,7 +280,7 @@ describe("the archive reads back through an independent reader", () => {
   let path;
   beforeAll(async () => {
     path = scratch();
-    await writeArchive(path, TILES, { name: "fixture", attribution: "a notice" });
+    await writeArchive(path, TILES, { ...META, attribution: "a notice" });
   });
 
   it("returns every payload byte-identical to what the writer was given", async () => {
@@ -253,9 +302,58 @@ describe("the archive reads back through an independent reader", () => {
     expect(await archive.getZxy(14, 9999, 9999)).toBeUndefined();
   });
 
+  it("declares its geographic bounds in the header, not only in the metadata", async () => {
+    // **Two different fields, and only one was ever checked.** The JSON metadata's `bounds` were
+    // verified and correct while the header's were `0,0,0,0`, because `s2-pmtiles` never writes
+    // them — its `headerToBytes` stops at `maxZoom`. The `pmtiles` reader logs "Bounds of PMTiles
+    // archive 0,0,0,0 are not valid" and hands a renderer a degenerate box in its TileJSON, and a
+    // renderer uses source bounds to decide which tiles to ask for. Found from a browser console
+    // error, not from reading the writer.
+    const path = scratch();
+    const bounds = [6.825, 45.815, 6.905, 45.865];
+    await writeArchive(path, SOME_TILES, { ...META, bounds });
+
+    const header = await openIndependently(path).archive.getHeader();
+
+    expect(header.minLon).toBeCloseTo(bounds[0], 6);
+    expect(header.minLat).toBeCloseTo(bounds[1], 6);
+    expect(header.maxLon).toBeCloseTo(bounds[2], 6);
+    expect(header.maxLat).toBeCloseTo(bounds[3], 6);
+    // The reader's own validity rule, asserted as the reader states it.
+    expect(header.minLon).toBeLessThan(header.maxLon);
+    expect(header.minLat).toBeLessThan(header.maxLat);
+  });
+
+  it("writes the centre fields alongside the bounds", async () => {
+    // Unpinned until now: a renderer reads `centerLon`/`centerLat` for its initial view, and
+    // zeros there put the default camera in the Gulf of Guinea while the bounds looked right.
+    const path = scratch();
+    await writeArchive(path, SOME_TILES, META);
+
+    const header = await openIndependently(path).archive.getHeader();
+
+    expect(header.centerLon).toBeCloseTo((BOUNDS[0] + BOUNDS[2]) / 2, 6);
+    expect(header.centerLat).toBeCloseTo((BOUNDS[1] + BOUNDS[3]) / 2, 6);
+    expect(header.centerZoom).toBe(Math.min(...SOME_TILES.map((tile) => tile.z)));
+  });
+
+  it("takes the centre zoom from the tiles, so unusable metadata cannot reach a uint8", async () => {
+    // **`setUint8` truncates modulo 256 rather than refusing.** The centre zoom used to be
+    // `metadata.minzoom`, unvalidated, so `300` would have been written as 44 with nothing said
+    // — and the previous test could not see it, because that fixture's `minzoom` happened to
+    // equal its shallowest tile. Here the two disagree, so only one of them can be the answer.
+    const path = scratch();
+    await writeArchive(path, SOME_TILES, { ...META, minzoom: 300 });
+
+    const header = await openIndependently(path).archive.getHeader();
+
+    expect(header.centerZoom).toBe(10);
+    expect(header.centerZoom, "a wrapped uint8").not.toBe(300 % 256);
+  });
+
   it("carries the metadata it was given", async () => {
     const { archive } = openIndependently(path);
-    expect(await archive.getMetadata()).toMatchObject({ name: "fixture", attribution: "a notice" });
+    expect(await archive.getMetadata()).toMatchObject({ ...META, attribution: "a notice" });
   });
 
   it("is read entirely through the hardened range path", async () => {
@@ -283,7 +381,7 @@ describe("a corrupted archive fails rather than decoding", () => {
 
   async function written() {
     const path = scratch();
-    await writeArchive(path, TILES, { name: "fixture" });
+    await writeArchive(path, TILES, META);
     return path;
   }
 

@@ -2,7 +2,8 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    "lib": ["ES2022", "DOM"]
   },
   "include": ["src/**/*.ts"],
   "references": [
@@ -11,7 +12,10 @@
     },
     {
       "path": "../maplibre"
+    },
+    {
+      "path": "../recorder-web"
     }
   ],
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts", "src/testing/**"]
 }

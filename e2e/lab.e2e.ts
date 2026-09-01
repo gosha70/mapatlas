@@ -3,6 +3,8 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
 import { consoleFor, watchConsole } from "./fixtures/browser.js";
+import type { SettledRender } from "./fixtures/rendered.js";
+import { mapOf, pngSize, settleRender } from "./fixtures/rendered.js";
 
 /**
  * `/lab`'s harness: archives served by range, the worker loaded, and no egress (T4.6).
@@ -17,12 +19,42 @@ import { consoleFor, watchConsole } from "./fixtures/browser.js";
  * green. A harness that needs a human to read its output is not a harness.
  */
 
+/**
+ * Pinned here rather than inherited from the device profile.
+ *
+ * Every capture in this file is compared against another one, and a difference in viewport or
+ * device scale produces pixel change that reads as geometry. Stating them makes the comparison's
+ * precondition part of the spec instead of a property of whichever profile the config selects.
+ */
+test.use({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
+
 const DEMO = "http://127.0.0.1:5175";
 const ARCHIVES = "http://127.0.0.1:5176";
 
 const LAB_URL =
   `${DEMO}/lab?terrain=${encodeURIComponent(`${ARCHIVES}/terrain.pmtiles`)}` +
   `&contours=${encodeURIComponent(`${ARCHIVES}/contours.pmtiles`)}`;
+
+/**
+ * The same route with one source left out, and with none at all — the controls.
+ *
+ * `/lab` renders the track over a blank style when it is given no archives, so each of these
+ * differs from {@link LAB_URL} in exactly one thing: which source exists. A comparison against
+ * only the bare page cannot say *which* archive painted, since either one alone accounts for a
+ * difference.
+ *
+ * **What this still does not prove, stated because the mutation says so rather than guessed.**
+ * Removing the DEM's `tileSize: 256` — which makes MapLibre ask for a zoom the archive does not
+ * contain, so the hillshade has nothing to shade from — leaves *every* assertion here green,
+ * including `both` against `contoursOnly`. Declaring the DEM also enables terrain, and terrain
+ * changes the scene whether or not a single hillshade pixel was drawn. So these controls
+ * establish that each source reaches the renderer and changes the image; they do not establish
+ * that the hillshade layer shaded from real elevation. Separating a layer from its source is
+ * the per-layer evidence the pause differential brings, and this is the gap it has to close.
+ */
+const BARE_LAB_URL = `${DEMO}/lab`;
+const TERRAIN_ONLY_URL = `${DEMO}/lab?terrain=${encodeURIComponent(`${ARCHIVES}/terrain.pmtiles`)}`;
+const CONTOURS_ONLY_URL = `${DEMO}/lab?contours=${encodeURIComponent(`${ARCHIVES}/contours.pmtiles`)}`;
 
 /**
  * Exactly the origins the fixture may talk to.
@@ -91,12 +123,16 @@ function archiveOf(url: string): "terrain" | "contours" | undefined {
 }
 
 /**
- * Load `/lab` under a strict egress policy, recording what it asked for.
+ * Install the egress policy, recording what the page asks for.
  *
  * Requests outside the allow-list are **failed**, not merely counted: a scenario that tolerated
  * them would prove the tiles were cached, where this proves they were never wanted.
+ *
+ * Separate from navigation because a test may open the route more than once — the archive
+ * control loads `/lab` twice — and installing a second set of routes on the same page would
+ * double-count every request the first set already saw.
  */
-async function loadLab(page: Page): Promise<Observed> {
+async function guard(page: Page): Promise<Observed> {
   const observed: Observed = {
     egress: [],
     socketEgress: [],
@@ -144,14 +180,33 @@ async function loadLab(page: Page): Promise<Observed> {
     if (archive !== undefined) observed.archives[archive].statuses.push(response.status());
   });
 
-  await page.goto(LAB_URL, { waitUntil: "load" });
+  return observed;
+}
+
+/**
+ * Open `/lab` and wait until it has stopped drawing.
+ *
+ * The three waits are three different claims, and the weakest of them used to be the only one.
+ * `data-assembled` is the producer/controller boundary: the recording finished and the
+ * controller was told what to draw, which happens *before* MapLibre installs a source. A canvas
+ * existing says a WebGL context was created. Neither is paint, and neither is a completed
+ * request — bytes arriving is not pixels either. {@link settleRender} is the third, and the
+ * captures it settles on are what the assertions are then made against.
+ */
+async function openLab(page: Page, url: string): Promise<SettledRender> {
+  await page.goto(url, { waitUntil: "load" });
   await page.waitForSelector('#status[data-assembled="true"]', { timeout: 120_000 });
-  // The archives are read after assembly, when MapLibre's style loads and asks for tiles.
   await page.waitForFunction(() => document.querySelectorAll("#map canvas").length > 0, undefined, {
     timeout: 30_000,
   });
-  await page.waitForTimeout(4_000);
-  return observed;
+  return settleRender(mapOf(page));
+}
+
+/** Guard, open and settle — what most tests here want. */
+async function loadLab(page: Page): Promise<{ observed: Observed; settled: SettledRender }> {
+  const observed = await guard(page);
+  const settled = await openLab(page, LAB_URL);
+  return { observed, settled };
 }
 
 test.beforeEach(({ page }) => {
@@ -166,12 +221,58 @@ test.afterEach(({ page }) => {
   expect(consoleFor(page).problems()).toEqual([]);
 });
 
+test("the map settles, and what settled is the archives on screen", async ({ page }) => {
+  // **Rendered-state evidence, and the two halves have to be taken together.**
+  //
+  // Settling alone proves nothing: a canvas that never painted settles on its first two
+  // captures, sooner than one that worked. And `data-assembled` is not the signal either — it
+  // fires at the producer/controller boundary, before MapLibre installs a source. So the claim
+  // is relational: the page with archives settles on a *different* image from the same page
+  // without them, with viewport, device scale, style and track held identical between the two.
+  // What is left over is what the DEM and contour sources put on screen.
+  await guard(page);
+
+  const both = await openLab(page, LAB_URL);
+  const neither = await openLab(page, BARE_LAB_URL);
+  const terrainOnly = await openLab(page, TERRAIN_ONLY_URL);
+  const contoursOnly = await openLab(page, CONTOURS_ONLY_URL);
+
+  // Same box in every capture, so every difference below is content and not framing. A viewport
+  // or device-scale difference would otherwise satisfy all of them for free.
+  for (const [name, settled] of Object.entries({ neither, terrainOnly, contoursOnly })) {
+    expect(pngSize(settled.image), `${name} frames a different box`).toEqual(pngSize(both.image));
+  }
+
+  // Each source, on its own evidence. Compared against the stack **missing that one source**
+  // rather than against the bare page: a difference from bare says only that *something*
+  // painted, and the other source is enough to produce it.
+  expect(
+    both.image.equals(contoursOnly.image),
+    "the DEM reached nothing on screen: declaring it changed no pixel",
+  ).toBe(false);
+  expect(both.image.equals(terrainOnly.image), "the contours changed nothing on screen").toBe(
+    false,
+  );
+  expect(
+    both.image.equals(neither.image),
+    "neither archive reached the screen: the map settled without rendering them",
+  ).toBe(false);
+
+  // Recorded, not asserted — how long each took to stop changing, so a later run has something
+  // to be compared against. A threshold here would be a guess about this machine.
+  for (const [name, settled] of Object.entries({ both, neither, terrainOnly, contoursOnly })) {
+    console.log(
+      `settled ${name}: ${String(settled.captures)} captures / ${String(settled.elapsedMs)} ms`,
+    );
+  }
+});
+
 test("the worker asset is served, not fallen back on", async ({ page }) => {
   // **Its own assertion, because the pixel evidence cannot make it.** A missing worker 404s
   // silently and leaves the map painting far less rather than not at all — measured at 276
   // stroke pixels against 3,699 — and every capture in a differential runs under the same worker
   // configuration, so a broken one degrades them alike and the differences survive.
-  const observed = await loadLab(page);
+  const { observed } = await loadLab(page);
 
   expect(observed.worker, "no maplibre worker asset was requested at all").toBeDefined();
   expect(observed.worker?.status).toBe(200);
@@ -181,7 +282,7 @@ test("both fixture archives are read, each by range request", async ({ page }) =
   // PMTiles is a range-read format, so ranges distinguish reading an archive from downloading
   // one. Asserted **per archive**: a single count lets terrain's reads vouch for contours, so a
   // source that disappeared entirely would leave this green.
-  const observed = await loadLab(page);
+  const { observed } = await loadLab(page);
 
   for (const [name, evidence] of Object.entries(observed.archives)) {
     expect(evidence.ranges, `${name}: no range request`).toBeGreaterThan(0);
@@ -195,7 +296,7 @@ test("nothing outside the fixture's own servers is requested", async ({ page }) 
   // Zero egress, and failing rather than counting: a tolerated request proves the response was
   // cached, not that it was unnecessary. This is what T4.6's "renders with no network egress
   // permitted" means — browser persistence and reload survival are T6.1's.
-  const observed = await loadLab(page);
+  const { observed } = await loadLab(page);
 
   expect(observed.egress, `unexpected egress: ${observed.egress.join(", ")}`).toEqual([]);
   expect(

@@ -164,6 +164,18 @@ test("records a frame-delivery and memory baseline for the full stack", async ({
   page,
   context,
 }) => {
+  // **A harness budget, not a performance threshold — and nothing here may be read as one.**
+  // The run is a page load, three settled renders and a *fixed* 6 s workload, and Playwright's
+  // default is 30 s for a whole test. On Ubuntu CI that is not enough: the settle before
+  // sampling alone measured 3.5–4.9 s there against 0.65 s locally, and both attempts timed out
+  // inside the workload loop.
+  //
+  // The workload is deliberately **not** shortened to fit. Trimming presses or the interval to
+  // satisfy a framework default would let the harness decide what gets measured, and the
+  // resulting numbers would describe a different workload on every machine that needed a
+  // different trim. The budget moves; the measurement does not.
+  test.setTimeout(180_000);
+
   // **The browser's own version, not `navigator.userAgent`.** Playwright's device profile
   // rewrites the page's user-agent string — it claims Windows on a macOS host — so a baseline
   // that recorded it would attribute every number to the wrong platform.

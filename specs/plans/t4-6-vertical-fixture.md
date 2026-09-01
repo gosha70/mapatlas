@@ -1361,6 +1361,124 @@ different pair than the one this run built.
 the three-capture differential, and the frame-time and memory baseline — recorded numbers only,
 no thresholds.
 
+## Rendered state, the differential and the baseline — bars set before building
+
+Set on 2026-09-01, before any of the three exists. They are the acceptance criteria themselves,
+so the risk is a scenario that passes while showing nothing.
+
+### 1. Rendered-state evidence
+
+`data-assembled` is the **producer/controller boundary** and nothing more: it says the recording
+finished and the controller was told what to draw. MapLibre installs sources and layers later.
+A completed request is not sufficient either — bytes arriving is not paint.
+
+The oracle must wait for a **settled render** and then observe pixels or renderer-visible state.
+
+*A constraint that decides the shape.* `MapController` publishes no map handle — no
+`getMap`, no `once("idle")` — and adding one would be engine surface existing only for a test,
+which this plan has already refused once. `map.idle` is therefore not reachable from `/lab`,
+which is assembled from package entry points only. So the settled-render condition is established
+**from the pixels themselves**: capture `#map` repeatedly and require *k* consecutive
+byte-identical captures before anything is asserted. That is an equivalent stopping condition —
+`idle` means "nothing left to draw", and identical consecutive frames are the observable form of
+it — and it is honest about not being MapLibre's own event.
+
+Settling alone is not evidence either: a canvas that never painted settles immediately. So the
+pair is asserted together — the map settles, **and** the settled frame differs from the settled
+frame of the same page with no archives. That difference is what the DEM and contour sources put
+on screen, so it is renderer-visible state, not a request log.
+
+### 2. The three-capture pause differential
+
+Identical **viewport, style and device scale** across all three captures, pinned in the spec
+rather than inherited from a device profile, since a difference in any of them would show up as
+pixel change and be read as geometry.
+
+Both signals must be established, because each alone is satisfiable by a broken map:
+
+- *Positive.* Each travelled leg visibly changes where it is expected to. Without this, three
+  identical blank screenshots satisfy any "no bridge" assertion trivially.
+- *Negative.* The corridor spanning the pause acquires no connecting track pixels.
+
+A **control region that must change** is part of the proof, not decoration: it is what
+distinguishes "the bridge is absent" from "nothing was drawn anywhere". This requirement is
+retained in full: "nothing changed" must never be able to masquerade as "no bridge".
+
+**And it inherits the obligation the rendered-state controls could not discharge.** The
+differential must distinguish the **hillshade layer's** contribution from the **DEM source's**,
+not merely show that supplying the archive changes the image. The two are not the same thing:
+the same source also drives terrain, so terrain alone keeps the DEM control alive with the
+hillshade broken — which is what the surviving `tileSize` mutation demonstrated. Layer-specific
+spatial evidence is where that separation is actually observable, so it belongs here.
+
+### 3. Frame time and memory — measurements, not gates
+
+Recorded, never asserted. Today's machine must not become a performance contract. What is
+written down alongside the numbers:
+
+- browser and Chromium version;
+- the fixture (which archives, which track);
+- viewport and device scale;
+- the warm-up procedure;
+- sample count and sampling window;
+- the **raw distribution** — at least median and p95 frame time, and memory before/after or
+  peak.
+
+A baseline whose method is unrecorded cannot be compared against anything later, which is the
+only reason to take one.
+
+### A hazard to carry forward
+
+The archive hashes `5c833767…` and `7e2e5643…` belong specifically to the **post-header-fix**
+artifacts. Sizes may be compared across the repair; the hashes may not. No later evidence table
+may present them as proof that the bytes were unchanged, because the repair changed them.
+
+### Rendered-state evidence, as built
+
+`data-assembled` is gone from the assertion path as *the* signal; it is now one of three waits,
+and named as the weakest. `openLab` waits for it (the producer/controller boundary), then for a
+canvas (a WebGL context exists), then for {@link settleRender} — and only the third is about
+paint. The 4-second sleep the earlier tests used is gone with it: the whole spec got faster and
+stopped asserting against an arbitrary interval.
+
+**MapLibre's own `idle` is not reachable, and that is a constraint rather than a preference.**
+`MapController` publishes no map handle, and `/lab` is assembled from package entry points only.
+Adding a getter would be engine surface existing solely for a test. So the stopping condition is
+taken from the pixels: *k* consecutive byte-identical captures of `#map`. It is weaker than
+`idle` in one specific way, written down in the module rather than glossed — a map redrawing the
+same pixels settles under this rule and not under MapLibre's. Nothing in this fixture animates.
+
+**The settle loop is verified against something other than the map, because the map cannot
+verify it.** On this machine, with archives on localhost, `/lab` is already painted by the time
+the first capture is taken: every map wait returns at its minimum, and setting `stableCaptures`
+to 1 left the entire lab spec green. A loop nothing exercises is decoration, so
+`e2e/rendered-oracle.e2e.ts` drives it directly against pages whose settling time this repository
+decides. Its job on the map is to keep the *next* increment deterministic on a slower machine —
+a real job, but not one this run demonstrates.
+
+Four mutations, all killed after two of them first survived: returning the last capture instead
+of throwing on timeout; resetting the identical run to zero; **the default run length, which no
+test observed** because every test passed one explicitly and the map tests assert nothing about
+capture counts; and **counting identical captures as a tally rather than a consecutive run**,
+which needed a page that holds each state long enough to be captured several times but not long
+enough to settle.
+
+**Rendered-state evidence is relational, and needs one control per source.** The claim is that
+the settled image with archives differs from the settled image of the same page without them —
+same viewport, device scale, style and track, with the viewport and device scale now pinned in
+the spec rather than inherited from a device profile. A bare-page control alone cannot say
+*which* archive painted, since either one accounts for the difference, so the stack is also
+compared against itself missing each source in turn.
+
+*What this does not prove, from a mutation rather than a guess.* Removing the DEM's
+`tileSize: 256` — which makes MapLibre request a zoom the archive does not contain, leaving the
+hillshade nothing to shade from — leaves every assertion here green, including the DEM's own
+control. Declaring the DEM also enables terrain, and terrain changes the scene whether or not a
+hillshade pixel was drawn. So these controls establish that each source reaches the renderer and
+changes the image; they do **not** establish that the hillshade shaded from real elevation.
+Separating a layer from its source is per-layer evidence, and closing this is a requirement on
+the pause differential, not an optional extra.
+
 ## Acceptance
 
 Renders with **no external egress permitted** — matching the narrowed `tasks.md` wording rather

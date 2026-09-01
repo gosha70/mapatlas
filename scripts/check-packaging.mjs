@@ -17,18 +17,55 @@
 
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-/** Packed together because `@mapatlas/core` is a workspace version no registry can serve. */
-const PACKAGES = ["packages/core", "packages/maplibre"];
+/**
+ * Packed together because these are workspace versions no registry can serve.
+ *
+ * The **whole publish graph** of anything checked below, not just the packages named in the
+ * checks: `@mapatlas/react` depends on `@mapatlas/recorder-web`, so omitting it would leave the
+ * scratch install trying to fetch `0.0.0` from npm and failing for a reason that has nothing to
+ * do with what the gate is asking.
+ */
+const PACKAGES = ["packages/core", "packages/recorder-web", "packages/maplibre", "packages/react"];
 
 /** What a consumer must be able to reach from their own project root. */
 const CONSUMER_IMPORTS = ["@mapatlas/maplibre", "maplibre-gl/dist/maplibre-gl.css"];
+
+/**
+ * Packages a consumer must be able to **execute**, not merely resolve.
+ *
+ * `require.resolve` finds an entry file and stops. It says nothing about whether that file's own
+ * imports resolve under a nested layout — and that is exactly where a missing production
+ * dependency shows up: `@mapatlas/react` imports `@mapatlas/recorder-web` internally, so a
+ * resolve-only check would pass with the dependency undeclared and fail for the first consumer
+ * who actually rendered a hook.
+ */
+const EXECUTED_IMPORTS = ["@mapatlas/react"];
+
+/**
+ * Paths that must not appear in a packed artifact.
+ *
+ * The React test harness imports `react-dom`, a devDependency, so shipping it would mean the
+ * published package references a module it does not depend on. It is excluded from the build —
+ * and `tsc --build` does not delete output it has stopped producing, so the exclusion held while
+ * a stale `dist/testing` sat in the package and every gate stayed green. Found by hand once;
+ * this is what keeps it found.
+ */
+const FORBIDDEN_PATHS = [
+  { package: "@mapatlas/react", path: "dist/testing", why: "the test harness must not ship" },
+];
+
+/**
+ * Dependencies that must stay test-only: absent from the packed manifest, and unreferenced by
+ * the packed output. Both halves matter — a manifest can be clean while the code still imports.
+ */
+const TEST_ONLY_DEPENDENCIES = [{ package: "@mapatlas/react", dependency: "react-dom" }];
 
 /**
  * Renderer peers that must be pinned exactly, and the package whose devDependency says to
@@ -43,6 +80,22 @@ const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 function manifest(path) {
   return JSON.parse(readFileSync(path, "utf8"));
+}
+
+/**
+ * Every file a package itself ships, so an artifact can be searched rather than sampled.
+ *
+ * `node_modules` is skipped, and that is not tidiness: under `--install-strategy=nested` a
+ * package's own dependencies are installed *inside* it, so a search that descended would report
+ * every file of every dependency. A check for "does this package reference X" would then be
+ * satisfied by X's own source code sitting underneath it.
+ */
+function filesUnder(directory) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name === "node_modules") return [];
+    const path = join(directory, entry.name);
+    return entry.isDirectory() ? filesUnder(path) : [path];
+  });
 }
 
 /** The three maps a lockfile records per workspace package, and must keep in step. */
@@ -196,6 +249,53 @@ try {
     }
   }
 
+  // **Executed, not merely resolved.** A consumer's first act is to import the package, and that
+  // is when a package's own undeclared dependency surfaces. Run in a child process against the
+  // scratch project so the resolution is the consumer's, not this repository's.
+  for (const specifier of EXECUTED_IMPORTS) {
+    const probe = join(scratch, `probe-${specifier.replace(/[^a-z]/gi, "-")}.mjs`);
+    writeFileSync(
+      probe,
+      `const m = await import(${JSON.stringify(specifier)});\n` +
+        `if (Object.keys(m).length === 0) throw new Error("${specifier} exported nothing");\n`,
+    );
+    try {
+      run("node", [probe], scratch);
+    } catch (error) {
+      failures.push(
+        `importing "${specifier}" from a consumer failed — ` +
+          `${error instanceof CommandFailed ? error.report().split("\n").slice(0, 4).join(" ") : String(error)}`,
+      );
+    }
+  }
+
+  // Nothing test-only in the artifact. Checked on the *installed* package, which is the tree a
+  // consumer actually gets.
+  for (const { package: name, path, why } of FORBIDDEN_PATHS) {
+    if (existsSync(join(scratch, "node_modules", name, path))) {
+      failures.push(`${name} ships "${path}" — ${why}`);
+    }
+  }
+
+  for (const { package: name, dependency } of TEST_ONLY_DEPENDENCIES) {
+    const installed = join(scratch, "node_modules", name);
+    const packed = manifest(join(installed, "package.json"));
+    if (packed.dependencies?.[dependency] !== undefined) {
+      failures.push(`${name} declares "${dependency}" as a production dependency; it is test-only`);
+    }
+    // And the code itself, because a clean manifest over an importing artifact is worse than
+    // either alone: the install succeeds and the import fails at the consumer.
+    const referencing = filesUnder(installed)
+      .filter((file) => file.endsWith(".js"))
+      .filter((file) => readFileSync(file, "utf8").includes(dependency));
+    if (referencing.length > 0) {
+      failures.push(
+        `${name}'s packed output imports "${dependency}", which is test-only: ` +
+          referencing.map((file) => file.slice(installed.length + 1)).join(", "),
+      );
+    }
+  }
+
   // A renderer peer must name one version, and the same one this repository tests against.
   // Without this the whole gate passes on a `^` edit, which is exactly how the range got in.
   for (const { package: name, peer } of EXACT_PEERS) {
@@ -246,6 +346,6 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `check:packaging — clean (${CONSUMER_IMPORTS.length} consumer imports, ` +
-    `${EXACT_PEERS.length} pinned peer, nested resolution)`,
+  `check:packaging — clean (${PACKAGES.length} packed, ${CONSUMER_IMPORTS.length} resolved, ` +
+    `${EXECUTED_IMPORTS.length} executed, ${EXACT_PEERS.length} pinned peer, nested resolution)`,
 );

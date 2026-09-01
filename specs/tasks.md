@@ -700,7 +700,13 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
 
   One realistic end-to-end fixture, not a unit stub: a large track (≥5k raw points), a
   two-segment pause, a DEM + hillshade + contour source stack, two consumer-defined event marks,
-  and a locally-persisted PMTiles region. Exercised as a test and reused by the demo. _AC:_ renders with the network disabled; the pause shows as a gap;
+  and a **synthetic PMTiles pair cut by the real writer into test-local temporary files**, whose
+  range reads are fulfilled locally with **no external egress**. *Narrowed 2026-08-31 from "a
+  locally-persisted PMTiles region", which overreached the T6.1 boundary:*
+  `@mapatlas/offline-pmtiles` is a deliberate stub until T6.1, whose acceptance criterion is that
+  archives were copied into `MapAssetStore` and survive offline. **Browser persistence and reload
+  survival are T6.1's and are not claimed here.** Exercised as a test and reused by the demo.
+  _AC:_ renders with no network egress permitted; the pause shows as a gap;
   frame time and memory are recorded as a baseline. Its purpose is to surface renderer and
   data-format assumptions here, in Phase 4, rather than in Phase 7 when they are expensive.
 - **T4.7 Interaction + a11y.** `onMapTap`, `onEventClick`; controls keyboard-reachable, visible

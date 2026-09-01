@@ -7,7 +7,7 @@
     // `navigator.geolocation`. `@mapatlas/recorder-web` carries the same lib for the same reason.
     "lib": ["ES2022", "DOM"]
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.d.ts"],
   "references": [
     {
       "path": "../../packages/core"

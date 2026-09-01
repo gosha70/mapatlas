@@ -1094,7 +1094,8 @@ dropped from validation. Terrain reproduces byte-for-byte against the pre-contou
 ## Fixture composition
 
 Per T4.6: a track of ≥5k raw points with a two-segment pause, two consumer-defined event marks,
-a DEM + hillshade + contour source stack, and the archive persisted locally. Generated
+a DEM + hillshade + contour source stack, and a synthetic archive pair served from test-local
+temporary files with no egress — **not** a downloaded offline region, which is T6.1's. Generated
 deterministically from a seed so the archive and the track are reproducible, and shared between
 the Playwright scenario and `/lab` rather than duplicated.
 
@@ -1159,16 +1160,24 @@ fixture is to be the thing that would notice.
    nothing deeper, so it exercises what a consumer actually gets — `e2e/harness` stays
    automation-only and is not the thing under test. Enforced rather than intended: the route's
    imports are checked, because "we meant to use the public API" is not a property.
-2. **Synthetic PMTiles, cut by the real writer, kept out of the tree.** The browser lane must not
+2. **Zero-egress fixture rendering — not a downloaded offline region.** `@mapatlas/offline-pmtiles`
+   is a deliberate stub until **T6.1**, whose acceptance criterion is that archives were copied
+   into `MapAssetStore` and survive offline. Nothing of it is pulled forward. T4.6's own wording,
+   "a locally-persisted PMTiles region", overreaches that boundary and is narrowed here: this
+   phase serves a synthetic archive pair from a temporary directory, fulfils its range reads
+   locally, and permits no external egress. **Browser persistence and reload survival are T6.1's**,
+   and calling this increment "offline regions" would claim them.
+
+3. **Synthetic PMTiles, cut by the real writer, kept out of the tree.** The browser lane must not
    reach S3 and must not carry tracked tiles (`CLAUDE.md`). So the scenario generates a small
    archive pair through `archive.mjs` — the same writer the real build uses, not a mock — into a
    temporary directory, and serves it. A hand-rolled stub archive would prove the renderer can
    read a stub.
-3. **Simulated GPS replays through `TrackRecorder`.** Not injected as a finished `Track`: the
+4. **Simulated GPS replays through `TrackRecorder`.** Not injected as a finished `Track`: the
    points go through the same seam the browser implementation satisfies, and what comes out must
    be **5,400 points and exactly two segments**. Handing the recorder's output straight to the
    renderer would skip the seam the demo exists to exercise.
-4. **Render evidence, per layer and per feature.** Terrain, contours, both event marks, and
+5. **Render evidence, per layer and per feature.** Terrain, contours, both event marks, and
    **two separate track geometries**.
 
    *The no-bridge evidence needs stating carefully, because the obvious formulations are wrong in
@@ -1208,13 +1217,30 @@ fixture is to be the thing that would notice.
      signal a whole stroke rather than a subtle one, which is what keeps a tolerance from
      swallowing it.
 
+     **A measured failure this differential does *not* catch, pinned separately.** Omitting
+     MapLibre's worker URL — a documented consumer responsibility — makes the worker request 404
+     with no error surfaced. Measured on `/lab`: the track still drew **276** stroke pixels
+     without it against **3,699** with it, so the failure is a thirteenfold quieter map rather
+     than a blank one, and any oracle phrased as "there exist stroke pixels" passes it.
+
+     It does not follow that the three-capture comparison catches it, and an earlier version of
+     this bar claimed it did. All three captures run under the *same* worker configuration: a
+     broken worker degrades background, correct and bridged alike, and the differences between
+     them can survive intact. **None of them is a known-good baseline** — they are only known to
+     be consistent with each other.
+
+     So the worker is its own bar: the scenario asserts the configured worker asset is requested
+     **successfully**, fails on the fallback 404, and is itself verified by removing
+     `setWorkerUrl` and confirming the scenario goes red. The pixel measurement above stays as
+     evidence of what the defect looks like, not as evidence that the differential finds it.
+
    Neither half subsumes the other: input topology holds even if the layer never painted, and
    pixels alone cannot say which track was handed over.
 
-5. **The network is disabled before any map source is read**, and an unexpected request **fails
+6. **The network is disabled before any map source is read**, and an unexpected request **fails
    the test** rather than being tolerated. A scenario that merely runs offline proves the tiles
    were cached; one that fails on egress proves they were never wanted.
-6. **A documented warm-up and sampling protocol, and no invented thresholds.** How many frames
+7. **A documented warm-up and sampling protocol, and no invented thresholds.** How many frames
    are discarded, over what interval frame time is sampled, and what memory figure is read — all
    written down, because a baseline whose method is unrecorded cannot be compared against
    anything later. The numbers are **recorded, not asserted**: a threshold picked now would be a

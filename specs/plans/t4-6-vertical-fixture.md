@@ -1602,22 +1602,52 @@ press while wheel zoom is eased and time-dependent, so repeated wheels would lea
 machine's camera somewhere else — and a camera that ends somewhere else is a different workload.
 Warm-up is two-stage: the render settles first, then 30 frames are discarded inside the sampler.
 
-| | macOS (this machine) |
-| --- | --- |
-| browser | HeadlessChrome/151.0.7922.34, Playwright 1.62.1 |
-| rasteriser | **ANGLE / SwiftShader — software** |
-| viewport | 1280 × 720 @ DPR 1 |
-| settle before sampling | 655 ms |
-| frame-delivery samples | 322 over 8,192 ms |
-| median interval | 16.8 ms |
-| p95 interval | 66.7 ms |
-| max interval | 193.1 ms |
-| intervals > 1.5 × median | 90 |
-| intervals > 2 × median | 54 |
-| long animation frames | 7, from 67 to 160 ms |
-| page-total memory | **unavailable** |
-| JS heap before / after | 11.33 MB / 12.93 MB |
-| workload moved | 920,381 of 921,600 px |
+**The two columns are different rasterisers, and that is the first thing to read.** Both are
+SwiftShader — software — but the macOS host builds it on the LLVM backend and the CI container on
+Subzero. Comparing a median across them is not comparing rendering cost; it is comparing two
+software rasterisers on two machines. They are recorded side by side to be *read* side by side,
+never averaged and never differenced into a "regression".
+
+| | macOS — local run | Ubuntu — PR #10 merge-tree CI, head `961466c` |
+| --- | --- | --- |
+| browser | HeadlessChrome/151.0.7922.34, Playwright 1.62.1 | same |
+| rasteriser | ANGLE / SwiftShader (**LLVM 10.0.0**) | ANGLE / SwiftShader (**Subzero**) |
+| viewport | 1280 × 720 @ DPR 1 | same |
+| settle before sampling | 655 ms | 692 ms |
+| frame-delivery samples | 322 over 8,192 ms | 176 over 13,233 ms |
+| median interval | 16.8 ms | 33.4 ms |
+| p95 interval | 66.7 ms | 333.3 ms |
+| max interval | 193.1 ms | 683.4 ms |
+| intervals > 1.5 × median | 90 of 322 (28%) | 50 of 176 (28%) |
+| intervals > 2 × median | 54 of 322 (17%) | 39 of 176 (22%) |
+| long animation frames | 7, from 67 to 160 ms | 14, from 70 to 592 ms |
+| page-total memory | **unavailable** | **unavailable** — same reason |
+| JS heap before / after | 11.33 MB / 12.93 MB | 11.42 MB / 12.77 MB |
+| workload moved | 920,381 of 921,600 px | 920,722 of 921,600 px |
+
+**The asymmetries, recorded rather than normalised away.**
+
+- *The rasteriser backend differs*, as above. Everything in the frame rows is downstream of it.
+- *The same script takes longer, so the sample counts are not comparable as counts.* 24 presses at
+  a fixed 250 ms interval ran in 8.2 s on macOS and 13.2 s on CI, because each Playwright
+  round-trip is slower there — the *script* is fixed, the wall-clock is not. That is why the
+  missed-interval rows carry proportions: 90 and 50 are not comparable, 28% and 28% are.
+- *A median of exactly 33.4 ms is 2 × 16.7 ms.* CI delivers on every second vsync rather than
+  every one. That is a cadence observation, and it still says nothing about what the renderer
+  spent inside those frames.
+- *Everything else was symmetric*: `long-animation-frame` is supported on both, CDP heap metrics
+  behave the same, and page-total memory is unavailable on both for the same reason — cross-origin
+  isolation is a property of the fixture, not of the host.
+- *JS heap is the one row that barely moves* — 11.3/12.9 against 11.4/12.8 MB. Consistent with
+  what it measures: JS objects, which are the same objects on both hosts, and not the GPU and
+  texture memory where a map's cost actually lives.
+
+*Provenance.* The Ubuntu column is the **first successful run of the pushed instrumentation**
+(`33525528524`), not a rerun chosen for tidier numbers. The first attempt (`33524197098`, head
+`e6363a2`) failed before producing a baseline — Playwright's default 30 s per-test timeout cut the
+run off inside the workload — so it yielded no measurements to keep. The macOS column is a local
+run; repeating it on identical code moved p95 from 66.7 to 75.0 ms, which is the plainest
+available demonstration that these are observations and not scores.
 
 **Three things about this table are more important than the numbers in it.**
 

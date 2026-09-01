@@ -1,0 +1,38 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MAP-ATLAS demo</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      #app {
+        height: 100%;
+      }
+      #map {
+        position: absolute;
+        inset: 0;
+      }
+      #status {
+        position: absolute;
+        z-index: 1;
+        margin: 0.5rem;
+        padding: 0.4rem 0.6rem;
+        font:
+          13px/1.4 system-ui,
+          sans-serif;
+        background: rgba(255, 255, 255, 0.85);
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app"></main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

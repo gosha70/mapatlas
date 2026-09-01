@@ -43,14 +43,11 @@ const LAB_URL =
  * only the bare page cannot say *which* archive painted, since either one alone accounts for a
  * difference.
  *
- * **What this still does not prove, stated because the mutation says so rather than guessed.**
- * Removing the DEM's `tileSize: 256` — which makes MapLibre ask for a zoom the archive does not
- * contain, so the hillshade has nothing to shade from — leaves *every* assertion here green,
- * including `both` against `contoursOnly`. Declaring the DEM also enables terrain, and terrain
- * changes the scene whether or not a single hillshade pixel was drawn. So these controls
- * establish that each source reaches the renderer and changes the image; they do not establish
- * that the hillshade layer shaded from real elevation. Separating a layer from its source is
- * the per-layer evidence the pause differential brings, and this is the gap it has to close.
+ * **What this does not prove.** Declaring the DEM also enables terrain, and terrain changes the
+ * scene whether or not a single hillshade pixel is drawn — so these controls establish that each
+ * source reaches the renderer and changes the image, not that the hillshade *layer* drew.
+ * `render-differential.e2e.ts` closes that by holding the source and the terrain fixed and
+ * removing only the layer.
  */
 const BARE_LAB_URL = `${DEMO}/lab`;
 const TERRAIN_ONLY_URL = `${DEMO}/lab?terrain=${encodeURIComponent(`${ARCHIVES}/terrain.pmtiles`)}`;

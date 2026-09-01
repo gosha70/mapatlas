@@ -1427,6 +1427,47 @@ written down alongside the numbers:
 A baseline whose method is unrecorded cannot be compared against anything later, which is the
 only reason to take one.
 
+#### What the frame metric is, and what it is not
+
+**`requestAnimationFrame` deltas are a frame-*delivery* interval, not a render duration.** On a
+settled static map the callback reports the display scheduler: at 60 Hz it reads about 16.7 ms
+whether MapLibre spent 2 ms or 14 ms producing the frame. It only becomes informative when
+frames are *missed* and intervals jump to roughly 33 or 50 ms. So the metric is named for what
+it measures, and no sentence anywhere may turn it into "the renderer took 16.7 ms".
+
+Passive sampling of an idle page would therefore measure the monitor. The baseline instead runs
+a **deterministic camera workload** after warm-up — a bounded, scripted interaction over the same
+full fitted stack, identical every run — and samples only during it. Median and p95 then describe
+delivered-frame cadence under full-stack interaction, which is a number a user would recognise.
+
+*The instrument hierarchy, and why each rung stops where it does.*
+
+- **Frame delivery** — `requestAnimationFrame` timestamps during the workload. Raw deltas,
+  median, p95, sample count, and how many intervals exceed a refresh period. Nothing is inferred
+  about what the renderer spent.
+- **Long frames** — `PerformanceObserver` for `long-animation-frame`, feature-detected. Chromium
+  reports frames over 50 ms with their render, style and layout timing. Supplementary, and
+  asymmetric: LoAFs present are evidence of a stall, LoAFs absent say **nothing** about ordinary
+  render cost.
+- **Memory** — not `performance.memory`, which is deprecated, non-standard and explicitly
+  unreliable as a page total. `measureUserAgentSpecificMemory()` needs cross-origin isolation,
+  which this fixture does not have and will not acquire for a measurement. Whatever instrument
+  is used must be named with its limits, and where none can be defended the entry reads
+  **unavailable** rather than carrying a manufactured number.
+
+#### The workload may not change the fixture
+
+No lightweight style, no terrain or marks switched off, no renderer mode that exists for the
+measurement. It drives the same full fitted stack — terrain, hillshade, contours, marks and the
+whole 5,400-point recording — that a person opening `/lab` sees. The pause-focused view is a
+diagnostic for one geometric invariant and is not what anybody looks at, so it is not the subject
+here.
+
+#### Platforms are recorded, never averaged
+
+A 16.7 ms median on macOS and a 16.7 ms median on Ubuntu would not mean equal rendering cost;
+it would mean both delivered at the same refresh cadence. Raw observations stay separate.
+
 ### A hazard to carry forward
 
 The archive hashes `5c833767…` and `7e2e5643…` belong specifically to the **post-header-fix**
@@ -1547,6 +1588,67 @@ cannot be flaky.
 | the predicate admits every pixel | killed — two tests |
 | the predicate demands the exact line colour | killed |
 | the DEM's `tileSize: 256` removed | **survived**, and see the correction above |
+
+### The baseline, as recorded
+
+Taken on 2026-09-01. **Observations, not a contract** — nothing in the suite asserts a number
+here, and the only assertions in that spec are the two that stop it being vacuous: at least 60
+frames were sampled, and the workload actually moved the map.
+
+*The workload.* 24 key presses at 250 ms over the full fitted stack — terrain, hillshade,
+contours, marks and the whole 5,400-point recording, exactly what a person opening `/lab` sees.
+Keyboard rather than wheel or drag, because MapLibre's keyboard handler moves a fixed step per
+press while wheel zoom is eased and time-dependent, so repeated wheels would leave a slower
+machine's camera somewhere else — and a camera that ends somewhere else is a different workload.
+Warm-up is two-stage: the render settles first, then 30 frames are discarded inside the sampler.
+
+| | macOS (this machine) |
+| --- | --- |
+| browser | HeadlessChrome/151.0.7922.34, Playwright 1.62.1 |
+| rasteriser | **ANGLE / SwiftShader — software** |
+| viewport | 1280 × 720 @ DPR 1 |
+| settle before sampling | 655 ms |
+| frame-delivery samples | 322 over 8,192 ms |
+| median interval | 16.8 ms |
+| p95 interval | 66.7 ms |
+| max interval | 193.1 ms |
+| intervals > 1.5 × median | 90 |
+| intervals > 2 × median | 54 |
+| long animation frames | 7, from 67 to 160 ms |
+| page-total memory | **unavailable** |
+| JS heap before / after | 11.33 MB / 12.93 MB |
+| workload moved | 920,381 of 921,600 px |
+
+**Three things about this table are more important than the numbers in it.**
+
+*The frame figure is a delivery interval, not a render duration.* A 16.8 ms median is the display
+cadence; it would read the same whether the renderer spent 2 ms or 14 ms. What carries
+information is the tail — the 90 intervals beyond 1.5 × median, and the seven frames over 50 ms.
+
+*The browser rasterises in software.* The renderer string comes back as SwiftShader, so those
+missed frames are a CPU drawing a map a GPU would composite. This is a baseline for **this
+harness** — good for noticing that a later change made the same harness slower — and it is not a
+statement about what a person with a graphics card sees. The renderer string is recorded with
+every run so that can never be forgotten.
+
+*Page-total memory is unavailable, and is recorded as unavailable.*
+`measureUserAgentSpecificMemory()` needs cross-origin isolation, which this fixture does not have
+and will not acquire for a measurement; `performance.memory` is deprecated, non-standard and
+explicitly unreliable as a page total, so it is not used. What is recorded instead is the **JS
+heap** from CDP `Performance.getMetrics` after a forced collection — named with its limit, which
+is severe for a WebGL map: GPU, texture and renderer memory are all outside it, and that is where
+most of a map's memory lives. Peak is not measured, because sampling it during the workload would
+perturb the frame timing it shares a run with.
+
+**Platforms are recorded separately and never averaged**, since equal medians would mean equal
+refresh cadence rather than equal cost.
+
+*A correction made during the work.* The first version of the workload comment claimed the pans,
+zooms and pitches cancelled so the run ended where it began. They do not — the pans are separated
+by a zoom, so four steps right at one zoom and four steps left at another cover different ground,
+and 99.9% of pixels differ between the settled views before and after. Reproducibility comes from
+the fixed starting camera and the fixed script, not from the path closing; and because the view
+does end elsewhere, that difference is what the positive control asserts.
 
 ## Acceptance
 

@@ -2,7 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    // The demo is a browser app now, not a stub library: `/lab` mounts a map and substitutes
+    // `navigator.geolocation`. `@mapatlas/recorder-web` carries the same lib for the same reason.
+    "lib": ["ES2022", "DOM"]
   },
   "include": ["src/**/*.ts"],
   "references": [

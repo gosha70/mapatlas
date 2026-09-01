@@ -988,11 +988,34 @@ export function useTrackRecorder(opts?: {
 }): {
   status: TrackStatus; livePoint?: TrackPoint; track?: Track;
   channels: Record<string, number>;      // latest merged sensor values, for a live readout
-  start(): Promise<void>; pause(): void; resume(): void; markLap(label?: string): void;
+
+  start(): Promise<void>;                // always a fresh recording; never consumes `recovered`
+  pause(): void;
+  resume(): void;                        // the current, in-memory paused session
+  markLap(label?: string): void;
   stop(): Promise<Track>;
-  recovered?: Track;                     // an interrupted track found at mount
+
+  /**
+   * An interrupted track found at mount — only when the hook owns the recorder and has a
+   * `store`. With an injected `recorder` this stays `undefined`: the consumer owns recorder
+   * construction, and `resumeFrom` is constructor state rather than part of the
+   * `TrackRecorder` seam, so a supplied recorder cannot be reconstructed with it. (ADR-0026)
+   */
+  recovered?: Track;
+  /** Start a new recorder built with `recovered` as `resumeFrom`. Failure keeps the candidate. */
+  resumeRecovered(): Promise<void>;
+  /** Delete the interrupted track. Clears `recovered` only once the deletion resolves. */
+  discardRecovered(): Promise<void>;
+
   error?: TrackRecorderError;
 };
+
+// `resume()` and `resumeRecovered()` are different operations on different subjects: the first
+// returns the current paused session to recording, the second restores a prior session from
+// durable storage. `opts` deliberately does not mirror `TrackRecorderOptions` — no `autosaveMs`,
+// no `sensorMerge`. A store alone already yields recoverable recordings, because the web recorder
+// defaults `autosaveMs` to 10 s whenever a store is present; anything beyond that is what
+// `recorder:` injection is for. (ADR-0026)
 
 export function useTrackList(store: StorageAdapter): {
   tracks: TrackSummary[]; loading: boolean;

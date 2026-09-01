@@ -677,3 +677,74 @@ trade-off where there is none available.
 for a consumer wanting both. Both are what a renderer does anyway: a terrain source and a vector
 source are separate sources in a style, so nothing here asks a consumer to do more work than the
 format already implies.
+
+## ADR-0026 — `@mapatlas/react` depends on `@mapatlas/recorder-web`, and recovery is explicit
+
+**Status.** Accepted 2026-09-01, before T5.1's first hook.
+
+**Context — two specifications disagreed, and the disagreement was load-bearing.** `api.md` §9
+publishes `useTrackRecorder({ recorder?, store?, sampling?, sensors? })`, where `recorder` is
+optional and the other three only make sense if the hook constructs a default recorder when none
+is injected. `architecture.md` lists `@mapatlas/react`'s dependencies as `core`, `maplibre`,
+`react` — and **no recorder factory exists in `core`**. The only one is `createWebTrackRecorder`
+in `@mapatlas/recorder-web`. As written, the published signature could not be implemented.
+
+**Decision 1 — preserve the published signature; add the dependency.** `@mapatlas/react` takes
+`@mapatlas/recorder-web` as a production dependency and the architecture table is corrected. This
+creates no cycle (`react → recorder-web → core`), keeps the ergonomic default that a consumer
+supplying only a `store` gets a working recorder, and leaves `recorder:` injection as the route
+for a native or out-of-tree implementation. The alternative — making `recorder` required — would
+change a published contract to avoid a dependency, which is the more expensive of the two.
+
+*The cost, recorded rather than left to be rediscovered.* `@mapatlas/recorder-web` reaches for
+`navigator.geolocation`. A React Native consumer importing `@mapatlas/react` pulls it into the
+module graph even while injecting its own recorder. For V1 the ergonomic web default wins. If
+React Native becomes a first-class target, the fix is a lazy import or a default-recorder subpath
+that keeps the web module out of the native import graph — neither of which changes
+`TrackRecorder` itself.
+
+**Decision 2 — recovery is two explicit operations, not a side effect of `start()`.** `api.md`
+§9 gains:
+
+```ts
+resumeRecovered(): Promise<void>;   // starts a new recorder constructed with resumeFrom
+discardRecovered(): Promise<void>;  // durably deletes the interrupted track
+```
+
+The distinction that makes them necessary: `resume()` returns the **current in-memory paused
+session** to recording, while `resumeRecovered()` restores an **interrupted prior session from
+durable storage**. They are different operations on different subjects, and the second cannot be
+expressed as the first — `resumeFrom` is *constructor* state on the web recorder, not a method on
+the `TrackRecorder` seam, so a recorder that already exists cannot be told to resume a track.
+
+The rejected reading is `start()` silently passing `recovered` as `resumeFrom`. It invents policy,
+makes discarding unreachable, and contradicts `core`'s own documentation, which says recovery
+exists so a consumer can offer **resume-or-discard**. It is also the behaviour an implementation
+drifts into when nobody decides, which is why it is written down as refused.
+
+Semantics, pinned:
+
+- `start()` **never** consumes `recovered`; it always begins a fresh recording.
+- `resumeRecovered()` constructs the recorder with exactly that candidate as `resumeFrom`,
+  subscribes before starting, and clears `recovered` only after a successful start. A
+  constructor, validation or start failure leaves the candidate available to retry.
+- `discardRecovered()` deletes exactly `recovered.id` through `StorageAdapter.deleteTrack()`, and
+  clears `recovered` only once that resolves. A failed deletion leaves it in place.
+
+**Decision 3 — recovery belongs only to the hook-owned recorder.** When `opts.recorder` is
+supplied, the consumer owns recorder construction and therefore owns recovery construction too:
+`recovered` stays `undefined` and the hook does not scan for an interrupted track.
+
+This is a consequence of the seam rather than a convenience. `resumeFrom` is not on
+`TrackRecorder` — deliberately — so a generic recorder cannot be reconstructed with it. Without
+this rule, `resumeRecovered()` would have to ignore the injected native recorder and build a web
+one behind the consumer's back, which is worse than not offering the operation.
+
+**Decision 4 — the hook's options do not grow into `TrackRecorderOptions`.** No `autosaveMs`,
+matching the existing omission of `sensorMerge`. It is not needed for the common path:
+`createWebTrackRecorder` resolves `autosaveMs ?? DEFAULT_AUTOSAVE_MS` (10 000 ms) and enables
+autosave whenever a store is present and the resolved interval is positive — so
+`useTrackRecorder({ store })` already produces recoverable recordings, and recovery has something
+to find by default. A consumer needing a custom interval, `autosaveMs: 0`, a custom sensor merge
+or a native recorder uses `recorder:` injection. Stating this now is what stops the hook's options
+from drifting into a duplicate of the recorder's.

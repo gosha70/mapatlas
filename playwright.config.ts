@@ -30,10 +30,34 @@ export default defineConfig({
 
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 
-  webServer: {
-    command: "npx vite --config e2e/harness/vite.config.ts --port 5174 --strictPort",
-    url: "http://localhost:5174",
-    reuseExistingServer: process.env["CI"] === undefined,
-    timeout: 60_000,
-  },
+  // Three servers, and the split is deliberate. The harness is automation-only; the demo is
+  // what a consumer's app looks like and is what `/lab` must be served from; the archive server
+  // exists so the fixture's PMTiles are fetched by **range request over HTTP**, which is how a
+  // consumer reads them, rather than from disk by a path only a test would know.
+  webServer: [
+    {
+      command: "npx vite --config e2e/harness/vite.config.ts --port 5174 --strictPort",
+      url: "http://localhost:5174",
+      reuseExistingServer: process.env["CI"] === undefined,
+      timeout: 60_000,
+    },
+    {
+      command: "npx vite --config apps/demo/vite.config.ts --port 5175 --strictPort",
+      url: "http://127.0.0.1:5175/",
+      reuseExistingServer: process.env["CI"] === undefined,
+      timeout: 60_000,
+    },
+    {
+      // Builds the synthetic pair through the real writer, then serves it. Slower to start than
+      // a static server because it cuts real tiles first.
+      command: "node e2e/fixtures/serve-lab-archives.mjs",
+      url: "http://127.0.0.1:5176/terrain.pmtiles",
+      // **Never reused, unlike the two vite servers.** Reuse accepts whatever is already
+      // listening on the port and skips the command — so a local rerun would serve archives cut
+      // from an older writer, and a change to the pipeline would appear to have no effect. The
+      // other two serve source that vite reloads; this one bakes its output at startup.
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+  ],
 });

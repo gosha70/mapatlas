@@ -79,6 +79,11 @@ export function labTileSources(sources: LabSources): TileSource[] {
       // controller points at the same source id.
       role: "hillshade",
       encoding: "terrarium",
+      // **256, not the renderer's 512 default for a DEM.** The fixture archives are cut at
+      // `TILE_SIZE = 256`; leaving the default would have MapLibre ask for a zoom level that
+      // does not exist in the archive and shade from nothing. Caught by reading the builder, not
+      // by looking at the map — a DEM at the wrong tile size degrades quietly.
+      tileSize: 256,
       styleLayers: [
         {
           id: "fixture-hillshade",

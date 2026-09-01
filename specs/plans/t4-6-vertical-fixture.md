@@ -44,9 +44,17 @@ Playwright scenario, and the frame-time and memory baseline.
 | Build ordering | yes | — | **yes** | all stages ran in order against real inputs |
 
 **These are "yes" because the path is committed.** `npm run fixture:build` runs the whole chain
-against the real release and reproduces the archive **byte for byte** — sha256 `ce397483…`,
-identical to the scratchpad run that first produced it, which is two independently written
-runners agreeing rather than one script agreeing with itself.
+against the real release and reproduces both archives **byte for byte** — sha256 `5c833767…`
+and `7e2e5643…`, identical across two consecutive real runs.
+
+*The recorded hashes changed on 2026-08-31, and the reason matters.* The earlier pair
+(`ce397483…`, `de045312…`) was measured before the writer patched the PMTiles header, which
+rewrites 25 bytes; every hash taken before that fix necessarily disagrees with every hash taken
+after it. Sizes are unchanged (1,493,696 and 183,182 bytes) because the patch overwrites header
+bytes rather than adding any. The earlier claim that this was "identical to the scratchpad run
+that first produced it, which is two independently written runners agreeing" was true of the
+pre-patch bytes and is *not* re-established by the runs above: those are the same runner twice,
+which shows determinism, not cross-implementation agreement.
 
 *What CI covers, stated precisely, because the two claims differ.* The suite drives the same
 committed entry point against a **synthetic** source with no network, so "the assembled pipeline
@@ -57,17 +65,31 @@ other, and only the first belongs in CI.
 **The chain produced a real archive on 2026-08-31.** `mont-blanc-summit`, source cells
 `N45E006` **and** `N45E007`, envelope 6.679–7.032 °E against a declared region ending at 6.905,
 lowest sample 2,560.805 m, 8 tiles, **1,493,696 bytes**, in 8.3 s. Verified through `pmtiles`
-4.5.0 over the hardened range path: spec v3, PNG, z11–12, clustered, `bounds` equal to the
-declared region, all four attribution roles present, 8 of 8 tiles found with 8 distinct payloads,
-and an unwritten address reading back `undefined`. That measurement discharges ADR-0024
-criterion 6, which requires archive size **measured** rather than calculated.
+4.5.0 over the hardened range path: spec v3, PNG, z11–12, clustered, all four attribution roles
+present, 8 of 8 tiles found with 8 distinct payloads, and an unwritten address reading back
+`undefined`. That measurement discharges ADR-0024 criterion 6, which requires archive size
+**measured** rather than calculated.
+
+**Correction: "`bounds` equal the declared region" checked the wrong bounds.** That line
+originally sat in the list above, and what it read was the archive's **JSON metadata** — a
+document the writer is handed and stores verbatim, so it could only ever confirm that the value
+passed in came back out. The v3 **header** carries its own geographic bounds at bytes 102–117,
+and `s2-pmtiles` never writes them; they were all zero, which is why a browser rejected the
+archive as out of range while this report called the bounds correct. A metadata key cannot vouch
+for a header field. The writer now patches those 25 bytes, and the check has been redone at the
+level it claims: reading bytes 102–126 of both finished archives directly gives
+`6.825, 45.815, 6.905, 45.865` and centre `z11, 6.865, 45.84`, against a declared region of
+`[6.825, 45.815, 6.905, 45.865]`.
 
 **Remaining T4.6 implementation scope.** The whole data path is done end to end and discharged
 through `npm run fixture:build`: source reader, async wiring, Mercator addressing, resampling,
 the stitched surface, PNG, contours, the PMTiles writer, two archives and the committed entry
-point. Still outstanding: the fixture track (≥5k points, two-segment pause, two event
-marks); the `/lab` route; simulated GPS; the offline Playwright scenario; and the frame-time and
-memory baseline — the last of which are the actual acceptance criteria and none has been touched.
+point. The fixture track, simulated GPS replay and the `/lab` route are built, and the zero-egress
+scenario's **infrastructure** is built: a synthetic pair cut by the real writer, served locally by
+range, the worker asset asserted, and egress failed rather than counted. Still outstanding, and
+these are the actual acceptance criteria: **rendered-state evidence**, the three-capture
+differential over the pause, and the frame-time and memory baseline. None of the three has been
+touched, and `data-assembled` is not rendered-state evidence.
 
 **On verification claims in this plan and in commit messages:** gate runs and mutation results
 are *author verification* — real and reproducible, but run by whoever wrote the code, not an
@@ -80,7 +102,10 @@ independent check. Where a claim was confirmed by someone else, it says so.
    Public for one declared region: terrarium-encoded elevation, plus a vector contour layer
    derived from the same grid.
 2. `fixtures/vertical/` — the region declaration, the licence artifacts, and the recorded track.
-3. A Playwright scenario that renders the stack with the network disabled.
+3. A Playwright scenario that renders the stack with **no external egress permitted** — the
+   archives' range reads fulfilled locally, and any other request failed. Not "the network
+   disabled": that phrasing described a browser-persisted region, which is T6.1's, and
+   `tasks.md` was narrowed to match on 2026-08-31.
 4. `/lab` in `apps/demo` — the same fixture, human-openable, with a simulated GPS mode.
 
 ## The four obligations, and the check that discharges each
@@ -1088,8 +1113,12 @@ written out by hand.
 *Author verification.* 15 mutations killed across the wiring and the transaction, including
 promoted finals untracked, rollback skipping finals, cleanup stopping at the first rejection,
 levels from the envelope, contours uncompressed, contours labelled raster, and each justification
-dropped from validation. Terrain reproduces byte-for-byte against the pre-contour build
-(`ce397483…`), and contours reproduce byte-for-byte across runs (`de045312…`).
+dropped from validation. Terrain reproduced byte-for-byte against the pre-contour build
+(`ce397483…`), and contours reproduced byte-for-byte across runs (`de045312…`). **Both hashes are
+pre-header-fix**: they date from before the writer patched the v3 header's geographic bounds, and
+the current archives hash `5c833767…` and `7e2e5643…`. The reproducibility those runs established
+is unaffected — the patch is deterministic and the byte counts are unchanged — but neither number
+identifies an archive this repository builds today.
 
 ## Fixture composition
 
@@ -1237,8 +1266,9 @@ fixture is to be the thing that would notice.
    Neither half subsumes the other: input topology holds even if the layer never painted, and
    pixels alone cannot say which track was handed over.
 
-6. **The network is disabled before any map source is read**, and an unexpected request **fails
-   the test** rather than being tolerated. A scenario that merely runs offline proves the tiles
+6. **The egress guard is installed before any map source is read**, and an unexpected request
+   **fails the test** rather than being tolerated. It covers both seams: `page.route` for HTTP
+   and `page.routeWebSocket` for sockets, which `page.route` never sees. A scenario that merely runs offline proves the tiles
    were cached; one that fails on egress proves they were never wanted.
 7. **A documented warm-up and sampling protocol, and no invented thresholds.** How many frames
    are discarded, over what interval frame time is sampled, and what memory figure is read — all
@@ -1253,10 +1283,89 @@ And Node↔browser byte identity of the fixture track is **open** (see the track
 scenario is where it can finally be settled, by serialising the browser's own track and comparing
 it against Node's.
 
+### The harness, as built — infrastructure before pixels
+
+This increment stops at the first coherent boundary: **synthetic pair creation, local range
+serving, the worker assertion, and strict egress failure**. It asserts nothing about pixels on
+purpose. A scenario that checked rendering before proving the archives were fetched and the
+worker was loaded could not say which of the three had failed, and the render evidence has to
+stand on infrastructure that is already known good.
+
+`e2e/fixtures/build-lab-archives.mjs` generates a synthetic dome surface and pushes it through
+the **real** pipeline downstream of the source — the same resampler, PNG serialiser, contour
+tracer and `archive.mjs` writer the release build uses — into a `mkdtempSync` directory, with a
+`manifest.json` beside the pair. `serve-lab-archives.mjs` builds then serves it with Range
+support (206 with `Content-Range`, 416 on an unsatisfiable range, a path-traversal guard, and
+`no-store`), and removes the directory on `SIGINT`, `SIGTERM` and `exit`.
+
+**The sharpest finding was that the tests could not have caught the bug a person did.** The
+invalid-PMTiles-bounds error that prompted the writer fix was printed on *every* run and was
+noticed by someone reading the log, while all three tests stayed green — the lane already had a
+console watch, and this file was not using it. It now installs `watchConsole` in `beforeEach` and
+asserts `consoleFor(page).problems()` is empty in `afterEach`. A harness that needs a human to
+read its output is not a harness.
+
+**The allow-list compares origins, not prefixes.** `http://127.0.0.1:51750` starts with the
+permitted `http://127.0.0.1:5175`, so the first version's prefix matching admitted an entirely
+different origin while the test claimed a strict guard. It is now a `Set` of origins compared
+through `new URL(url).origin`. *And an empty egress list is only as good as what would fill it*:
+the guard is handed that exact case, spelled `${DEMO}0/tile.png` so the prefix relation is
+visible rather than described. Mutating `isAllowed` back to `startsWith` fails three ways at
+once — the decoy is forwarded and reaches nothing (`ERR_CONNECTION_REFUSED` on the console), the
+declared block never arrives, and `egress` stays empty.
+
+**The egress guard covers two seams, because `page.route` only covers one.** It intercepts HTTP
+and never sees a WebSocket, so a socket opened by the application would leave no trace in
+`egress` while the test claimed no egress — and the page already opens one, for Vite's HMR
+channel, so "no sockets appeared" was never going to be a true reading of that silence.
+`page.routeWebSocket` is installed beside it, before navigation, forwarding only allowed
+WebSocket origins and closing the rest **without connecting** — a route that closed after
+connecting would already have made the connection it claims was never made. Both branches are
+observable: refusals are recorded, and so are forwardings, because an empty refusal list is also
+what a route that never ran produces. Mutating the socket allow-list to prefix matching sends the
+decoy to `:51750` for real (`ERR_CONNECTION_REFUSED`); removing the socket route entirely fails
+on "no socket was forwarded at all".
+
+**Archive evidence is kept per archive.** A single range count lets terrain's reads vouch for
+contours, so a source that vanished entirely would leave the assertion green; each of the two
+must now show its own 206.
+
+**The writer patches the v3 header, and the check that missed this is corrected above.**
+`s2-pmtiles` never writes the header's geographic bounds, and the earlier "bounds equal the
+declared region" report had read the JSON metadata — a document the writer stores verbatim, so it
+could only confirm that what went in came back out. `writeArchive` now requires and validates
+`metadata.bounds` before the sink exists, and patches 25 header bytes **through the sink**, so an
+injected sink is covered too. Six mutations killed on the writer. Because the patch rewrites
+bytes, every archive hash recorded before it is stale; the numbers above are updated.
+
+**Two further header defects, from the same root: a field is not validated by being stored.**
+Bounds that are finite and correctly ordered can still be nowhere — `[200, 45.8, 300, 45.9]` is
+3 × 10⁹ in the header's degrees × 10⁷, past `Int32`'s 2.147 × 10⁹, so it wraps to a *negative*
+longitude and the archive advertises the opposite hemisphere. Longitude within ±180 and latitude
+within ±90 are now checked with the ordering. And `centreZoom` is a `uint8` written with
+`setUint8`, which truncates modulo 256 rather than refusing, so `minzoom: 300` in a metadata blob
+would have been written as 44 silently; it is now derived from the **shallowest tile actually
+written**, which cannot disagree with the archive and needs no range check of its own — every
+tile has already passed `zxyToTileID`, which refuses a zoom above 26. The existing centre-zoom
+test could not have caught this: its fixture's `minzoom` happened to equal its shallowest tile,
+so the two candidate sources agreed. The new test makes them disagree. Both guards
+mutation-tested; the four out-of-range bounds cases and the centre-zoom derivation all fail when
+reverted. Re-running the real build after these changes reproduces `5c833767…` and `7e2e5643…`
+unchanged, since the fixture's declared `minzoom` already equalled its shallowest tile.
+
+*Local runs no longer reuse yesterday's archives.* The archive server runs with
+`reuseExistingServer: false`, so a stale process from an earlier session cannot silently serve a
+different pair than the one this run built.
+
+**Still outstanding on this section:** rendered-state evidence (`assembled` is not that signal),
+the three-capture differential, and the frame-time and memory baseline — recorded numbers only,
+no thresholds.
+
 ## Acceptance
 
-Renders with the network disabled; the pause shows as a gap; frame time and memory recorded as a
-baseline. The baseline is a recorded number, not a threshold — its purpose is to make a later
+Renders with **no external egress permitted** — matching the narrowed `tasks.md` wording rather
+than the older "network disabled", which claimed the browser-persistence property T6.1 owns; the
+pause shows as a gap; frame time and memory recorded as a baseline. The baseline is a recorded number, not a threshold — its purpose is to make a later
 regression visible, and a threshold picked now would be invented.
 
 ## Open, and not to be resolved by assumption

@@ -51,12 +51,12 @@ export default tseslint.config(
 
   // The scanners are Node scripts, not library code.
   {
-    files: ["scripts/**/*.mjs", "*.config.mjs", "*.config.ts"],
+    files: ["scripts/**/*.mjs", "e2e/**/*.mjs", "*.config.mjs", "*.config.ts"],
     languageOptions: { globals: globals.node },
   },
 
   {
-    files: ["**/*.test.ts", "scripts/**/*.mjs"],
+    files: ["**/*.test.ts", "scripts/**/*.mjs", "e2e/**/*.mjs"],
     rules: { "@typescript-eslint/no-explicit-any": "off" },
   },
 );

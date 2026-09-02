@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { finalizeTrack } from "./finalize.js";
-import type { FinalizePolicy } from "./finalize.js";
 import { haversineDistanceMeters } from "./geo.js";
 import type { Id } from "./ids.js";
 import { newId } from "./ids.js";
@@ -54,10 +53,18 @@ export interface TrackDraft {
   redo(): void;
   onChange(cb: (points: DraftTrackPoint[]) => void): () => void;
 
-  toTrack(
-    meta?: { id?: Id; tags?: string[]; meta?: Record<string, JSONValue> },
-    policy?: Partial<FinalizePolicy>,
-  ): Track;
+  /**
+   * Finalize under the documented default policy.
+   *
+   * **No `policy` argument**, despite one having been declared here. `api.md` publishes
+   * `toTrack(meta?)`, the implementation additionally accepted `policy?: Partial<FinalizePolicy>`,
+   * and no call site in the repository ever supplied one — so it was a leaked surface rather than
+   * an exercised capability. An extra *optional* parameter is assignable to a narrower function
+   * type, which is exactly how it stayed invisible to anything checking conformance by
+   * assignment. If a consumer ever needs to vary finalization, that is an `api.md` change and an
+   * ADR, not a parameter nobody documented.
+   */
+  toTrack(meta?: { id?: Id; tags?: string[]; meta?: Record<string, JSONValue> }): Track;
 }
 
 /**
@@ -376,7 +383,7 @@ export function createTrackDraft(from?: Track): TrackDraft {
       return () => listeners.delete(cb);
     },
 
-    toTrack: (meta, policy) => {
+    toTrack: (meta) => {
       // A projection, not an edit: no snapshot, no redo clearing, no listener, and the
       // draft is exactly as it was afterwards.
       const missing = untimed();
@@ -415,21 +422,18 @@ export function createTrackDraft(from?: Track): TrackDraft {
       const consumerMeta = meta?.meta ?? seeded.meta;
       const laps = shiftLaps([...current.laps], points.length);
 
-      return finalizeTrack(
-        {
-          points,
-          segments,
-          origin: "authored",
-          ...(id === undefined ? {} : { id }),
-          ...(tags === undefined ? {} : { tags: [...tags] }),
-          ...(consumerMeta === undefined ? {} : { meta: structuredClone(consumerMeta) }),
-          ...(seeded.channels === undefined
-            ? {}
-            : { channels: seeded.channels.map((c) => ({ ...c })) }),
-          ...(laps.length === 0 ? {} : { laps }),
-        },
-        policy,
-      );
+      return finalizeTrack({
+        points,
+        segments,
+        origin: "authored",
+        ...(id === undefined ? {} : { id }),
+        ...(tags === undefined ? {} : { tags: [...tags] }),
+        ...(consumerMeta === undefined ? {} : { meta: structuredClone(consumerMeta) }),
+        ...(seeded.channels === undefined
+          ? {}
+          : { channels: seeded.channels.map((c) => ({ ...c })) }),
+        ...(laps.length === 0 ? {} : { laps }),
+      });
     },
   };
 }

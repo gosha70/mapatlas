@@ -94,13 +94,21 @@ test.afterEach(({ page }) => {
   expect(consoleFor(page).problems()).toEqual([]);
 });
 
-test("renders the track in pixels and the event as a real marker", async ({ page }) => {
+test("renders the track in pixels and the event as a real marker", async ({ page }, testInfo) => {
   await setProps(page, { sources: SOURCES });
   await page.waitForSelector("#root canvas", { timeout: 30_000 });
   const before = await settleRender(page.locator("#root"));
+  // **Attached immediately, before anything else can fail.** This test's empty-map control
+  // failed on Linux CI with 103 blue-excess pixels macOS never showed — and the capture whose
+  // mask produced that number was not retained anywhere: Playwright's failure screenshot is a
+  // later viewport composite, and the trace holds only JPEG frames. Element screenshots
+  // composite DOM overlays over the canvas, so cropping to the canvas isolates nothing;
+  // retaining the exact PNGs is what turns the next platform failure from a guess into a look.
+  await testInfo.attach("empty-map", { body: before.image, contentType: "image/png" });
 
   await setProps(page, { sources: SOURCES, track: TRACK, events: [EVENT] });
   const after = await settleRender(page.locator("#root"));
+  await testInfo.attach("with-track", { body: after.image, contentType: "image/png" });
 
   // **The track, in pixels — its own observable.** The blue-excess predicate recognises the
   // engine's line colour across its antialiased edge; the empty-map capture is the control that

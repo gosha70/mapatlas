@@ -45,6 +45,68 @@ export interface RenderHookOptions {
   strict?: boolean;
 }
 
+/** A mounted component under the same act/flush machinery as {@link renderHook}. */
+export interface ComponentHarness<Props> {
+  readonly container: HTMLElement;
+  rerender(props: Props): Promise<void>;
+  unmount(): Promise<void>;
+  settle(): Promise<void>;
+}
+
+/**
+ * Render a real component tree, not a probe.
+ *
+ * {@link renderHook}'s probe returns `null`, so anything the hook *returns to render* — a
+ * container `<div>` whose ref an effect reads — never reaches the DOM. A component under test
+ * has to actually mount.
+ */
+export async function renderComponent<Props>(
+  component: (props: Props) => ReactNode,
+  initialProps: Props,
+  options: RenderHookOptions = {},
+): Promise<ComponentHarness<Props>> {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root: Root = createRoot(container);
+
+  const tree = (props: Props): ReactNode => {
+    const element = createElement(component as never, props as never);
+    return options.strict === true ? createElement(StrictMode, null, element) : element;
+  };
+  const flush = async (): Promise<void> => {
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+  };
+
+  await act(async () => {
+    root.render(tree(initialProps));
+  });
+  await flush();
+
+  return {
+    container,
+    rerender: async (props) => {
+      await act(async () => {
+        root.render(tree(props));
+      });
+      await flush();
+    },
+    unmount: async () => {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+    },
+    settle: flush,
+  };
+}
+
 export async function renderHook<Props, Value>(
   hook: (props: Props) => Value,
   initialProps: Props,

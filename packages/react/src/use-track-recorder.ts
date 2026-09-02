@@ -64,16 +64,31 @@ export interface TrackRecorderBinding {
   error?: TrackRecorderError;
 }
 
-/** @internal — the seam the tests count calls on. Never exported from the barrel. */
-export interface UseTrackRecorderInternals {
-  environment?: TrackRecorderHookEnvironment;
+/**
+ * The public entry point, with **exactly** the parameters `api.md` §9 publishes.
+ *
+ * Separate from {@link useTrackRecorderInternal} on purpose. Folding the environment seam into
+ * an optional field of this signature type-checked and still leaked: the generated declaration
+ * read `useTrackRecorder(options?: UseTrackRecorderOptions & UseTrackRecorderInternals)`, so a
+ * consumer could pass `environment` and a conformance check built on one-way assignability could
+ * not see it — extra optional parameters are assignable to a narrower type, which certifies
+ * compatibility rather than conformance.
+ */
+export function useTrackRecorder(options: UseTrackRecorderOptions = {}): TrackRecorderBinding {
+  return useTrackRecorderInternal(options, browserRecorderEnvironment);
 }
 
-export function useTrackRecorder(
-  options: UseTrackRecorderOptions & UseTrackRecorderInternals = {},
+/**
+ * The implementation, taking its environment explicitly.
+ *
+ * `@internal`, and kept off the barrel: it exists so ADR-0026's ownership rules can be proven by
+ * counting constructions and scans, which is a claim about calls that must *not* happen.
+ */
+export function useTrackRecorderInternal(
+  options: UseTrackRecorderOptions,
+  env: TrackRecorderHookEnvironment,
 ): TrackRecorderBinding {
-  const { recorder: injected, store, sampling, sensors, environment } = options;
-  const env = environment ?? browserRecorderEnvironment;
+  const { recorder: injected, store, sampling, sensors } = options;
 
   const [status, setStatus] = useState<TrackStatus>(injected?.status ?? "finalized");
   const [livePoint, setLivePoint] = useState<TrackPoint | undefined>(undefined);

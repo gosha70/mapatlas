@@ -4,9 +4,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { EventLog, Id, MapEvent, StorageAdapter } from "@mapatlas/core";
+import { createEventLog } from "@mapatlas/core";
 
 import { renderHook } from "./testing/render-hook.js";
-import { useEventLog } from "./use-event-log.js";
+// The internal entry point, not the barrel's: the public `useEventLog` takes exactly the two
+// parameters `api.md` publishes, and the seam these tests need is deliberately not among them.
+import { useEventLog, useEventLogInternal } from "./use-event-log.js";
 
 /**
  * A log that answers on demand, so "which list won" can be decided by the test.
@@ -113,8 +116,7 @@ interface Props {
 
 const mount = async (props: Props, strict = false) =>
   renderHook(
-    (p: Props) =>
-      useEventLog(p.store, p.trackId, { ...(p.createLog ? { createLog: p.createLog } : {}) }),
+    (p: Props) => useEventLogInternal(p.store, p.trackId, p.createLog ?? createEventLog),
     props,
     { strict },
   );
@@ -291,6 +293,34 @@ describe("useEventLog — mutations go through the log", () => {
     await harness.settle();
 
     expect(harness.current.events).toEqual([]);
+    await harness.unmount();
+  });
+});
+
+describe("useEventLog — the public wrapper", () => {
+  it("forwards its trackId into a real event log over the given store", async () => {
+    // **The detailed tests above drive `useEventLogInternal`, so nothing was exercising the
+    // exported function's body.** It could drop `trackId` — or ignore `store` — while every
+    // lifecycle test stayed green, and the conformance check would not notice either: that
+    // compares types, and a discarded argument still type-checks.
+    //
+    // So this one goes through the barrel's `useEventLog` and a real `createEventLog`, over a
+    // store that records which trackId reached it. Two tracks, so forwarding `undefined` fails.
+    const listed: (Id | undefined)[] = [];
+    const stored: StorageAdapter = {
+      ...store(),
+      listEvents: (trackId) => {
+        listed.push(trackId);
+        return Promise.resolve(trackId === "t-second" ? [event("only-in-second")] : []);
+      },
+    };
+
+    const harness = await renderHook((p: { trackId: Id }) => useEventLog(stored, p.trackId), {
+      trackId: "t-second",
+    });
+
+    expect(listed).toEqual(["t-second"]);
+    expect(harness.current.events.map((e) => e.id)).toEqual(["only-in-second"]);
     await harness.unmount();
   });
 });

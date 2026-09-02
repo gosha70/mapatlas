@@ -5,6 +5,8 @@ import { TrackDraftIncompleteError, createTrackDraft } from "./draft.js";
 import type { TrackDraft } from "./draft.js";
 import { finalizeTrack } from "./finalize.js";
 import { newId } from "./ids.js";
+import type { Id } from "./ids.js";
+import type { JSONValue } from "./json.js";
 import type { DraftTrackPoint, Track, TrackPoint } from "./track.js";
 import { TrackTemporalOrderError } from "./validate.js";
 
@@ -822,5 +824,57 @@ describe("round trip through an existing track", () => {
 
   it("starts with empty history — seeding is not an edit", () => {
     expect(createTrackDraft(recorded()).canUndo).toBe(false);
+  });
+});
+
+describe("TrackDraft's published signature", () => {
+  /**
+   * `toTrack`'s parameters, transcribed from `api.md` — not imported from `TrackDraft`, which
+   * would only check that the code agrees with itself.
+   */
+  type PublishedToTrack = (meta?: {
+    id?: Id;
+    tags?: string[];
+    meta?: Record<string, JSONValue>;
+  }) => Track;
+
+  /**
+   * Compared as **tuples, in both directions**. One-way assignment is what let a second
+   * `policy?: Partial<FinalizePolicy>` parameter sit on this interface undocumented: a function
+   * with an extra *optional* parameter is assignable to a narrower function type, so nothing
+   * built on assignability could see it, and no call site ever passed one.
+   */
+  type Exactly<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+  /**
+   * The same comparison over **key sets**, because structural equality does not reach an extra
+   * optional member.
+   *
+   * The tuple comparison is exact about the *parameters* and not about the shape of the one
+   * object among them: `{ id?, tags?, meta?, policy? }` and `{ id?, tags?, meta? }` are mutually
+   * assignable — an extra property is fine in one direction, an optional one in the other — so a
+   * leak could simply move out of a second parameter and into the first. The same hole was found
+   * while making `@mapatlas/react`'s hooks conform, and it is closed the same way.
+   */
+  type ExactKeys<A, B> = Exactly<keyof A, keyof B>;
+
+  const parametersMatch: Exactly<
+    Parameters<TrackDraft["toTrack"]>,
+    Parameters<PublishedToTrack>
+  > = true;
+  const returnMatches: Exactly<
+    ReturnType<TrackDraft["toTrack"]>,
+    ReturnType<PublishedToTrack>
+  > = true;
+  const metaShapeMatches: ExactKeys<
+    NonNullable<Parameters<TrackDraft["toTrack"]>[0]>,
+    NonNullable<Parameters<PublishedToTrack>[0]>
+  > = true;
+
+  it("takes exactly the arguments api.md publishes", () => {
+    // The comparisons above are the check — a mismatch fails `tsc`, not this. Asserting them
+    // keeps them from being deleted as unused and states what they mean: an extra parameter and
+    // an extra key on the metadata object are both undocumented surface.
+    expect([parametersMatch, returnMatches, metaShapeMatches]).toEqual([true, true, true]);
   });
 });

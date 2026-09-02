@@ -342,10 +342,10 @@ describe("useTrackList — async ordering", () => {
 
   it("a stale removal does not invalidate the replacement store's pending list", async () => {
     // **What the pre-request context guard is actually for.** Skipping the old store's re-list
-    // is not merely a saved read: issuing it would bump the request sequence, so the *new*
-    // store's list — still in flight — would find itself stale and refuse to publish. The list
-    // would then never arrive, and `loading` would never clear, from a mutation the consumer had
-    // already navigated away from.
+    // is not merely a saved read. Issuing it would make it the *newest* request, so it would
+    // publish the old store's rows and clear `loading`, and the replacement store's answer —
+    // arriving after it — would be the one the sequence guard discards. The consumer would be
+    // left looking at a store they had already navigated away from.
     const first = fakeStore();
     first.auto = [summary("from-first")];
     first.parkDelete = true;

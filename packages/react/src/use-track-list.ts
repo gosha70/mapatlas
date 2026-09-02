@@ -81,10 +81,12 @@ export function useTrackList(store: StorageAdapter): TrackListBinding {
       // No optimistic filter: a rejected delete would otherwise leave the row gone from a list
       // whose store still holds it, and the consumer's next act is usually to free space.
       await store.deleteTrack(id);
-      // **Not a saved read — a correctness guard.** Issuing this list would bump the sequence,
-      // and the *replacement* store's list, still in flight, would then find itself stale and
-      // refuse to publish: it would never arrive and `loading` would never clear, because of a
-      // mutation belonging to a store the consumer has already left.
+      // **Not a saved read — a correctness guard, and the two guards divide the work.** Context
+      // decides whether a post-mutation request is *issued*; the sequence decides which answer
+      // is *published* and which clears `loading`. Issuing this one would make it the newest
+      // request, so it would publish the **old** store's rows and clear loading, and the
+      // replacement store's answer — arriving after it — would be the one discarded. Measured:
+      // dropping this leaves `['from-first']` on screen after the swap.
       if (context.current !== at) return;
       await load(store);
     },

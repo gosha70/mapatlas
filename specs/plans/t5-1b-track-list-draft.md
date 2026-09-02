@@ -89,8 +89,17 @@ Executable bars:
   result or recreate `compareTrackSummaries` above the seam.
 - Initial `loading` is true and becomes false only when the newest request in the current store
   settles. An older request cannot clear it while a newer one remains pending.
-- Context and request sequence are separate guards, as in the repaired T5.1 hooks: changing the
-  store invalidates the old context, while two lists in one store are ordered by issue sequence.
+- Context and request sequence are separate guards with **separate jobs**, and the division is
+  the point: **context gates whether a post-mutation request is issued; the sequence gates which
+  answer is published and which clears `loading`.** Comparing the context at publish time as
+  well is redundant — every context change re-runs the effect, which issues a load, which bumps
+  the sequence before awaiting, so a stale context always implies a stale sequence.
+
+  The pre-request context guard is *not* redundant, and its failure mode is worth stating exactly
+  because an earlier version of this note got it wrong. Issuing a stale mutation's re-list makes
+  that list the **newest** request: it publishes the old store's rows and clears `loading`, and
+  the replacement store's answer, arriving after it, is the one the sequence guard discards. The
+  cost is a wrong screen, not a wasted read.
 - A slow initial list cannot overwrite a completed refresh. A replaced store cannot publish or
   receive a pointless post-mutation re-list.
 - `remove(id)` calls `deleteTrack(id)` exactly, performs no optimistic filter, and then re-lists

@@ -103,8 +103,10 @@ export function useEventLogInternal(
     async (current: EventLog, id: Id | undefined, run: () => Promise<unknown>): Promise<void> => {
       const at = context.current;
       await run();
-      // Not merely "do not publish" — do not *list* at all: the log this mutation belonged to is
-      // no longer the one on screen, and its answer could only ever be discarded.
+      // **The two guards divide the work:** context decides whether a post-mutation request is
+      // *issued*, the sequence decides which answer is *published*. Issuing this one would make
+      // it the newest request, so it would publish the **old** log's events and the replacement's
+      // answer would be the one discarded — not a wasted read, a wrong screen.
       if (context.current !== at) return;
       await load(current, id);
     },

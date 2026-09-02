@@ -1680,6 +1680,61 @@ and 99.9% of pixels differ between the settled views before and after. Reproduci
 the fixed starting camera and the fixed script, not from the path closing; and because the view
 does end elsewhere, that difference is what the positive control asserts.
 
+## Audited 2026-09-02
+
+Against `main` at `026ffa4`, after T5.1b. Three invariants examined, read-only: every probe was a
+scratch mutation reverted before this note. The trigger was a design discussion that restated
+these properties as future work — auditing established which of them the merged build already
+holds, and which claim outruns its evidence.
+
+### Bar 1 — no `.partial` survives any pre-promotion failure: **discharged by existing evidence**
+
+Partials are created in exactly one place, inside the archive stage's `try`, so the invariant
+decomposes: pre-archive failures create no files at all (`fails at the licence before touching
+the network`, `fails at coverage before reading a single tile`, `writes nothing when the floor is
+breached`), and every in-archive failure class has a discard test — a writer rejecting mid-write,
+a licence check failing after a successful write, the first rename failing, a later rename
+failing (which also removes a previous build's finals), and cleanup itself failing with the
+original error preserved. Production `writeArchive` validates bounds before creating its sink, so
+the one failure mode outside the injected seam also leaves no file.
+
+*Residual, noted rather than repaired:* the attribution-failure and not-for-distribution paths
+carry no discard assertion of their own. They share the single `catch` with the tested paths, so
+coverage is **representative-by-mechanism** rather than exhaustive-by-path.
+
+### Bar 2 — coverage classification derives from the declaration snapshot: **discharged**
+
+There is no "outside declared coverage" *response* classification to misuse: cells outside the
+declaration never generate a request at all, because `requiredTiles(declaration.bounds)` is the
+only source of probes, and the suite asserts `calls.probe` **equal** to the required set rather
+than a superset. For required cells, the three kinds of absence are derived where they must be:
+a 404 is `unpublished` only because `snapshot.published` lacks the id, `unexpected` when the
+snapshot claims it, and any transport failure — a throw or a non-404 status — is `unreachable`
+and never an absence. `has no path that fills or skips an absent tile` sweeps
+204/301/403/404/500/503 and proves the refusal is the absence of a branch, not a guard around
+one.
+
+### Bar 3 — floor validation precedes raster encoding: **holds in code; NOT mutation-pinned**
+
+The `elevation` stage consumes and floor-checks every decoded sample before the `tiles` stage
+encodes anything, and a breach demonstrably prevents archive writes. But `encodePng` is a static
+import with no observable seam — no counter, no injection, no entry in the harness's call order —
+so "zero PNGs are encoded before the floor passes" is observable by nothing.
+
+Two scratch mutants deferred the floor comparison past encoding. Both were killed — and neither
+kill counts. The first failed on streaming-laziness and error-labelling artifacts of the rewrite;
+the second on message-format assertions (`N45E007` in the text, metres formatting). By this
+project's own rule — *a useful mutation fails because of the property under test, not because of
+an unrelated difference* — a message-faithful deferred mutant would pass the entire suite,
+wasting the encode work before failing at the same stage with the same message and `wrote: []`.
+
+The property is real, present, and unpinned. "Expensive work must not begin before a global
+rejection condition passes" is exactly the kind of invariant a harmless-looking pipeline refactor
+regresses silently, so the repair is a testability seam: route raster encoding through the
+existing build dependency object with production binding to the current encoder, then one
+discriminating test — floor breach, encoder invocation count zero. Recorded here; repaired
+separately, since an audit that patches what it measures stops being an audit.
+
 ## Acceptance
 
 Renders with **no external egress permitted** — matching the narrowed `tasks.md` wording rather

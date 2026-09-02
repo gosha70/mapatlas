@@ -963,6 +963,30 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
 - **T5.2 `<MapCanvas>`.** Wraps MapController incl. `style`/`terrain`/`presentation`/draw mode;
   SSR-safe (no window at import). _AC:_ renders track+events; toggling `drawMode` enters and
   exits cleanly.
+
+  **Done** (2026-09-02). Plan: [`specs/plans/t5-2-map-canvas.md`](plans/t5-2-map-canvas.md).
+
+  A reconciliation component: every published prop except `style` maps to an existing controller
+  mutator, so `style` is the one recreation boundary, and a recreation re-applies the whole
+  current state. The governing rule — **presence is lifecycle; identity is data** — is pinned on
+  both halves: an inline callback's new identity never resubscribes or re-enters draw mode
+  (cumulative counts, since at-rest counts cannot see a churn), and a handler disappearing ends
+  its session.
+
+  *Evidence, both lanes.* Vitest: nine mutations killed against a counted controller, including
+  the full-state style-recreation test and StrictMode ownership; SSR proven in a Node lane that
+  asserts `window`/`document` absent before dynamically importing the module — the package's
+  first runtime `react → maplibre → maplibre-gl` chain — with the construct-in-render mutant
+  dying there on "HTMLElement is not defined". Playwright: the public-shaped component with the
+  production controller on one persistent StrictMode root; the track proven in pixels with an
+  empty-map control, the event as `.mapatlas-mark--event` (the specific class — start and finish
+  pins make the generic class count 3), and `drawMode` toggling 0 → 3 → 0 draft vertices across
+  two prop transitions with one canvas throughout. Mounting a plain div instead fails both
+  browser tests because the production rendering surface never appears.
+
+  *Public surface.* Exact `api.md` §9 conformance — parameter tuple, return type, and the
+  complete prop key set — with `MapCanvas` on the barrel and `EventComposer` still asserted
+  absent, gated the same way this component was until now.
 - **T5.3 `<EventComposer>`.** Comment + in-place photo capture (`capture="environment"`) writing
   blobs via the required `store`; `mode` selects comment-first or camera-first; consumer
   `fields`/`categories` render into `MapEvent.fields`/`category`; settable `occurredAt`; if an

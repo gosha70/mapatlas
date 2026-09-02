@@ -924,6 +924,42 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
 - **T5.1b `useTrackList` + `useTrackDraft`.** Summary-backed trip list; draft editor exposing
   undo/redo and `save()`. _AC:_ the list renders from `listTrackSummaries()` without loading
   points; the draft hook's `save()` persists an `origin: "authored"` track.
+
+  **Done** (2026-09-02). Plan: [`specs/plans/t5-1b-track-list-draft.md`](plans/t5-1b-track-list-draft.md).
+
+  Both acceptance clauses are discharged, and both cross a seam rather than being read off a
+  type: the list fake makes `getTrack` **throw**, so a hydrating implementation fails outright
+  rather than passing on the shape of what it returned; and `save()` is asserted to produce
+  `origin: "authored"` and to persist exactly the track it resolves with.
+
+  *Mostly a binding, and the survey said so before any code.* `StorageAdapter` already owns the
+  ordered, non-hydrating summary projection (ADR-0014) and `createTrackDraft` already owns
+  editing, history, validation and authored finalization. React exposes them; it reimplements
+  none of it, and the tests wrap a **real** `createTrackDraft` so React's own bookkeeping cannot
+  stand in for the thing under test.
+
+  *Two lifecycle rules were settled before implementation rather than discovered in it.* A draft
+  is identified by `from.id`, so a fresh `Track` object for the same track keeps unsaved edits —
+  the ordinary React case. And one session has one persisted identity: the id is adopted **before**
+  `saveTrack` is awaited, because a write that rejects may still have landed, and retrying under
+  a newly minted id would create a second trip rather than overwrite the uncertain first one.
+
+  *Evidence.* 30 mutations across the two hooks and the guard cleanup. Three survived and each
+  changed something real: a `loading` flag nothing could see restart, an oracle that compared a
+  retry against its own id instead of against the failed attempt, and a redundant context
+  comparison that was removed rather than kept. One further mutation is recorded as
+  **unreachable** rather than manufactured.
+
+  *Found and repaired on the way.* `TrackDraft.toTrack` accepted an undocumented
+  `policy?: Partial<FinalizePolicy>` second parameter that no call site used — the same
+  extra-optional-parameter leak that reached `@mapatlas/react`'s declarations in T5.1, and
+  invisible for the same reason. It is removed, and both core and React now compare parameter
+  tuples, return types and key sets exactly rather than by assignment.
+
+  *Scope.* `api.md` §9's remaining surface is `MapCanvas` and `EventComposer`, owned by T5.2 and
+  T5.3. `index.test.ts` names them absent, exactly as it named these two before they were built —
+  an assertion that failed the moment they were exported, which is what forced them into the
+  exact checks instead of appearing unverified.
 - **T5.2 `<MapCanvas>`.** Wraps MapController incl. `style`/`terrain`/`presentation`/draw mode;
   SSR-safe (no window at import). _AC:_ renders track+events; toggling `drawMode` enters and
   exits cleanly.

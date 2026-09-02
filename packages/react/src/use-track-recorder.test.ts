@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  SamplingPolicy,
   StorageAdapter,
   Track,
   TrackPoint,
@@ -14,9 +15,12 @@ import type {
 } from "@mapatlas/core";
 
 import type { TrackRecorderHookEnvironment } from "./environment.js";
+import { browserRecorderEnvironment } from "./environment.js";
 import { renderHook } from "./testing/render-hook.js";
 import type { UseTrackRecorderOptions } from "./use-track-recorder.js";
-import { useTrackRecorder } from "./use-track-recorder.js";
+// The internal entry point: the public `useTrackRecorder` takes exactly the options `api.md`
+// publishes, and the environment seam these tests count calls on is not among them.
+import { useTrackRecorder, useTrackRecorderInternal } from "./use-track-recorder.js";
 
 /**
  * A recorder that records what it was asked to do.
@@ -28,6 +32,8 @@ import { useTrackRecorder } from "./use-track-recorder.js";
 interface FakeRecorder extends TrackRecorder {
   readonly calls: string[];
   readonly laps: (string | undefined)[];
+  /** What each `start` was called with, so a dropped `sampling` is visible. */
+  readonly startedWith: (Partial<SamplingPolicy> | undefined)[];
   readonly pointListeners: number;
   readonly errorListeners: number;
   /** Every unsubscribe call, so "exactly once" can be asserted rather than "at least once". */
@@ -43,6 +49,7 @@ function fakeRecorder(id = "t1"): FakeRecorder {
   const errors: ((e: TrackRecorderError) => void)[] = [];
   const calls: string[] = [];
   const laps: (string | undefined)[] = [];
+  const startedWith: (Partial<SamplingPolicy> | undefined)[] = [];
   let status: TrackStatus = "finalized";
   let unsubscribes = 0;
 
@@ -55,6 +62,9 @@ function fakeRecorder(id = "t1"): FakeRecorder {
     },
     get laps() {
       return laps;
+    },
+    get startedWith() {
+      return startedWith;
     },
     get pointListeners() {
       return points.length;
@@ -73,8 +83,9 @@ function fakeRecorder(id = "t1"): FakeRecorder {
       points: [],
       segments: [],
     },
-    start: async () => {
+    start: async (sampling) => {
       calls.push("start");
+      startedWith.push(sampling);
       if (recorder.failStart !== undefined) throw recorder.failStart;
       status = "recording";
       return Promise.resolve();
@@ -211,7 +222,11 @@ const point = (t: number, channels?: Record<string, number>): TrackPoint => ({
 type Props = UseTrackRecorderOptions & { environment?: TrackRecorderHookEnvironment };
 
 const mount = async (props: Props, strict = false) =>
-  renderHook((p: Props) => useTrackRecorder(p), props, { strict });
+  renderHook(
+    (p: Props) => useTrackRecorderInternal(p, p.environment ?? browserRecorderEnvironment),
+    props,
+    { strict },
+  );
 
 describe("useTrackRecorder — who owns the recorder", () => {
   it("builds no recorder and scans nothing when one is injected", async () => {
@@ -448,6 +463,33 @@ describe("useTrackRecorder — commands and live state", () => {
     await harness.settle();
 
     expect(harness.current.error).toBe(failure);
+    await harness.unmount();
+  });
+});
+
+describe("useTrackRecorder — the public wrapper", () => {
+  it("passes its options through to the recorder it was given", async () => {
+    // **The detailed tests drive `useTrackRecorderInternal`, so the exported function's body was
+    // untested.** It could discard `options` entirely — binding a default recorder while a
+    // consumer's injected one sat unused — and every test above would still pass, because none
+    // of them calls it. The conformance check compares types, and a discarded argument
+    // type-checks perfectly.
+    //
+    // Through the barrel's `useTrackRecorder`, then: an injected recorder must be the one the
+    // commands reach, and `sampling` must arrive with `start`.
+    const injected = fakeRecorder();
+    const harness = await renderHook((p: UseTrackRecorderOptions) => useTrackRecorder(p), {
+      recorder: injected,
+      sampling: { minDistanceM: 7 },
+    });
+
+    await harness.current.start();
+    harness.current.markLap("wrapper lap");
+    await harness.settle();
+
+    expect(injected.calls).toEqual(["start", "markLap"]);
+    expect(injected.laps).toEqual(["wrapper lap"]);
+    expect(injected.startedWith).toEqual([{ minDistanceM: 7 }]);
     await harness.unmount();
   });
 });

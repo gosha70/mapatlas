@@ -27,17 +27,29 @@ export interface EventLogBinding {
   deleteEvent(id: Id): Promise<void>;
 }
 
-/** @internal — lets the tests supply a counted log without mocking the module graph. */
-export interface UseEventLogInternals {
-  createLog?: (store: StorageAdapter) => EventLog;
+/**
+ * The public entry point, with **exactly** the parameters `api.md` §9 publishes.
+ *
+ * An optional third `internals` parameter type-checked against the published signature and still
+ * shipped: the generated declaration read `useEventLog(store, trackId?, internals?)`. Extra
+ * optional parameters are assignable to a narrower function type, so nothing built on one-way
+ * assignability could catch it.
+ */
+export function useEventLog(store: StorageAdapter, trackId?: Id): EventLogBinding {
+  return useEventLogInternal(store, trackId, createEventLog);
 }
 
-export function useEventLog(
+/**
+ * The implementation, taking its log factory explicitly.
+ *
+ * `@internal`, and kept off the barrel: it lets the tests supply a log that answers on demand,
+ * which is the only way to decide *which* of two overlapping lists wins.
+ */
+export function useEventLogInternal(
   store: StorageAdapter,
-  trackId?: Id,
-  internals: UseEventLogInternals = {},
+  trackId: Id | undefined,
+  build: (store: StorageAdapter) => EventLog,
 ): EventLogBinding {
-  const build = internals.createLog ?? createEventLog;
   // One log per store, so a re-render does not rebuild it and the identity below is stable.
   const log = useMemo(() => build(store), [build, store]);
   const [events, setEvents] = useState<MapEvent[]>([]);

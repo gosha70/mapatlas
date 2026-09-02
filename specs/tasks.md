@@ -893,6 +893,34 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
 ## Phase 5 — `@mapatlas/react`
 - **T5.1 Hooks.** `useTrackRecorder` (live `channels`, `markLap`, `recovered`), `useEventLog`,
   `useOfflineRegions`. _AC:_ tested with fakes.
+
+  **Done** (2026-09-01). Plan: [`specs/plans/t5-1-hooks.md`](plans/t5-1-hooks.md); the contract
+  question it had to settle first is [ADR-0026](decisions.md).
+
+  - *All three hooks are tested with fakes*, in the Vitest lane under `happy-dom` with a small
+    `createRoot`/`act` harness. No Testing Library: these hooks bind React state to **interfaces**,
+    and the browser lane stays for behaviour only a real browser has, which is T5.2's.
+  - *`api.md` §9 had to be settled before the first hook.* It published `recorder?` as optional
+    while `architecture.md` gave `@mapatlas/react` no dependency that could build one — a
+    contradiction that made the published signature unimplementable. ADR-0026 adds
+    `@mapatlas/recorder-web`, and makes recovery two explicit operations
+    (`resumeRecovered`/`discardRecovered`) rather than a side effect of `start()`.
+  - *The public surface is checked against the document, not against itself.* `index.test.ts`
+    transcribes §9's signatures and compares **parameter tuples, return types and key sets** to
+    them exactly, in both directions, so drift fails to compile. Exactness is the point: one-way
+    assignment certified only *compatibility*, and TypeScript admits both an extra optional
+    parameter and an extra optional property — which is how `internals?` and `environment` reached
+    the generated declarations while a check built on assignment stayed green. The barrel's
+    exports are also compared as a **set**, so an unreviewed addition is as visible as a removal,
+    and the internal seams and test harness are asserted never to reach it.
+  - *Scope.* §9 also publishes `useTrackList` and `useTrackDraft`. Those are **T5.1b** and remain
+    unbuilt; the surface test names them and asserts their absence, so it fails when T5.1b lands
+    and has to be extended rather than silently covering them.
+
+  **Found while building, and fixed here.** The packaging gate packed only `core` and `maplibre`,
+  so `@mapatlas/react` — which gained its first production dependency in this task — was outside
+  it entirely. It now packs the whole publish graph, **executes** a consumer import rather than
+  only resolving one, and refuses a shipped test harness or a `react-dom` production dependency.
 - **T5.1b `useTrackList` + `useTrackDraft`.** Summary-backed trip list; draft editor exposing
   undo/redo and `save()`. _AC:_ the list renders from `listTrackSummaries()` without loading
   points; the draft hook's `save()` persists an `origin: "authored"` track.

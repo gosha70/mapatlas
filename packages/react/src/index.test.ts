@@ -2,7 +2,10 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  DraftTrackPoint,
   Id,
+  InterpolateTimesOptions,
+  LatLng,
   MapEvent,
   OfflineRegion,
   OfflineRegionStore,
@@ -14,6 +17,7 @@ import type {
   TrackRecorder,
   TrackRecorderError,
   TrackStatus,
+  TrackSummary,
 } from "@mapatlas/core";
 
 import * as barrel from "./index.js";
@@ -21,11 +25,12 @@ import * as barrel from "./index.js";
 /**
  * What `@mapatlas/react` publishes, against what `api.md` §9 says it publishes.
  *
- * **Scoped to T5.1's three hooks.** §9 also publishes `useTrackList` and `useTrackDraft`, and
- * those are **T5.1b** — a separate backlog entry, not yet built. A check phrased as "the barrel
- * matches §9" would therefore either fail, or be written loosely enough to pass while implying
- * T5.1b was done. So the covered surface is named explicitly and the absent hooks are named too:
- * an absence nobody wrote down is indistinguishable from an oversight.
+ * **Covers T5.1's three hooks and T5.1b's two.** `useTrackList` and `useTrackDraft` were listed
+ * here as deliberately absent while T5.1b was unbuilt, and that assertion did its job: it failed
+ * the moment they reached the barrel, which is what forced them into the exact checks below
+ * rather than letting them appear with nothing verifying them. `MapCanvas` and `EventComposer`
+ * are the remaining §9 surface and belong to T5.2 and T5.3; they are named absent for the same
+ * reason.
  */
 
 /**
@@ -73,6 +78,30 @@ type PublishedUseOfflineRegions = (store: OfflineRegionStore) => {
   remove(id: Id): Promise<void>;
 };
 
+type PublishedUseTrackList = (store: StorageAdapter) => {
+  tracks: TrackSummary[];
+  loading: boolean;
+  refresh(): Promise<void>;
+  remove(id: Id): Promise<void>;
+};
+
+type PublishedUseTrackDraft = (opts?: { from?: Track; store?: StorageAdapter }) => {
+  points: DraftTrackPoint[];
+  canUndo: boolean;
+  canRedo: boolean;
+  untimedIndices: number[];
+  append(p: LatLng): void;
+  insertAt(i: number, p: LatLng): void;
+  moveAt(i: number, to: LatLng): void;
+  removeAt(i: number): void;
+  setTimeAt(i: number, t: number): void;
+  interpolateTimes(o: InterpolateTimesOptions): void;
+  breakAt(i: number): void;
+  undo(): void;
+  redo(): void;
+  save(): Promise<Track>;
+};
+
 /**
  * Compile-time conformance, **exact rather than one-way**.
  *
@@ -104,13 +133,17 @@ const parametersMatch: [
   Exactly<Parameters<typeof barrel.useTrackRecorder>, Parameters<PublishedUseTrackRecorder>>,
   Exactly<Parameters<typeof barrel.useEventLog>, Parameters<PublishedUseEventLog>>,
   Exactly<Parameters<typeof barrel.useOfflineRegions>, Parameters<PublishedUseOfflineRegions>>,
-] = [true, true, true];
+  Exactly<Parameters<typeof barrel.useTrackList>, Parameters<PublishedUseTrackList>>,
+  Exactly<Parameters<typeof barrel.useTrackDraft>, Parameters<PublishedUseTrackDraft>>,
+] = [true, true, true, true, true];
 
 const returnsMatch: [
   Exactly<ReturnType<typeof barrel.useTrackRecorder>, ReturnType<PublishedUseTrackRecorder>>,
   Exactly<ReturnType<typeof barrel.useEventLog>, ReturnType<PublishedUseEventLog>>,
   Exactly<ReturnType<typeof barrel.useOfflineRegions>, ReturnType<PublishedUseOfflineRegions>>,
-] = [true, true, true];
+  Exactly<ReturnType<typeof barrel.useTrackList>, ReturnType<PublishedUseTrackList>>,
+  Exactly<ReturnType<typeof barrel.useTrackDraft>, ReturnType<PublishedUseTrackDraft>>,
+] = [true, true, true, true, true];
 
 /** No extra member on either side — of the one options object, and of all three returns. */
 const shapesMatch: [
@@ -118,28 +151,46 @@ const shapesMatch: [
     NonNullable<Parameters<typeof barrel.useTrackRecorder>[0]>,
     NonNullable<Parameters<PublishedUseTrackRecorder>[0]>
   >,
+  ExactKeys<
+    NonNullable<Parameters<typeof barrel.useTrackDraft>[0]>,
+    NonNullable<Parameters<PublishedUseTrackDraft>[0]>
+  >,
   ExactKeys<ReturnType<typeof barrel.useTrackRecorder>, ReturnType<PublishedUseTrackRecorder>>,
   ExactKeys<ReturnType<typeof barrel.useEventLog>, ReturnType<PublishedUseEventLog>>,
   ExactKeys<ReturnType<typeof barrel.useOfflineRegions>, ReturnType<PublishedUseOfflineRegions>>,
-] = [true, true, true, true];
+  ExactKeys<ReturnType<typeof barrel.useTrackList>, ReturnType<PublishedUseTrackList>>,
+  ExactKeys<ReturnType<typeof barrel.useTrackDraft>, ReturnType<PublishedUseTrackDraft>>,
+] = [true, true, true, true, true, true, true];
 
 /** What the package exports today. Compared as a set, so an addition is as visible as a removal. */
 const EXPECTED_EXPORTS = [
   "PACKAGE_NAME",
   "useEventLog",
   "useOfflineRegions",
+  "useTrackDraft",
+  "useTrackList",
   "useTrackRecorder",
 ] as const;
 
-/** Published by `api.md` §9 and owned by **T5.1b**, which has not been built. */
-const T5_1B_HOOKS = ["useTrackList", "useTrackDraft"] as const;
+/**
+ * Published by `api.md` §9 and **not yet built**: the components, owned by T5.2 and T5.3.
+ *
+ * The list is kept for the same reason it once held `useTrackList` and `useTrackDraft` — those
+ * were asserted absent, the assertion failed the moment they reached the barrel, and that is
+ * what forced them into the exact checks above instead of appearing with nothing verifying them.
+ */
+const NOT_YET_BUILT = ["MapCanvas", "EventComposer"] as const;
 
 /** Internal to the package: seams and test infrastructure that must never reach a consumer. */
 const MUST_NOT_ESCAPE = [
   "browserRecorderEnvironment",
   "renderHook",
   "createEventLog",
+  "createTrackDraft",
   "createWebTrackRecorder",
+  "useEventLogInternal",
+  "useTrackDraftInternal",
+  "useTrackRecorderInternal",
 ] as const;
 
 describe("@mapatlas/react's public surface", () => {
@@ -147,18 +198,18 @@ describe("@mapatlas/react's public surface", () => {
     expect(barrel.PACKAGE_NAME).toBe("@mapatlas/react");
   });
 
-  it("exports T5.1's three hooks and nothing else", () => {
+  it("exports the five published hooks and nothing else", () => {
     // A set comparison rather than three `toBeDefined` checks: those would pass while the barrel
     // quietly grew an export nobody reviewed, and the barrel is the package's whole contract.
     expect(Object.keys(barrel).sort()).toEqual([...EXPECTED_EXPORTS].sort());
   });
 
-  it("still leaves T5.1b's hooks unbuilt, and says so", () => {
-    // Not an idle assertion. When T5.1b lands, this test fails and has to be updated — which is
-    // the moment to move those names from "deliberately absent" to "covered by the conformance
-    // types above". Without it, the two would simply appear one day with nothing checking them.
-    for (const hook of T5_1B_HOOKS) {
-      expect(Object.keys(barrel), `${hook} belongs to T5.1b`).not.toContain(hook);
+  it("still leaves T5.2's and T5.3's components unbuilt, and says so", () => {
+    // Not an idle assertion, and it has already earned its place once: it failed the moment
+    // `useTrackList` and `useTrackDraft` were exported, which is what forced them into the exact
+    // checks above rather than letting them appear unverified.
+    for (const name of NOT_YET_BUILT) {
+      expect(Object.keys(barrel), `${name} is not built yet`).not.toContain(name);
     }
   });
 
@@ -177,11 +228,17 @@ describe("@mapatlas/react's public surface", () => {
     // extra optional parameter is a leaked seam, and a missing return member is a broken promise.
     // Callable at runtime, not merely present as a name: a type-only export would not appear in
     // `Object.keys` at all, but a re-exported constant would.
-    for (const hook of [barrel.useTrackRecorder, barrel.useEventLog, barrel.useOfflineRegions]) {
+    for (const hook of [
+      barrel.useTrackRecorder,
+      barrel.useEventLog,
+      barrel.useOfflineRegions,
+      barrel.useTrackList,
+      barrel.useTrackDraft,
+    ]) {
       expect(hook).toBeTypeOf("function");
     }
-    expect(parametersMatch).toEqual([true, true, true]);
-    expect(returnsMatch).toEqual([true, true, true]);
-    expect(shapesMatch).toEqual([true, true, true, true]);
+    expect(parametersMatch).toEqual([true, true, true, true, true]);
+    expect(returnsMatch).toEqual([true, true, true, true, true]);
+    expect(shapesMatch).toEqual([true, true, true, true, true, true, true]);
   });
 });

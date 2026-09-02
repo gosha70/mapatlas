@@ -8,6 +8,10 @@ export type { EventLogBinding } from "./use-event-log.js";
 export { useEventLog } from "./use-event-log.js";
 export type { OfflineRegionsBinding } from "./use-offline-regions.js";
 export { useOfflineRegions } from "./use-offline-regions.js";
+export type { TrackDraftBinding, UseTrackDraftOptions } from "./use-track-draft.js";
+export { useTrackDraft } from "./use-track-draft.js";
+export type { TrackListBinding } from "./use-track-list.js";
+export { useTrackList } from "./use-track-list.js";
 export type { TrackRecorderBinding, UseTrackRecorderOptions } from "./use-track-recorder.js";
 export { useTrackRecorder } from "./use-track-recorder.js";
 

@@ -10,10 +10,7 @@ import {
 } from "./licence.mjs";
 import { contourTiles, levelsFor, traceContours } from "./contour.mjs";
 import { productionEnvelope, tilesInRange } from "./mercator.mjs";
-import { encodePng } from "./png.mjs";
 import { assertMinimumElevation, parseRegionDeclaration } from "./region.mjs";
-import { TILE_SIZE } from "./mercator.mjs";
-import { renderTerrariumTile } from "./resample.mjs";
 import { SOURCE_SAMPLE_SPACING_DEG } from "./source.mjs";
 import { stitchSurface } from "./surface.mjs";
 import { decodeElevation } from "./terrarium.mjs";
@@ -117,6 +114,7 @@ async function at(stage, work) {
  *   io: object,
  *   probe: (tileId: string) => { status: number } | Promise<{ status: number }>,
  *   readTile: (tileId: string, bounds: [number, number, number, number]) => Promise<object>,
+ *   encodeRasterTile: (surface: object, z: number, x: number, y: number) => Uint8Array,
  *   writeArchive: (path: string, tiles: Array<{ z: number, x: number, y: number, bytes: Uint8Array }>, meta: object) => Promise<{ entries: () => Iterable<{ path: string, text: string }> }>,
  *   finaliseArchive: (from: string, to: string) => void | Promise<void>,
  *   discardArchive: (path: string) => void | Promise<void>,
@@ -219,7 +217,12 @@ export async function runBuild(paths, deps, options = {}) {
         z,
         x,
         y,
-        bytes: encodePng(TILE_SIZE, TILE_SIZE, renderTerrariumTile(stitched, z, x, y)),
+        // Through the seam, not a static import. This is a testability seam for one pipeline
+        // invariant — "no raster tile is encoded before the floor passes" — which a static
+        // `encodePng` made observable by nothing: the audit's deferred-floor mutants survived
+        // every assertion that was not about an unrelated difference. It is not a new
+        // abstraction; production binds it to exactly the composition that used to sit here.
+        bytes: deps.encodeRasterTile(stitched, z, x, y),
       })),
     };
   });

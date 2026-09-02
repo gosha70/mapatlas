@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { BUILD_STAGES, BuildError, runBuild } from "./build.mjs";
 import { CoverageError, requiredTiles } from "./coverage.mjs";
-import { clipBoundsToTile } from "./deps.mjs";
+import { clipBoundsToTile, encodeRasterTile } from "./deps.mjs";
 import { LICENCE_ENTRY_PATH } from "./licence.mjs";
 import { productionEnvelope, tilesInRange } from "./mercator.mjs";
 import { ElevationFloorError } from "./region.mjs";
@@ -128,6 +128,7 @@ function harness(overrides = {}) {
     readBounds: [],
     order: [],
     probe: [],
+    encoded: [],
     wrote: [],
     finalised: [],
     discarded: [],
@@ -157,6 +158,14 @@ function harness(overrides = {}) {
       calls.readBounds.push(bounds);
       const region = overrides.region ?? REGION;
       return (overrides.readTile ?? ((tileId) => cropFor(tileId, region, slope)))(id);
+    },
+    encodeRasterTile: (surface, z, x, y) => {
+      // Counted, then delegated to the production binding: several tests assert real payload
+      // bytes (distinct payloads per address, byte-identical reproduction), so a stub here
+      // would hollow them out. The count is the new observable, not a replacement encoder.
+      calls.encoded.push(`${z}/${x}/${y}`);
+      calls.order.push(`encoded:${z}/${x}/${y}`);
+      return encodeRasterTile(surface, z, x, y);
     },
     writeArchive: (path, tiles, meta) => {
       calls.wrote.push(path);
@@ -294,6 +303,22 @@ describe("the order of the checks", () => {
 
     expect(error.stage).toBe("elevation");
     expect(calls.wrote).toEqual([]);
+  });
+
+  it("encodes no raster tile before the floor has passed", async () => {
+    // **The invariant the 2026-09-02 audit found real but unpinned.** "Expensive work must not
+    // begin before a global rejection condition passes" is exactly what a harmless-looking
+    // pipeline refactor regresses: a message-faithful mutant that deferred the floor comparison
+    // past encoding survived the whole suite, because encoding was a static import observable
+    // by nothing. The assertion is the encoder's invocation count — zero — not the stage label,
+    // not the message, and not the archive writes, all of which the mutant reproduced.
+    const { deps, calls } = harness({ readTile: (id) => cropFor(id, REGION, ramp(REGION, 2400)) });
+    withSnapshot(deps, ["N45E006"]);
+
+    const error = await catchBuild(() => runBuild(PATHS, deps));
+
+    expect(error.stage).toBe("elevation");
+    expect(calls.encoded, "raster tiles were encoded before the floor was judged").toEqual([]);
   });
 });
 
@@ -465,7 +490,12 @@ describe("what the build hands the writer", () => {
 
     const firstFinalise = calls.order.findIndex((e) => e.startsWith("finalised:"));
     const lastWrite = calls.order.map((e) => e.startsWith("wrote:")).lastIndexOf(true);
-    expect(calls.order).toHaveLength(4);
+    const lastEncode = calls.order.map((e) => e.startsWith("encoded:")).lastIndexOf(true);
+    // Four raster encodes, two writes, two finalises — and in that order. The encode entries
+    // arrived with the encodeRasterTile seam; the exact length keeps this the test that notices
+    // a new kind of work appearing in the pipeline at all.
+    expect(calls.order).toHaveLength(8);
+    expect(lastEncode).toBeLessThan(calls.order.findIndex((e) => e.startsWith("wrote:")));
     expect(lastWrite).toBeLessThan(firstFinalise);
   });
 

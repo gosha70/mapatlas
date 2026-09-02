@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, it } from "vitest";
 
+import type { ReactElement } from "react";
+
 import type {
   DraftTrackPoint,
   Id,
   InterpolateTimesOptions,
+  JSONValue,
   LatLng,
   MapEvent,
   OfflineRegion,
@@ -12,6 +15,8 @@ import type {
   SamplingPolicy,
   SensorSource,
   StorageAdapter,
+  TerrainOptions,
+  TileSource,
   Track,
   TrackPoint,
   TrackRecorder,
@@ -19,8 +24,13 @@ import type {
   TrackStatus,
   TrackSummary,
 } from "@mapatlas/core";
+import type { DrawModeHandlers, EventPresentation } from "@mapatlas/maplibre";
 
 import * as barrel from "./index.js";
+// @ts-expect-error MapCanvasProps is intentionally not a named public API — api.md §9 publishes
+// MapCanvas with an inline props shape. If someone re-exports the type this import succeeds, the
+// directive goes stale, and tsc turns red. See the note above MapCanvasPropsMustStayPrivate.
+import type { MapCanvasProps } from "./index.js";
 
 /**
  * What `@mapatlas/react` publishes, against what `api.md` §9 says it publishes.
@@ -85,6 +95,21 @@ type PublishedUseTrackList = (store: StorageAdapter) => {
   remove(id: Id): Promise<void>;
 };
 
+type PublishedMapCanvas = (props: {
+  sources: TileSource[];
+  style?: string | JSONValue;
+  terrain?: TerrainOptions | null;
+  presentation?: EventPresentation;
+  track?: Track;
+  events?: MapEvent[];
+  livePoint?: TrackPoint;
+  draft?: DraftTrackPoint[];
+  drawMode?: boolean;
+  onDraw?: DrawModeHandlers;
+  onMapTap?(at: LatLng): void;
+  onEventClick?(id: Id): void;
+}) => ReactElement;
+
 type PublishedUseTrackDraft = (opts?: { from?: Track; store?: StorageAdapter }) => {
   points: DraftTrackPoint[];
   canUndo: boolean;
@@ -135,7 +160,8 @@ const parametersMatch: [
   Exactly<Parameters<typeof barrel.useOfflineRegions>, Parameters<PublishedUseOfflineRegions>>,
   Exactly<Parameters<typeof barrel.useTrackList>, Parameters<PublishedUseTrackList>>,
   Exactly<Parameters<typeof barrel.useTrackDraft>, Parameters<PublishedUseTrackDraft>>,
-] = [true, true, true, true, true];
+  Exactly<Parameters<typeof barrel.MapCanvas>, Parameters<PublishedMapCanvas>>,
+] = [true, true, true, true, true, true];
 
 const returnsMatch: [
   Exactly<ReturnType<typeof barrel.useTrackRecorder>, ReturnType<PublishedUseTrackRecorder>>,
@@ -143,7 +169,10 @@ const returnsMatch: [
   Exactly<ReturnType<typeof barrel.useOfflineRegions>, ReturnType<PublishedUseOfflineRegions>>,
   Exactly<ReturnType<typeof barrel.useTrackList>, ReturnType<PublishedUseTrackList>>,
   Exactly<ReturnType<typeof barrel.useTrackDraft>, ReturnType<PublishedUseTrackDraft>>,
-] = [true, true, true, true, true];
+  // `api.md` writes `JSX.Element`; under React 19's types that is `ReactElement`, and the
+  // published type above says so explicitly rather than depending on a global JSX namespace.
+  Exactly<ReturnType<typeof barrel.MapCanvas>, ReturnType<PublishedMapCanvas>>,
+] = [true, true, true, true, true, true];
 
 /** No extra member on either side — of the one options object, and of all three returns. */
 const shapesMatch: [
@@ -160,10 +189,14 @@ const shapesMatch: [
   ExactKeys<ReturnType<typeof barrel.useOfflineRegions>, ReturnType<PublishedUseOfflineRegions>>,
   ExactKeys<ReturnType<typeof barrel.useTrackList>, ReturnType<PublishedUseTrackList>>,
   ExactKeys<ReturnType<typeof barrel.useTrackDraft>, ReturnType<PublishedUseTrackDraft>>,
-] = [true, true, true, true, true, true, true];
+  // The complete prop key set — the check that catches an extra optional prop, which mutual
+  // assignability admits (the same hole ExactKeys exists for everywhere else).
+  ExactKeys<Parameters<typeof barrel.MapCanvas>[0], Parameters<PublishedMapCanvas>[0]>,
+] = [true, true, true, true, true, true, true, true];
 
 /** What the package exports today. Compared as a set, so an addition is as visible as a removal. */
 const EXPECTED_EXPORTS = [
+  "MapCanvas",
   "PACKAGE_NAME",
   "useEventLog",
   "useOfflineRegions",
@@ -179,10 +212,11 @@ const EXPECTED_EXPORTS = [
  * were asserted absent, the assertion failed the moment they reached the barrel, and that is
  * what forced them into the exact checks above instead of appearing with nothing verifying them.
  */
-const NOT_YET_BUILT = ["MapCanvas", "EventComposer"] as const;
+const NOT_YET_BUILT = ["EventComposer"] as const;
 
 /** Internal to the package: seams and test infrastructure that must never reach a consumer. */
 const MUST_NOT_ESCAPE = [
+  "MapCanvasInternal",
   "browserRecorderEnvironment",
   "renderHook",
   "createEventLog",
@@ -193,12 +227,31 @@ const MUST_NOT_ESCAPE = [
   "useTrackRecorderInternal",
 ] as const;
 
+/**
+ * The hole the runtime export-set check cannot see: a **type-only** export never appears in
+ * `Object.keys(barrel)`. `api.md` §9 publishes `MapCanvas` with an inline props shape and no
+ * named props type, so `MapCanvasProps` must not be public — and the guard has to be a compile
+ * error, not a runtime assertion.
+ *
+ * The alias is deliberately *used* below. A bare `@ts-expect-error` on an import would stay
+ * satisfied even after someone re-exported the type, because the unused-import diagnostic lands
+ * on the same line and consumes the directive; referencing the alias keeps "unused" off the
+ * table, so re-exporting the type makes the directive itself stale and `tsc` turns red.
+ */
+// **The binding is used, deliberately.** A bare guarded import would stay green even after the
+// type was re-exported, because the unused-import diagnostic lands on the same line and consumes
+// the directive. Referencing it keeps "unused" off the table: when the export is absent the
+// import errors and the directive eats exactly that; when it appears, nothing on that line
+// errors and the stale directive itself fails the compile.
+type MapCanvasPropsMustStayPrivate = MapCanvasProps;
+const propsTypeStaysPrivate: MapCanvasPropsMustStayPrivate | undefined = undefined;
+
 describe("@mapatlas/react's public surface", () => {
   it("reports its package identity", () => {
     expect(barrel.PACKAGE_NAME).toBe("@mapatlas/react");
   });
 
-  it("exports the five published hooks and nothing else", () => {
+  it("exports the five published hooks, the map component, and nothing else", () => {
     // A set comparison rather than three `toBeDefined` checks: those would pass while the barrel
     // quietly grew an export nobody reviewed, and the barrel is the package's whole contract.
     expect(Object.keys(barrel).sort()).toEqual([...EXPECTED_EXPORTS].sort());
@@ -214,6 +267,9 @@ describe("@mapatlas/react's public surface", () => {
   });
 
   it("keeps its internal seams and test harness off the barrel", () => {
+    // Anchors the type-level guard above so nothing is unused; the real check is the compile.
+    expect(propsTypeStaysPrivate).toBeUndefined();
+
     // `browserRecorderEnvironment` exists so ADR-0026's ownership rules can be proven by
     // counting calls; `renderHook` imports react-dom, a devDependency. Neither is a consumer's
     // business, and the packaging gate would fail on the second if it ever shipped.
@@ -234,11 +290,12 @@ describe("@mapatlas/react's public surface", () => {
       barrel.useOfflineRegions,
       barrel.useTrackList,
       barrel.useTrackDraft,
+      barrel.MapCanvas,
     ]) {
       expect(hook).toBeTypeOf("function");
     }
-    expect(parametersMatch).toEqual([true, true, true, true, true]);
-    expect(returnsMatch).toEqual([true, true, true, true, true]);
-    expect(shapesMatch).toEqual([true, true, true, true, true, true, true]);
+    expect(parametersMatch).toEqual([true, true, true, true, true, true]);
+    expect(returnsMatch).toEqual([true, true, true, true, true, true]);
+    expect(shapesMatch).toEqual([true, true, true, true, true, true, true, true]);
   });
 });

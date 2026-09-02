@@ -31,34 +31,32 @@ export function useOfflineRegions(store: OfflineRegionStore): OfflineRegionsBind
   const [regions, setRegions] = useState<OfflineRegion[]>([]);
 
   /**
-   * Which *context* a load belongs to — bumped when the store is replaced.
+   * Which *context* a load would belong to — bumped when the store is replaced changes.
    *
-   * A slower `list` for a replaced store must not overwrite a newer one, and downloading a
-   * region is slow enough that a consumer may well swap stores while one is in flight.
+   * Read **before** issuing a request, never when publishing one. Publishing is guarded by the
+   * sequence alone, and comparing the context there as well is redundant: every context change
+   * re-runs the effect, which issues a load, which bumps the sequence before awaiting — so a
+   * stale context always implies a stale sequence. Mutation showed it: dropping the comparison
+   * changed no test.
    */
   const context = useRef(0);
   /**
-   * Which load is the newest — bumped once per `list` issued.
+   * Which load is the newest — bumped once per request issued, before awaiting.
    *
-   * **Context alone is not enough, and this is the second race found here.** The context token
-   * only changes when the store does, so an initial list and a post-mutation list *in the same
-   * context* carry the same token. If the mutation's list publishes and the initial list then
-   * resolves with its older snapshot, that snapshot passes a context-only guard and silently
-   * undoes the mutation. Ordering between two loads needs a token that orders them.
+   * This is the guard that orders things: two loads in one context are separated by nothing
+   * else.
    */
   const issued = useRef(0);
 
-  const load = useCallback(async (current: OfflineRegionStore, at: number): Promise<void> => {
+  const load = useCallback(async (current: OfflineRegionStore): Promise<void> => {
     const sequence = (issued.current += 1);
     const listed = await current.list();
-    // Both: the right store, and still the newest request for it.
-    if (context.current === at && issued.current === sequence) setRegions(listed);
+    if (issued.current === sequence) setRegions(listed);
   }, []);
 
   useEffect(() => {
     context.current += 1;
-    const at = context.current;
-    void load(store, at).catch(() => {
+    void load(store).catch(() => {
       // A failed initial list leaves what was already shown rather than blanking it. The
       // consumer's error surface is theirs to build; inventing one here would be a policy.
     });
@@ -81,7 +79,7 @@ export function useOfflineRegions(store: OfflineRegionStore): OfflineRegionsBind
       // is no longer the one on screen, and asking it for its regions would be a request whose
       // answer could only ever be discarded.
       if (context.current !== at) return;
-      await load(current, at);
+      await load(current);
     },
     [load],
   );

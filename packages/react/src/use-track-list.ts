@@ -29,36 +29,41 @@ export function useTrackList(store: StorageAdapter): TrackListBinding {
   const [tracks, setTracks] = useState<TrackSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
-  /** Which *context* a load belongs to — bumped when the store is replaced. */
+  /**
+   * Which *context* a load would belong to — bumped when the store is replaced.
+   *
+   * Read **before** issuing a request, never when publishing one. Publishing is guarded by the
+   * sequence alone, and comparing the context there as well is redundant: every context change
+   * re-runs the effect, which issues a load, which bumps the sequence before awaiting — so a
+   * stale context always implies a stale sequence. Mutation showed it: dropping the comparison
+   * changed no test in any of the three hooks that had it.
+   */
   const context = useRef(0);
   /**
-   * Which load is the newest — bumped once per request issued.
+   * Which load is the newest — bumped once per request issued, before awaiting.
    *
-   * Both guards, as in the other hooks and for the two distinct reasons: the context says which
-   * store, and the sequence orders two loads *within* one store. An initial list and a
-   * post-delete list share a context, so nothing but a sequence can stop the slower one
-   * publishing over the newer.
+   * This is the guard that orders things. An initial list and a post-delete list share a
+   * context, so nothing but a sequence can stop the slower one publishing over the newer.
    */
   const issued = useRef(0);
 
-  const load = useCallback(async (current: StorageAdapter, at: number): Promise<void> => {
+  const load = useCallback(async (current: StorageAdapter): Promise<void> => {
     const sequence = (issued.current += 1);
     setLoading(true);
     try {
       const listed = await current.listTrackSummaries();
-      if (context.current === at && issued.current === sequence) setTracks(listed);
+      if (issued.current === sequence) setTracks(listed);
     } finally {
       // **Only the newest request may clear `loading`.** An older one settling first would
       // report the list as settled while the request whose answer will actually be shown is
       // still in flight — a spinner that stops before the thing it was waiting for arrives.
-      if (context.current === at && issued.current === sequence) setLoading(false);
+      if (issued.current === sequence) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     context.current += 1;
-    const at = context.current;
-    void load(store, at).catch(() => {
+    void load(store).catch(() => {
       // An initial failure has no published error field to occupy, so it keeps whatever was
       // already shown rather than blanking the list. `loading` is ended by the `finally` above.
     });
@@ -67,7 +72,7 @@ export function useTrackList(store: StorageAdapter): TrackListBinding {
   const refresh = useCallback(async (): Promise<void> => {
     // Explicit, so its failure reaches the caller — unlike the initial load, which nobody asked
     // for and which has nowhere to report.
-    await load(store, context.current);
+    await load(store);
   }, [load, store]);
 
   const remove = useCallback(
@@ -76,10 +81,12 @@ export function useTrackList(store: StorageAdapter): TrackListBinding {
       // No optimistic filter: a rejected delete would otherwise leave the row gone from a list
       // whose store still holds it, and the consumer's next act is usually to free space.
       await store.deleteTrack(id);
-      // Not merely "do not publish" — do not *list*. The store this deletion belonged to is no
-      // longer the one on screen, and its answer could only be discarded.
+      // **Not a saved read — a correctness guard.** Issuing this list would bump the sequence,
+      // and the *replacement* store's list, still in flight, would then find itself stale and
+      // refuse to publish: it would never arrive and `loading` would never clear, because of a
+      // mutation belonging to a store the consumer has already left.
       if (context.current !== at) return;
-      await load(store, at);
+      await load(store);
     },
     [load, store],
   );

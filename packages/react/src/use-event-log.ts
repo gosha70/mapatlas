@@ -55,34 +55,28 @@ export function useEventLogInternal(
   const [events, setEvents] = useState<MapEvent[]>([]);
 
   /**
-   * Which *context* a load belongs to — bumped when the store or `trackId` changes.
+   * Which *context* a load would belong to — bumped when the store or `trackId` changes changes.
    *
-   * A token rather than a boolean, because the hazard is not only "after unmount": a list for
-   * `trackId: A` can resolve *after* one for `B` and overwrite it, leaving the component showing
-   * another track's events with no error anywhere. Every load captures the token it began in,
-   * and only a load still in the current context may set state.
+   * Read **before** issuing a request, never when publishing one. Publishing is guarded by the
+   * sequence alone, and comparing the context there as well is redundant: every context change
+   * re-runs the effect, which issues a load, which bumps the sequence before awaiting — so a
+   * stale context always implies a stale sequence. Mutation showed it: dropping the comparison
+   * changed no test.
    */
   const context = useRef(0);
   /**
-   * Which load is the newest — bumped once per `list` issued.
+   * Which load is the newest — bumped once per request issued, before awaiting.
    *
-   * **Context alone is not enough.** The context token only changes when the store or `trackId`
-   * does, so an initial list and a post-mutation list *in the same context* carry the same
-   * token. If the mutation's list publishes and the initial list then resolves with its older
-   * snapshot, that snapshot passes a context-only guard and silently undoes the mutation.
-   * Ordering between two loads needs a token that orders them.
+   * This is the guard that orders things: two loads in one context are separated by nothing
+   * else.
    */
   const issued = useRef(0);
 
-  const load = useCallback(
-    async (current: EventLog, id: Id | undefined, at: number): Promise<void> => {
-      const sequence = (issued.current += 1);
-      const listed = await current.list(id);
-      // Both: the right log and track, and still the newest request for them.
-      if (context.current === at && issued.current === sequence) setEvents(listed);
-    },
-    [],
-  );
+  const load = useCallback(async (current: EventLog, id: Id | undefined): Promise<void> => {
+    const sequence = (issued.current += 1);
+    const listed = await current.list(id);
+    if (issued.current === sequence) setEvents(listed);
+  }, []);
 
   useEffect(() => {
     // Incremented **here**, at the start of each run, which is what makes the previous load
@@ -91,8 +85,7 @@ export function useEventLogInternal(
     // a state update on a torn-down root is inert. Verified by mutation rather than reasoned
     // about: adding one changed no test, so it is not here.
     context.current += 1;
-    const at = context.current;
-    void load(log, trackId, at).catch(() => {
+    void load(log, trackId).catch(() => {
       // A failed initial list leaves the previous events rather than blanking the view; the
       // consumer's own error path is not this hook's to invent.
     });
@@ -113,7 +106,7 @@ export function useEventLogInternal(
       // Not merely "do not publish" — do not *list* at all: the log this mutation belonged to is
       // no longer the one on screen, and its answer could only ever be discarded.
       if (context.current !== at) return;
-      await load(current, id, at);
+      await load(current, id);
     },
     [load],
   );

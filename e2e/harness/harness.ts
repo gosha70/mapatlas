@@ -12,22 +12,9 @@ import { recoverInterruptedTrack } from "@mapatlas/core";
 import type { Track } from "@mapatlas/core";
 import { createIdbStorageAdapter } from "@mapatlas/storage-idb";
 import { createWebTrackRecorder } from "@mapatlas/recorder-web";
-// The renderer's stylesheet is the **consumer's** to load, and this harness is a consumer.
-// Without it markers lay out in normal flow rather than absolutely against the map, so a
-// mark sits wherever the document happens to put it — generally outside the map entirely.
-import "maplibre-gl/dist/maplibre-gl.css";
-
-// MapLibre 6 loads its worker as a separate module, resolved relative to the *importing*
-// chunk. Under a bundler that rewrites imports — Vite's optimised dependency chunks here —
-// that resolution lands beside the rewritten chunk instead of beside the package, and the
-// request 404s. Nothing errors: the map is constructed, the style parses, sources emit
-// `sourcedata`, and then nothing is ever painted because no tile is ever built.
-//
-// `?worker&url` asks the bundler for a URL it will actually serve, and `setWorkerUrl` tells
-// MapLibre to use it. This is a **consumer** responsibility — the engine cannot do it,
-// because the correct URL depends on the consumer's bundler — and it is documented as one.
-import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
-import { setWorkerUrl } from "maplibre-gl";
+// One MapLibre setup for every harness entry — stylesheet and worker URL, both consumer
+// responsibilities. Shared with the React entry, so the two cannot drift.
+import "./maplibre-bootstrap.js";
 
 import { createMapController } from "@mapatlas/maplibre";
 import type { MapController, MapControllerOptions } from "@mapatlas/maplibre";
@@ -101,8 +88,6 @@ declare global {
     };
   }
 }
-
-setWorkerUrl(maplibreWorkerUrl);
 
 function mapContainer(): HTMLElement {
   const element = document.createElement("div");

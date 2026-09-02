@@ -41,6 +41,15 @@ export default defineConfig({
       "@mapatlas/maplibre": fileURLToPath(
         new URL("../../packages/maplibre/dist/index.js", import.meta.url),
       ),
+      // Harness-only: MapCanvas is deliberately not on the package barrel until T5.2's
+      // checkpoint 3. The component mounted is the public-shaped one; the deep path is the
+      // harness's established privilege, same as the controller probes above.
+      "@mapatlas/react/map-canvas": fileURLToPath(
+        new URL("../../packages/react/dist/map-canvas.js", import.meta.url),
+      ),
+      "@mapatlas/react": fileURLToPath(
+        new URL("../../packages/react/dist/index.js", import.meta.url),
+      ),
       "@mapatlas/recorder-web": fileURLToPath(
         new URL("../../packages/recorder-web/dist/index.js", import.meta.url),
       ),

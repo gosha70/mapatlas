@@ -18,6 +18,9 @@ import { parseTileId } from "./coverage.mjs";
 import { parseBounds } from "./region.mjs";
 import { writeArchive } from "./archive.mjs";
 import { LICENCE_ENTRY_PATH, NOT_FOR_DISTRIBUTION_PATH } from "./licence.mjs";
+import { TILE_SIZE } from "./mercator.mjs";
+import { encodePng } from "./png.mjs";
+import { renderTerrariumTile } from "./resample.mjs";
 import { cogUrl, readTerrariumCrop } from "./source.mjs";
 import { decodeElevation } from "./terrarium.mjs";
 
@@ -183,6 +186,26 @@ export function clipBoundsToTile(bounds, tileId) {
  *   readTile: (tileId: string, bounds: [number, number, number, number]) => Promise<object>,
  * }}
  */
+/**
+ * Encode one raster tile of the stitched surface, as the build's `encodeRasterTile` seam.
+ *
+ * Exactly the composition `build.mjs` used to inline. It lives behind the deps object for one
+ * reason: "no tile is encoded before the elevation floor passes" is an invariant about work not
+ * done, and a static import made that unobservable — the audit's deferred-floor mutants survived
+ * everything except assertions about unrelated differences. A seam whose only job is to be
+ * countable is still a seam worth having when the property it pins is "expensive work must not
+ * begin before a global rejection condition passes".
+ *
+ * @param {object} surface
+ * @param {number} z
+ * @param {number} x
+ * @param {number} y
+ * @returns {Uint8Array}
+ */
+export function encodeRasterTile(surface, z, x, y) {
+  return encodePng(TILE_SIZE, TILE_SIZE, renderTerrariumTile(surface, z, x, y));
+}
+
 export function createSourceDeps({ fetchImpl = globalThis.fetch, bucketUrl } = {}) {
   const fetchRange = rangeFetcher(fetchImpl);
   return {

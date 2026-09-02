@@ -23,7 +23,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { runBuild } from "./build.mjs";
-import { createArchiveWriter, createSourceDeps } from "./deps.mjs";
+import { createArchiveWriter, createSourceDeps, encodeRasterTile } from "./deps.mjs";
 
 /** Where the checked-in inputs live, relative to the repository root. */
 export const DEFAULT_PATHS = Object.freeze({
@@ -70,6 +70,7 @@ export async function buildFixture(options = {}) {
       io,
       probe: source.probe,
       readTile: source.readTile,
+      encodeRasterTile,
       // The build chooses each archive's payload type and compression per call; the writer holds
       // no opinion about which archives exist.
       writeArchive: createArchiveWriter(),

@@ -246,6 +246,66 @@ describe("EventComposer — save and cancel (T5.3 increment 1)", () => {
     expect(second.saves[0]?.fields?.["rating"]).toBe("two");
   });
 
+  it("allows two options, or two categories, to share a value", async () => {
+    // The contract restricts neither `options[].value` nor `categories[].value`, and unlike a
+    // duplicate `FieldSpec.key` nothing is lost: both choices deliberately mean the same
+    // stored value, and the labels are presentation. Keying the <option> elements by value
+    // would make these siblings collide in reconciliation.
+    const fields: FieldSpec[] = [
+      {
+        key: "choice",
+        label: "Choice",
+        type: "select",
+        options: [
+          { value: "same", label: "Choice A" },
+          { value: "same", label: "Choice B" },
+        ],
+      },
+    ];
+    const categories = [
+      { value: "dup", label: "Category A" },
+      { value: "dup", label: "Category B" },
+    ];
+
+    const warnings: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      warnings.push(args.map((arg) => String(arg)).join(" "));
+    });
+    let mounted: Mounted;
+    try {
+      mounted = await mount({ fields, categories, occurredAt: 9 });
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Both labels survive: a duplicate key can drop a sibling outright.
+    const choice = field<HTMLSelectElement>(mounted.container, "choice");
+    expect([...choice.options].map((option) => option.textContent)).toEqual([
+      "",
+      "Choice A",
+      "Choice B",
+    ]);
+    const category = find<HTMLSelectElement>(mounted.container, ".mapatlas-composer-category");
+    expect([...category.options].map((option) => option.textContent)).toEqual([
+      "",
+      "Category A",
+      "Category B",
+    ]);
+
+    // The second of each shares the first's value, and Save emits that shared value.
+    choice.selectedIndex = 2;
+    category.selectedIndex = 2;
+    await clickSave(mounted.container);
+    expect(mounted.saves).toStrictEqual([
+      { occurredAt: 9, media: [], tags: [], category: "dup", fields: { choice: "same" } },
+    ]);
+
+    expect(
+      warnings.filter((line) => line.includes("same key")),
+      "React reported colliding sibling keys",
+    ).toEqual([]);
+  });
+
   it("keeps an empty-string option value as a value, distinct from no selection", async () => {
     // `FieldSpec.options[].value` is an unrestricted string, so `""` is a legal consumer value
     // and must survive as `""`. Reading missing-ness as `value === ""` would confuse the two:

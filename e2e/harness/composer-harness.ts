@@ -27,6 +27,8 @@ interface ComposerSetup {
   categories?: { value: string; label: string }[];
   occurredAt?: number;
   mode?: "comment" | "photo";
+  /** Attach an analyzer that reports egress by actually attempting a network request. */
+  analyzer?: { id: string; runsRemotely: boolean };
   /** Persist through a real IndexedDB adapter, as a consumer would, instead of recording. */
   persist?: boolean;
 }
@@ -48,6 +50,8 @@ declare global {
       readBlob(key: string): Promise<number[] | undefined>;
       /** Which element currently has focus, by class — the mode scenarios read this. */
       activeClass(): string;
+      /** URLs the analyzer actually requested. The disclosure scenario expects none. */
+      egress: string[];
     };
   }
 }
@@ -96,12 +100,30 @@ window.composer = {
     return [...new Uint8Array(await blob.arrayBuffer())];
   },
   activeClass: () => document.activeElement?.className ?? "",
+  egress: [],
   setup: (config) => {
     window.composer.saves = [];
     window.composer.cancels = 0;
     window.composer.storeCalls = [];
     window.composer.persistedId = undefined;
-    const { persist = false, ...composerProps } = config;
+    window.composer.egress = [];
+    const { persist = false, analyzer: spec, ...composerProps } = config;
+    // A real egress boundary: this analyzer does not pretend to send, it sends. The scenario
+    // asserts on requests the page actually made, so "nothing was sent" is a fact about the
+    // network rather than about a fake's bookkeeping.
+    const analyzer =
+      spec === undefined
+        ? undefined
+        : {
+            id: spec.id,
+            runsRemotely: spec.runsRemotely,
+            analyze: async () => {
+              const url = `/__analyzer__/${spec.id}`;
+              window.composer.egress.push(url);
+              await fetch(url).catch(() => undefined);
+              return { labels: [{ label: "sent", confidence: 1 }], model: spec.id };
+            },
+          };
     instance += 1;
     root.render(
       createElement(
@@ -111,6 +133,7 @@ window.composer = {
           key: instance,
           at: { lat: 59.33, lng: 18.06 },
           store: persist ? persistent : recordingStore(),
+          ...(analyzer === undefined ? {} : { analyzer }),
           onSave: (input) => {
             window.composer.saves.push(input);
             if (!persist) return;

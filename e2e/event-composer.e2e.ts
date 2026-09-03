@@ -168,3 +168,63 @@ test("removing the photo returns the composition to the photo-free path", async 
   const media = await page.evaluate(() => window.composer.saves[0]?.media);
   expect(media, "a removed photo still reached the handoff").toEqual([]);
 });
+
+/**
+ * T5.3 increment 3 — the egress gate, asserted against the network rather than a fake.
+ *
+ * The harness analyzer really issues a request when it runs, and the scenario watches the
+ * page's requests. "Opening the disclosure sends nothing" is therefore a claim about traffic
+ * that left the page, which is the only form of that claim worth making for an egress
+ * boundary (ADR-0005).
+ */
+test("a remote analyzer sends nothing until the disclosure is accepted", async ({ page }) => {
+  const requested: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/__analyzer__/")) requested.push(request.url());
+  });
+
+  await page.evaluate(() =>
+    window.composer.setup({ analyzer: { id: "cloud-vision", runsRemotely: true } }),
+  );
+  await captureThroughChooser(page);
+
+  // Activating the control opens the disclosure and sends nothing. The egress assertions come
+  // first, and after a settle: a negative about asynchronous behaviour asserted immediately
+  // would pass because nothing has had time to happen yet, which is indistinguishable from
+  // nothing ever happening. This ordering is also what makes a removed gate fail *here*,
+  // reporting the photo as sent, rather than further down on a missing panel.
+  await page.locator(".mapatlas-composer-analyze").click();
+  await page.waitForTimeout(250);
+  expect(
+    await page.evaluate(() => window.composer.egress),
+    "the analyzer ran before the user agreed",
+  ).toEqual([]);
+  expect(requested, "the photo left the page before the user agreed").toEqual([]);
+  await expect(page.locator(".mapatlas-composer-disclosure")).toBeVisible();
+  await expect(page.locator(".mapatlas-composer-disclosure")).toContainText("cloud-vision");
+
+  // Declining sends nothing either.
+  await page.locator(".mapatlas-composer-disclosure-decline").click();
+  await expect(page.locator(".mapatlas-composer-disclosure")).toHaveCount(0);
+  await page.waitForTimeout(250);
+  expect(requested, "declining still sent the photo").toEqual([]);
+
+  // Only the explicit accept does.
+  await page.locator(".mapatlas-composer-analyze").click();
+  await page.locator(".mapatlas-composer-disclosure-accept").click();
+  await expect(page.locator(".mapatlas-composer-suggestions")).toBeVisible();
+  expect(requested).toHaveLength(1);
+  expect(requested[0]).toContain("/__analyzer__/cloud-vision");
+});
+
+test("a local analyzer runs without a disclosure", async ({ page }) => {
+  await page.evaluate(() =>
+    window.composer.setup({ analyzer: { id: "on-device", runsRemotely: false } }),
+  );
+  await captureThroughChooser(page);
+  await page.locator(".mapatlas-composer-analyze").click();
+
+  await expect(page.locator(".mapatlas-composer-suggestions")).toBeVisible();
+  expect(await page.evaluate(() => window.composer.egress)).toEqual(["/__analyzer__/on-device"]);
+  await expect(page.locator(".mapatlas-composer-disclosure")).toHaveCount(0);
+});

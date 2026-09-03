@@ -47,6 +47,11 @@ export default defineConfig({
       "@mapatlas/react/map-canvas": fileURLToPath(
         new URL("../../packages/react/dist/map-canvas.js", import.meta.url),
       ),
+      // Harness-only, same privilege: EventComposer stays off the barrel until T5.3's
+      // closure increment.
+      "@mapatlas/react/event-composer": fileURLToPath(
+        new URL("../../packages/react/dist/event-composer.js", import.meta.url),
+      ),
       "@mapatlas/react": fileURLToPath(
         new URL("../../packages/react/dist/index.js", import.meta.url),
       ),

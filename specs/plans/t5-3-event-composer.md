@@ -92,6 +92,33 @@ boolean `false` survives, `date` strings pass through without timezone conversio
 stores the option's `value` not its `label`, and a missing `required` value blocks Save with the
 composed state intact.
 
+**`FieldSpec.key` is an identity, so duplicates are rejected, not resolved.** `MapEvent.fields`
+is keyed by `key`, so two specs sharing one cannot both survive Save — the public input would
+admit a configuration the output model cannot represent, the same class of hole as the empty
+string above. Last-wins is the wrong default for a field logger: it discards a value the
+consumer asked to record, silently, after the user has typed it. A duplicate is therefore
+**invalid configuration** and throws at render, surfacing on first paint. Falsified by removing
+the check, and by resolving order instead of rejecting — both must fail. Uniqueness is a
+*component* semantic, not a platform one, so it is pinned in the unit lane with no browser case.
+
+**`""` is not reserved, so missing-ness is selection identity, not the empty string.**
+`FieldSpec.options[].value` is an unrestricted string, and so is `categories[].value`: an option
+may legally carry `value: ""` and must round-trip as `""`, satisfying `required` like any other
+value. Reading missing-ness as `control.value === ""` would make a real consumer value
+indistinguishable from no selection — a *displayed-text* reading of exactly the kind this section
+forbids. The discriminator is therefore the composer's own placeholder option **being selected**
+(it is the option at index 0), for both `select` fields and `categories`. Falsified by replacing
+the identity check with `value === ""`, which must fail. Text and `date` inputs are unaffected:
+there `""` is the absence of an entry, and empty optional inputs omit their key, as above.
+
+**An absent `occurredAt` is captured once, when this composition opens.** The tap is when the
+event happened, not the Save — a composer left open for five minutes while the user types must
+not stamp the moment they finished. Validation failures and retries retain that timestamp; Save
+never resamples the clock, and a new moment needs a new mount. This is a *choice* between two
+readings of "defaults to now" that checkpoint 0 left open; it is settled here and in `api.md`
+before being pinned by a test, because a mutation is only evidence against a contract that
+exists.
+
 ## Testing lanes
 
 - **Vitest / happy-dom** — state, fields, the handoff table, analyzer tokens, everything counted
@@ -110,8 +137,8 @@ composed state intact.
 0. **Plan/ADR checkpoint** — this plan; the ownership table recorded as the decision it is; the
    `capture` wording clarification into `api.md` and `tasks.md`.
 1. **Fields, comment, category, occurredAt, save/cancel** — no photo, no analyzer. The value
-   bars above; exact `onSave` shape; cancel means **no `onSave` ever**, and `onCancel` fires
-   exactly once.
+   bars above, including empty-string option values and capture-once `occurredAt`; exact
+   `onSave` shape; cancel means **no `onSave` ever**, and `onCancel` fires exactly once.
 2. **Photo + blob handoff** — the ownership table implemented and falsified row by row; the
    real-browser scenario (file selection, both modes, consumer persistence round-trip).
 3. **Analyzer flow** — disclosure gate, empty-suggestion path, confirm-to-`analysis`, late-result
@@ -132,4 +159,11 @@ composed state intact.
 - let an older analyze result overwrite a newer one → the sequence token fails;
 - auto-populate `tags` from confirmed labels → the analysis-only bar fails;
 - drop the disclosure for a remote analyzer → the gate test fails;
-- coerce `0`/`false`/date values → the value bars fail.
+- coerce `0`/`false`/date values → the value bars fail;
+- read a select's missing-ness as `value === ""` → the empty-string option bar fails, for
+  both a `select` field and a category;
+- resample the clock at Save, or on a retry after a blocked Save → the capture-once bar fails;
+- read a supplied `occurredAt` with `||` rather than `??` → epoch 0 is a supplied value, and
+  the absent-only default bar fails;
+- accept duplicate `FieldSpec.key`s, whether by dropping the check or by resolving them
+  last-wins → the key-identity bar fails.

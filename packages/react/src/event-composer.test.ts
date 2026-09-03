@@ -4,7 +4,14 @@
 import { act } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { MapEvent, StorageAdapter } from "@mapatlas/core";
+import { noopAnalyzer } from "@mapatlas/core";
+import type {
+  AnalyzeInput,
+  MapEvent,
+  MediaAnalysis,
+  MediaAnalyzer,
+  StorageAdapter,
+} from "@mapatlas/core";
 
 import { EventComposer } from "./event-composer.js";
 import type { FieldSpec } from "./event-composer.js";
@@ -1169,5 +1176,773 @@ describe("EventComposer — the photo handoff (T5.3 increment 2, ADR-0027)", () 
         `capture must be requested in ${mode} mode`,
       ).toBe("environment");
     }
+  });
+});
+
+describe("EventComposer — the analyzer (T5.3 increment 3, ADR-0005)", () => {
+  /** An analyzer whose `analyze` parks until the test answers it, and records its inputs. */
+  function parkedAnalyzer(over: { id?: string; runsRemotely?: boolean } = {}): {
+    analyzer: MediaAnalyzer;
+    calls: AnalyzeInput[];
+    settle: (result: MediaAnalysis, at?: number) => void;
+    fail: (why: string, at?: number) => void;
+  } {
+    const calls: AnalyzeInput[] = [];
+    const pending: { resolve: (r: MediaAnalysis) => void; reject: (e: Error) => void }[] = [];
+    return {
+      analyzer: {
+        id: over.id ?? "test-analyzer",
+        runsRemotely: over.runsRemotely ?? false,
+        analyze: (input) => {
+          calls.push(input);
+          return new Promise<MediaAnalysis>((resolve, reject) => {
+            pending.push({ resolve, reject });
+          });
+        },
+      },
+      calls,
+      settle: (result, at = 0) => {
+        pending[at]?.resolve(result);
+      },
+      fail: (why, at = 0) => {
+        pending[at]?.reject(new Error(why));
+      },
+    };
+  }
+
+  const LABELLED: MediaAnalysis = {
+    labels: [{ label: "a heron", confidence: 0.91 }],
+    model: "test-model",
+  };
+
+  /** Mount with a photo selected and an analyzer attached. */
+  async function withAnalyzer(
+    analyzer: MediaAnalyzer,
+    overrides: Partial<ComposerProps> = {},
+  ): Promise<Mounted & { store: ReturnType<typeof parkedStore> }> {
+    const store = parkedStore();
+    const saves: SaveInput[] = [];
+    let cancelled = 0;
+    const harness = await renderComponent(EventComposer, {
+      at: { lat: 59.33, lng: 18.06 },
+      store: store.adapter,
+      occurredAt: 9,
+      analyzer,
+      onSave: (input: SaveInput) => {
+        saves.push(input);
+      },
+      onCancel: () => {
+        cancelled += 1;
+      },
+      ...overrides,
+    } as ComposerProps);
+    await selectPhoto(harness.container, photoFile());
+    return {
+      container: harness.container,
+      rerender: harness.rerender,
+      unmount: harness.unmount,
+      saves,
+      cancels: () => cancelled,
+      store,
+    } as never;
+  }
+
+  async function clickAnalyze(container: ParentNode): Promise<void> {
+    await act(async () => {
+      find<HTMLButtonElement>(container, ".mapatlas-composer-analyze").click();
+    });
+  }
+
+  it("runs only on an explicit action, on the in-memory file", async () => {
+    const local = parkedAnalyzer();
+    const c = await withAnalyzer(local.analyzer);
+    expect(local.calls, "selecting a photo must not analyse it").toEqual([]);
+
+    await clickAnalyze(c.container);
+    expect(local.calls).toHaveLength(1);
+    // The in-memory File, not a persisted copy — nothing has been written at this point.
+    expect(local.calls[0]?.blob).toBeInstanceOf(File);
+    expect(c.store.calls, "analysis must not touch storage").toEqual([]);
+  });
+
+  it("gates a remote analyzer behind a disclosure that sends nothing when opened", async () => {
+    const remote = parkedAnalyzer({ id: "cloud-vision", runsRemotely: true });
+    const c = await withAnalyzer(remote.analyzer);
+
+    await clickAnalyze(c.container);
+    expect(remote.calls, "activating a remote analyzer sent the photo without consent").toEqual([]);
+    const panel = find<HTMLElement>(c.container, ".mapatlas-composer-disclosure");
+    expect(panel.textContent, "the disclosure must name where the photo goes").toContain(
+      "cloud-vision",
+    );
+    expect(panel.textContent).toContain("off this device");
+
+    // Declining still sends nothing.
+    await act(async () => {
+      find<HTMLButtonElement>(c.container, ".mapatlas-composer-disclosure-decline").click();
+    });
+    expect(remote.calls).toEqual([]);
+    expect(c.container.querySelector(".mapatlas-composer-disclosure")).toBeNull();
+
+    // Only the explicit accept causes egress.
+    await clickAnalyze(c.container);
+    await act(async () => {
+      find<HTMLButtonElement>(c.container, ".mapatlas-composer-disclosure-accept").click();
+    });
+    expect(remote.calls).toHaveLength(1);
+  });
+
+  it("needs no disclosure for a local analyzer", async () => {
+    const local = parkedAnalyzer({ runsRemotely: false });
+    const c = await withAnalyzer(local.analyzer);
+    await clickAnalyze(c.container);
+    expect(c.container.querySelector(".mapatlas-composer-disclosure")).toBeNull();
+    expect(local.calls).toHaveLength(1);
+  });
+
+  it("shows an empty result as a result, through the path any analyzer uses", async () => {
+    // noopAnalyzer is the shipped analyzer and returns no labels. "Analysed, found nothing"
+    // must be distinguishable from "never analysed", and must not be special-cased by id.
+    const c = await withAnalyzer(noopAnalyzer);
+    expect(
+      c.container.querySelector(".mapatlas-composer-suggestions"),
+      "nothing has been analysed yet",
+    ).toBeNull();
+
+    await clickAnalyze(c.container);
+    await flush();
+
+    const empty = find<HTMLElement>(c.container, ".mapatlas-composer-suggestions-empty");
+    expect(empty.textContent).toContain("found nothing");
+    // And it is confirmable like any other result: an empty analysis is a fact worth keeping.
+    await act(async () => {
+      find<HTMLButtonElement>(c.container, ".mapatlas-composer-confirm").click();
+    });
+    await clickSave(c.container);
+    c.store.puts[0]?.settle("k");
+    await flush();
+    expect(c.saves[0]?.media?.[0]?.analysis).toStrictEqual({ labels: [], model: "noop" });
+  });
+
+  it("puts a confirmed analysis in MediaRef.analysis and nowhere else", async () => {
+    const local = parkedAnalyzer();
+    const c = await withAnalyzer(local.analyzer);
+    await clickAnalyze(c.container);
+    local.settle(LABELLED);
+    await flush();
+
+    expect(
+      find<HTMLElement>(c.container, ".mapatlas-composer-suggestion-list").textContent,
+    ).toContain("a heron");
+    await act(async () => {
+      find<HTMLButtonElement>(c.container, ".mapatlas-composer-confirm").click();
+    });
+    await clickSave(c.container);
+    c.store.puts[0]?.settle("blob-key");
+    await flush();
+
+    const saved = c.saves[0];
+    expect(saved?.media?.[0]?.analysis).toStrictEqual(LABELLED);
+    // The bar: a label is a suggestion, not a decision. It may not become a tag, a category
+    // or a field — those are the consumer's to fill.
+    expect(saved?.tags, "a confirmed label became a tag").toEqual([]);
+    expect(saved?.category).toBeUndefined();
+    expect(saved?.fields).toBeUndefined();
+  });
+
+  it("drops an unconfirmed suggestion at Save", async () => {
+    const local = parkedAnalyzer();
+    const c = await withAnalyzer(local.analyzer);
+    await clickAnalyze(c.container);
+    local.settle(LABELLED);
+    await flush();
+    // Deliberately not confirmed.
+    await clickSave(c.container);
+    c.store.puts[0]?.settle("blob-key");
+    await flush();
+
+    expect(
+      c.saves[0]?.media?.[0]?.analysis,
+      "an unconfirmed suggestion was stored",
+    ).toBeUndefined();
+  });
+
+  it("reports a failed analysis without blocking the Save", async () => {
+    const local = parkedAnalyzer();
+    const c = await withAnalyzer(local.analyzer);
+    await clickAnalyze(c.container);
+    local.fail("model unavailable");
+    await flush();
+
+    expect(
+      find<HTMLElement>(c.container, ".mapatlas-composer-analysis-notice").textContent,
+    ).toContain("could not be analysed");
+    await clickSave(c.container);
+    c.store.puts[0]?.settle("blob-key");
+    await flush();
+    expect(c.saves).toHaveLength(1);
+    expect(c.saves[0]?.media?.[0]?.analysis).toBeUndefined();
+  });
+
+  it("lets the newest request win when an older one answers later", async () => {
+    const local = parkedAnalyzer();
+    const c = await withAnalyzer(local.analyzer);
+    await clickAnalyze(c.container);
+    await clickAnalyze(c.container);
+    expect(local.calls).toHaveLength(2);
+
+    // The newer answers first, then the older — the order that breaks a naive "last write".
+    local.settle({ labels: [{ label: "newer", confidence: 0.5 }] }, 1);
+    await flush();
+    local.settle({ labels: [{ label: "older", confidence: 0.9 }] }, 0);
+    await flush();
+
+    const shown = find<HTMLElement>(c.container, ".mapatlas-composer-suggestion-list").textContent;
+    expect(shown, "an older result overwrote a newer one").toContain("newer");
+    expect(shown).not.toContain("older");
+  });
+});
+
+describe("EventComposer — analyzer invalidation, leg by leg (ADR-0005)", () => {
+  /**
+   * Each leg is its own test on purpose. The legs share one token, so a single test would
+   * pass while most of the events that must move that token did not — the shared mechanism
+   * is exactly what makes per-leg coverage necessary rather than redundant.
+   */
+  function parked(): {
+    analyzer: MediaAnalyzer;
+    settle: (r: MediaAnalysis) => void;
+    fail: (why: string) => void;
+  } {
+    const pending: { resolve: (r: MediaAnalysis) => void; reject: (e: Error) => void }[] = [];
+    return {
+      analyzer: {
+        id: "test-analyzer",
+        runsRemotely: false,
+        analyze: () =>
+          new Promise<MediaAnalysis>((resolve, reject) => {
+            pending.push({ resolve, reject });
+          }),
+      },
+      settle: (r) => pending[0]?.resolve(r),
+      fail: (why) => pending[0]?.reject(new Error(why)),
+    };
+  }
+
+  const RESULT: MediaAnalysis = { labels: [{ label: "late", confidence: 1 }] };
+
+  async function analysing(
+    analyzer: MediaAnalyzer,
+  ): Promise<Mounted & { store: ReturnType<typeof parkedStore> }> {
+    const store = parkedStore();
+    const saves: SaveInput[] = [];
+    let cancelled = 0;
+    const harness = await renderComponent(EventComposer, {
+      at: { lat: 59.33, lng: 18.06 },
+      store: store.adapter,
+      occurredAt: 9,
+      analyzer,
+      onSave: (input: SaveInput) => {
+        saves.push(input);
+      },
+      onCancel: () => {
+        cancelled += 1;
+      },
+    } as ComposerProps);
+    await selectPhoto(harness.container, photoFile());
+    await act(async () => {
+      find<HTMLButtonElement>(harness.container, ".mapatlas-composer-analyze").click();
+    });
+    return {
+      container: harness.container,
+      rerender: harness.rerender,
+      unmount: harness.unmount,
+      saves,
+      cancels: () => cancelled,
+      store,
+    } as never;
+  }
+
+  /** No suggestion list anywhere — the late answer was not adopted. */
+  function assertDiscarded(container: ParentNode): void {
+    expect(
+      container.querySelector(".mapatlas-composer-suggestions"),
+      "a superseded analysis was adopted",
+    ).toBeNull();
+  }
+
+  it("discards a resolution arriving after the photo was replaced", async () => {
+    const a = parked();
+    const c = await analysing(a.analyzer);
+    await selectPhoto(c.container, photoFile("other.jpg"));
+    a.settle(RESULT);
+    await flush();
+    assertDiscarded(c.container);
+  });
+
+  it("discards a resolution arriving after the photo was removed", async () => {
+    const a = parked();
+    const c = await analysing(a.analyzer);
+    await act(async () => {
+      find<HTMLButtonElement>(c.container, ".mapatlas-composer-photo-remove").click();
+    });
+    a.settle(RESULT);
+    await flush();
+
+    // Asserting the absence of the list *here* would pass for the wrong reason: the whole
+    // analysis block lives inside the photo block, so with no photo it is absent however the
+    // resolution was handled. The harm would only surface on the next photo — suggestions
+    // computed from the removed one, presented as describing the new one — so that is what is
+    // asserted. Note honestly that choosing that next photo invalidates on its own, so this
+    // pins the end-to-end contract rather than the removal bump specifically; the mutation
+    // that removes only that bump survives, which the source comment records.
+    await selectPhoto(c.container, photoFile("replacement.jpg"));
+    assertDiscarded(c.container);
+  });
+
+  it("discards a *rejection* that arrives after the request was superseded", async () => {
+    // The failure path needs the same token check as the success path. Without it, a request
+    // nobody is waiting for reports an error about a photo that is no longer in the
+    // composition — noise the user cannot act on and cannot connect to anything they did.
+    const a = parked();
+    const c = await analysing(a.analyzer);
+    await selectPhoto(c.container, photoFile("replacement.jpg"));
+    a.fail("model unavailable");
+    await flush();
+
+    expect(
+      c.container.querySelector(".mapatlas-composer-analysis-notice"),
+      "a superseded request reported its failure",
+    ).toBeNull();
+  });
+
+  it("discards a resolution arriving after cancel", async () => {
+    const a = parked();
+    const c = await analysing(a.analyzer);
+    await clickCancel(c.container);
+    a.settle(RESULT);
+    await flush();
+    assertDiscarded(c.container);
+  });
+
+  it("discards a resolution arriving after Save, and never stores it", async () => {
+    const a = parked();
+    const c = await analysing(a.analyzer);
+    await clickSave(c.container);
+    a.settle(RESULT);
+    await flush();
+    c.store.puts[0]?.settle("blob-key");
+    await flush();
+
+    assertDiscarded(c.container);
+    expect(
+      c.saves[0]?.media?.[0]?.analysis,
+      "an analysis that arrived after Save was stored anyway",
+    ).toBeUndefined();
+  });
+
+  // Not independently falsifiable, and labelled rather than dressed up: React makes a state
+  // update on an unmounted component a no-op, so this passes with or without composer-side
+  // invalidation. It is kept as a smoke test that a late resolution cannot throw.
+  it("survives a resolution arriving after unmount", async () => {
+    const a = parked();
+    const c = await analysing(a.analyzer);
+    await c.unmount();
+    const warnings: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      warnings.push(args.map((arg) => String(arg)).join(" "));
+    });
+    try {
+      a.settle(RESULT);
+      await flush();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(warnings).toEqual([]);
+  });
+
+  it("discards a resolution arriving after the analyzer prop was replaced", async () => {
+    const first = parked();
+    const second = parked();
+    const c = await analysing(first.analyzer);
+    await c.rerender({
+      at: { lat: 59.33, lng: 18.06 },
+      store: c.store.adapter,
+      occurredAt: 9,
+      analyzer: second.analyzer,
+      onSave: () => undefined,
+      onCancel: () => undefined,
+    } as ComposerProps);
+
+    first.settle(RESULT);
+    await flush();
+    assertDiscarded(c.container);
+  });
+
+  it("withdraws a disclosure accepted for a different analyzer", async () => {
+    // Consent to send a photo to one service is not consent to send it to the next.
+    const first = { id: "first-cloud", runsRemotely: true, analyze: () => Promise.resolve(RESULT) };
+    const secondCalls: AnalyzeInput[] = [];
+    const second: MediaAnalyzer = {
+      id: "second-cloud",
+      runsRemotely: true,
+      analyze: (input) => {
+        secondCalls.push(input);
+        return Promise.resolve(RESULT);
+      },
+    };
+    const store = parkedStore();
+    const harness = await renderComponent(EventComposer, {
+      at: { lat: 59.33, lng: 18.06 },
+      store: store.adapter,
+      occurredAt: 9,
+      analyzer: first,
+      onSave: () => undefined,
+      onCancel: () => undefined,
+    } as ComposerProps);
+    await selectPhoto(harness.container, photoFile());
+    await act(async () => {
+      find<HTMLButtonElement>(harness.container, ".mapatlas-composer-analyze").click();
+    });
+    await act(async () => {
+      find<HTMLButtonElement>(harness.container, ".mapatlas-composer-disclosure-accept").click();
+    });
+
+    await harness.rerender({
+      at: { lat: 59.33, lng: 18.06 },
+      store: store.adapter,
+      occurredAt: 9,
+      analyzer: second,
+      onSave: () => undefined,
+      onCancel: () => undefined,
+    } as ComposerProps);
+
+    await act(async () => {
+      find<HTMLButtonElement>(harness.container, ".mapatlas-composer-analyze").click();
+    });
+    expect(secondCalls, "acceptance carried over to a different analyzer").toEqual([]);
+    expect(
+      find<HTMLElement>(harness.container, ".mapatlas-composer-disclosure").textContent,
+    ).toContain("second-cloud");
+  });
+});
+
+describe("EventComposer — analyzer authorization and admission (ADR-0005, ADR-0027)", () => {
+  /**
+   * A remote analyzer that counts every call. These bars are about *egress*, so the oracle is
+   * the number of times `analyze` actually ran — not what the UI shows about it. Result
+   * invalidation cannot help here: by the time an answer exists the photo has already been
+   * sent, so authorization has to be withdrawn before the call, not after it.
+   */
+  function counting(id = "cloud-vision"): { analyzer: MediaAnalyzer; calls: AnalyzeInput[] } {
+    const calls: AnalyzeInput[] = [];
+    return {
+      analyzer: {
+        id,
+        runsRemotely: true,
+        analyze: (input) => {
+          calls.push(input);
+          return Promise.resolve({ labels: [], model: id });
+        },
+      },
+      calls,
+    };
+  }
+
+  async function mounted(
+    analyzer: MediaAnalyzer,
+  ): Promise<Mounted & { store: ReturnType<typeof parkedStore> }> {
+    const store = parkedStore();
+    const saves: SaveInput[] = [];
+    let cancelled = 0;
+    const harness = await renderComponent(EventComposer, {
+      at: { lat: 59.33, lng: 18.06 },
+      store: store.adapter,
+      occurredAt: 9,
+      analyzer,
+      onSave: (input: SaveInput) => {
+        saves.push(input);
+      },
+      onCancel: () => {
+        cancelled += 1;
+      },
+    } as ComposerProps);
+    await selectPhoto(harness.container, photoFile());
+    return {
+      container: harness.container,
+      rerender: harness.rerender,
+      unmount: harness.unmount,
+      saves,
+      cancels: () => cancelled,
+      store,
+    } as never;
+  }
+
+  const analyse = async (container: ParentNode): Promise<void> => {
+    await act(async () => {
+      find<HTMLButtonElement>(container, ".mapatlas-composer-analyze").click();
+    });
+  };
+  const accept = async (container: ParentNode): Promise<void> => {
+    await act(async () => {
+      find<HTMLButtonElement>(container, ".mapatlas-composer-disclosure-accept").click();
+    });
+  };
+  const disclosure = (container: ParentNode): Element | null =>
+    container.querySelector(".mapatlas-composer-disclosure");
+
+  it("closes a disclosure opened for a photo that has been replaced", async () => {
+    const remote = counting();
+    const c = await mounted(remote.analyzer);
+    await analyse(c.container);
+    expect(disclosure(c.container)).not.toBeNull();
+
+    await selectPhoto(c.container, photoFile("second.jpg"));
+
+    // The panel was opened to authorise sending the *first* photo. Leaving it actionable
+    // would let the next click send a photo no disclosure was ever shown for.
+    expect(disclosure(c.container), "a stale disclosure stayed actionable").toBeNull();
+    expect(remote.calls).toEqual([]);
+  });
+
+  it("consumes consent with the send it authorises", async () => {
+    // Acceptance authorises *one* request. If it outlived that request, the second and later
+    // activations would send the photo with no disclosure at all — a gate on the first
+    // action rather than on the action.
+    const remote = counting();
+    const c = await mounted(remote.analyzer);
+    await analyse(c.container);
+    await accept(c.container);
+    expect(remote.calls, "the accepted send should have happened").toHaveLength(1);
+
+    await analyse(c.container);
+    expect(remote.calls, "a second send reused the first send's consent").toHaveLength(1);
+    expect(disclosure(c.container), "the second request was not disclosed").not.toBeNull();
+  });
+
+  it("closes a disclosure when the photo it was opened for is removed", async () => {
+    // The removal leg, actually removing — the replacement leg is a separate test, and a
+    // title covering both while exercising one overstates what is falsified.
+    const remote = counting();
+    const c = await mounted(remote.analyzer);
+    await analyse(c.container);
+    expect(disclosure(c.container)).not.toBeNull();
+
+    await act(async () => {
+      find<HTMLButtonElement>(c.container, ".mapatlas-composer-photo-remove").click();
+    });
+    expect(disclosure(c.container), "a disclosure outlived the photo it named").toBeNull();
+    expect(remote.calls).toEqual([]);
+  });
+
+  it("refuses an Accept activated reentrantly from onCancel", async () => {
+    // Closing the panel is a state update, and React has not committed it when `onCancel`
+    // runs. A consumer that retains the button and activates it from its own cancel callback
+    // therefore reaches the handler on a settled composer — the DOM being about to disappear
+    // is not the same as the handler being unreachable.
+    const remote = counting();
+    const store = parkedStore();
+    // A holder, because the cancel callback has to close over the reference before the
+    // button exists — the composer must be rendered before it can be retained.
+    const retained: { button?: HTMLButtonElement } = {};
+    const harness = await renderComponent(EventComposer, {
+      at: { lat: 59.33, lng: 18.06 },
+      store: store.adapter,
+      occurredAt: 9,
+      analyzer: remote.analyzer,
+      onSave: () => undefined,
+      onCancel: () => {
+        retained.button?.click();
+      },
+    } as ComposerProps);
+    await selectPhoto(harness.container, photoFile());
+    await analyse(harness.container);
+    retained.button = find<HTMLButtonElement>(
+      harness.container,
+      ".mapatlas-composer-disclosure-accept",
+    );
+
+    await clickCancel(harness.container);
+    expect(remote.calls, "a cancelled composer sent the photo from its own callback").toEqual([]);
+  });
+
+  it("keeps analyzer feedback out of the persistence notice, and the reverse", async () => {
+    const failing: MediaAnalyzer = {
+      id: "broken",
+      runsRemotely: false,
+      analyze: () => Promise.reject(new Error("model unavailable")),
+    };
+    const c = await mounted(failing);
+
+    // An analysis failure belongs to this photo and this request.
+    await analyse(c.container);
+    await flush();
+    expect(
+      find<HTMLElement>(c.container, ".mapatlas-composer-analysis-notice").textContent,
+    ).toContain("could not be analysed");
+
+    // A new photo does not inherit the previous photo's error.
+    await selectPhoto(c.container, photoFile("second.jpg"));
+    expect(
+      c.container.querySelector(".mapatlas-composer-analysis-notice"),
+      "a new photo inherited the old photo's analysis error",
+    ).toBeNull();
+
+    // And an analysis must not erase an unconfirmed *write*, whose outcome is still unknown.
+    await clickSave(c.container);
+    c.store.puts[0]?.fail("network died after the bytes left");
+    await flush();
+    const storage = find<HTMLElement>(c.container, ".mapatlas-composer-notice");
+    expect(storage.textContent).toContain("may or may not");
+    await analyse(c.container);
+    expect(
+      find<HTMLElement>(c.container, ".mapatlas-composer-notice").textContent,
+      "starting an analysis erased an unresolved storage warning",
+    ).toContain("may or may not");
+
+    // Nor does swapping the photo. The write's outcome is unknown whatever the user does
+    // next; only resolving that write can retire the warning.
+    await selectPhoto(c.container, photoFile("third.jpg"));
+    expect(
+      find<HTMLElement>(c.container, ".mapatlas-composer-notice").textContent,
+      "changing the photo erased an unresolved storage warning",
+    ).toContain("may or may not");
+  });
+
+  /** A *local* analyzer: no disclosure stands between a click and the call, so admission is
+   *  the only thing that can refuse it. With a remote analyzer the withdrawn consent hides a
+   *  missing lifecycle gate — the gate must be tested where nothing else can pass for it. */
+  function countingLocal(): { analyzer: MediaAnalyzer; calls: AnalyzeInput[] } {
+    const calls: AnalyzeInput[] = [];
+    return {
+      analyzer: {
+        id: "on-device",
+        runsRemotely: false,
+        analyze: (input) => {
+          calls.push(input);
+          return Promise.resolve({ labels: [], model: "on-device" });
+        },
+      },
+      calls,
+    };
+  }
+
+  it("admits no local analyzer work after cancel", async () => {
+    const local = countingLocal();
+    const c = await mounted(local.analyzer);
+    await analyse(c.container);
+    expect(local.calls).toHaveLength(1);
+
+    await clickCancel(c.container);
+    await analyse(c.container);
+    expect(local.calls, "a cancelled composer ran the analyzer").toHaveLength(1);
+  });
+
+  it("admits no local analyzer work after handoff, or while a Save is pending", async () => {
+    const local = countingLocal();
+    const c = await mounted(local.analyzer);
+    await clickSave(c.container);
+
+    await analyse(c.container);
+    expect(local.calls, "the analyzer ran while a Save was in flight").toEqual([]);
+
+    c.store.puts[0]?.settle("blob-key");
+    await flush();
+    await analyse(c.container);
+    expect(local.calls, "the analyzer ran after handoff").toEqual([]);
+  });
+
+  it("admits no analyzer work after cancel", async () => {
+    const remote = counting();
+    const c = await mounted(remote.analyzer);
+    await analyse(c.container);
+    await accept(c.container);
+    expect(remote.calls).toHaveLength(1);
+
+    await clickCancel(c.container);
+    await analyse(c.container);
+    await act(async () => {
+      const button = c.container.querySelector<HTMLButtonElement>(
+        ".mapatlas-composer-disclosure-accept",
+      );
+      button?.click();
+    });
+    expect(remote.calls, "a cancelled composer started analyzer work").toHaveLength(1);
+  });
+
+  it("admits no analyzer work after handoff, or while a Save is pending", async () => {
+    const remote = counting();
+    const c = await mounted(remote.analyzer);
+    await clickSave(c.container);
+
+    // The write is parked: the composer is on its way to a handoff and takes no new work.
+    await analyse(c.container);
+    expect(remote.calls, "analysis started while a Save was in flight").toEqual([]);
+
+    c.store.puts[0]?.settle("blob-key");
+    await flush();
+    expect(c.saves).toHaveLength(1);
+
+    await analyse(c.container);
+    expect(remote.calls, "analysis started after handoff").toEqual([]);
+  });
+
+  it("settles the visible analysis state when the composition ends", async () => {
+    const label = (container: ParentNode): string | null =>
+      find<HTMLButtonElement>(container, ".mapatlas-composer-analyze").textContent;
+    const parkedAnalyzer: MediaAnalyzer = {
+      id: "slow",
+      runsRemotely: false,
+      analyze: () => new Promise<MediaAnalysis>(() => undefined),
+    };
+
+    const cancelled = await mounted(parkedAnalyzer);
+    await analyse(cancelled.container);
+    expect(label(cancelled.container)).toBe("Analysing…");
+    await clickCancel(cancelled.container);
+    // The token bump discards the answer, but the *user* is looking at a spinner that will
+    // never resolve on a composer that is finished.
+    expect(label(cancelled.container), "a cancelled composer stayed at Analysing…").toBe(
+      "Analyse photo",
+    );
+
+    const saved = await mounted(parkedAnalyzer);
+    await analyse(saved.container);
+    await clickSave(saved.container);
+    saved.store.puts[0]?.settle("blob-key");
+    await flush();
+    expect(label(saved.container), "a saved composer stayed at Analysing…").toBe("Analyse photo");
+  });
+
+  it("closes an open disclosure when the composition ends", async () => {
+    const remote = counting();
+    const c = await mounted(remote.analyzer);
+    await analyse(c.container);
+    expect(disclosure(c.container)).not.toBeNull();
+    await clickCancel(c.container);
+    expect(disclosure(c.container), "a cancelled composer left the send panel open").toBeNull();
+  });
+
+  it("turns a synchronous analyzer throw into the ordinary failure", async () => {
+    // `analyze` is called before any promise chain exists, so an implementation that fails
+    // before returning its promise would otherwise escape the click handler entirely and
+    // leave the button stuck at "Analysing…".
+    const thrower: MediaAnalyzer = {
+      id: "broken",
+      runsRemotely: false,
+      analyze: () => {
+        throw new Error("failed before returning a promise");
+      },
+    };
+    const c = await mounted(thrower);
+    await analyse(c.container);
+    await flush();
+
+    expect(
+      find<HTMLElement>(c.container, ".mapatlas-composer-analysis-notice").textContent,
+    ).toContain("could not be analysed");
+    expect(find<HTMLButtonElement>(c.container, ".mapatlas-composer-analyze").textContent).toBe(
+      "Analyse photo",
+    );
   });
 });

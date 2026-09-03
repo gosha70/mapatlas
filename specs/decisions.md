@@ -748,3 +748,61 @@ autosave whenever a store is present and the resolved interval is positive — s
 to find by default. A consumer needing a custom interval, `autosaveMs: 0`, a custom sensor merge
 or a native recorder uses `recorder:` injection. Stating this now is what stops the hook's options
 from drifting into a duplicate of the recorder's.
+
+## ADR-0027 — `EventComposer` blob ownership, and what a rejection does not establish
+
+**Status.** Accepted 2026-09-02, before T5.3's first implementation increment.
+
+**Context.** The composer writes photo blobs through `StorageAdapter.putBlob` and hands the
+resulting `blobKey` to the consumer through `onSave(input): void` — a callback that cannot
+acknowledge persistence. The storage seam offers no transactions, and the repository's only
+orphan collection (`deleteTrack`, removing blobs referenced only by a track's events) does not
+cover a blob no saved event references. Somebody has to own every moment of that lifecycle, and
+the interface cannot say who; this record does.
+
+**Decision 1 — blobs are written on Save.** The selected `File` stays in memory; preview and
+analysis use it directly. This narrows the orphan window; it does not close it.
+
+**Decision 2 — ownership is positional, and transfers at the callback.** Before Save, nobody
+owns anything durable. From Save until the write settles, the composer owns it: a cancel or
+unmount during the write means the composer best-effort-deletes a landed blob and never calls
+`onSave`. **From the instant `onSave` receives the `blobKey`, the consumer owns it** — the
+composer never deletes it afterwards, unmount included, and a consumer that discards the input
+owns the orphan it chose to make.
+
+**Decision 3 — a rejection establishes no storage outcome.** The adapter contract does not
+promise that a rejected `putBlob` wrote nothing: a remote adapter can persist the bytes and lose
+the response, and the composer then holds no key with which to clean up. A rejected Save
+therefore retains the draft, never calls `onSave`, and promises no orphan-free retry — the retry
+may orphan the first, unlocatable write. Symmetrically, a rejected `deleteBlob` means deletion is
+**unconfirmed**, not that the blob remains. The write row runs against a fake whose write lands
+before it rejects, and the cleanup row against a separate delete-then-reject fake — but the fakes
+are the environment, not the proof: both storage outcomes present identically to the composer, so
+what is asserted are the observables — error wording acknowledging an unconfirmed write, the
+draft retained, and `onSave` unreachable.
+
+**Decision 4 — a Save snapshots its complete handoff.** The assembled input, the store, and the
+`onSave`/`onCancel` recipients are captured when Save starts, and completion uses the snapshot:
+delivering store A's key to a replacement callback associated with store B would hand the
+consumer a key that resolves nowhere in B.
+
+**Decision 5 — handoff and cancellation are terminal; rejection is not.** After `onSave` or
+`onCancel`, the instance is inert; a new composition is a new mount, and at most one of
+`onSave`/`onCancel` fires per instance. The write limit is per *attempt*, not per instance —
+a lifetime cap would forbid the retry Decision 3 exists to govern, and a photo-free Save
+performs zero writes. Precisely: **one `putBlob` per photo-bearing Save attempt, no concurrent
+duplicate attempts, a rejected attempt permits retry unless cancelled, and handoff or
+cancellation permanently prevents further submissions.** Pinned as a sequence: reject → retry
+succeeds → a subsequent Save is ignored.
+
+**Decision 6 — cleanup-failure reporting.** While mounted, a failed cleanup is retained in state
+and shown as an inline notice — UI, not new API. After unmount there is no channel: the failure
+is logged as a `console.warn` and acknowledged as unreported, because a reporting callback would
+be API that §9 does not publish.
+
+**Also clarified, in `api.md` and `specs/tasks.md` alongside this record:**
+`capture="environment"` requests a *preferred camera facing mode, with fallback permitted*
+(W3C html-media-capture); it guarantees neither a rear camera nor a camera at all. And
+`mode: "photo"` means the capture affordance is the initially active, accessible control, with
+the picker invoked through a user action — not an automatic camera launch, which user-activation
+rules do not permit anyway.

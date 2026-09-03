@@ -991,7 +991,10 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   blobs via the required `store`; `mode` selects comment-first or camera-first; consumer
   `fields`/`categories` render into `MapEvent.fields`/`category`; settable `occurredAt`; if an
   `analyzer` is passed, "Analyze photo" → suggested labels the user confirms. _AC:_ saves a
-  `MapEvent` whose `media[0].blobKey` resolves in the store; `mode: "photo"` opens capture first;
+  `MapEvent` whose `media[0].blobKey` resolves in the store; `mode: "photo"` opens capture first —
+  meaning the capture affordance is the initially active control, with the picker invoked by a
+  user action; `capture="environment"` requests a preferred facing mode with fallback permitted,
+  not a rear-camera guarantee (ADR-0027);
   a `FieldSpec` of each type round-trips into `fields`; analyze path works with `noopAnalyzer`;
   remote-analyzer disclosure shown when `runsRemotely`.
 - **T5.4 `<TripReview>`.** Map (sources/terrain/presentation) + replay + events/photos + stats

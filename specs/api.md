@@ -1049,7 +1049,17 @@ export function useOfflineRegions(store: OfflineRegionStore): {
 };
 
 /** A consumer-defined input rendered by <EventComposer> into `MapEvent.fields`.
- *  The engine renders the label and stores the value; it assigns no meaning. */
+ *  The engine renders the label and stores the value; it assigns no meaning.
+ *
+ *  `key` values must be **unique within one composer**: `MapEvent.fields` is keyed by them, so
+ *  duplicates cannot both survive. A duplicate is invalid configuration and is rejected — the
+ *  composer throws at render — rather than resolved by order, which would silently drop a value.
+ *
+ *  `options[].value` is an unrestricted string: `""` is a legal option value and round-trips
+ *  as `""`. For a `select`, "no selection" is the composer's own placeholder option being
+ *  selected — never the empty string — so a consumer option carrying `""` is a value, not a
+ *  gap, and satisfies `required`. The same holds for `EventComposer`'s `categories`.
+ *  (ADR-0027) */
 export interface FieldSpec {
   key: string; label: string;
   type: "text" | "number" | "boolean" | "select" | "date";
@@ -1078,7 +1088,10 @@ export function EventComposer(props: {
   mode?: "comment" | "photo";
   fields?: FieldSpec[];                  // consumer-defined inputs → MapEvent.fields
   categories?: { value: string; label: string }[];
-  occurredAt?: number;                   // defaults to now; settable when re-creating a trip
+  /** Defaults once, when this composer instance opens — the tap is when it happened, not the
+   *  Save. Never resampled: validation failures and retries keep the opening timestamp, and a
+   *  new moment needs a new mount. Settable when re-creating a trip. (ADR-0027) */
+  occurredAt?: number;
   onSave(input: Omit<MapEvent, "id" | "position">): void; onCancel(): void;
 }): JSX.Element;
 

@@ -1068,10 +1068,13 @@ export function MapCanvas(props: {
 
 export function EventComposer(props: {
   at: LatLng;
-  store: StorageAdapter;                 // captured photos are written here as blobs
+  store: StorageAdapter;                 // captured photos are written here as blobs, on Save
   analyzer?: MediaAnalyzer;
-  /** Which affordance opens first — the comment field or the camera. Drives the
-   *  "one tap → note" vs "one tap → photo" consumer choice. */
+  /** Which affordance is initially active — the comment field or the photo capture. Drives the
+   *  "one tap → note" vs "one tap → photo" consumer choice. `"photo"` makes capture the first,
+   *  focused control; the picker itself opens on a user action, and `capture="environment"`
+   *  requests a preferred camera facing mode with fallback permitted (W3C html-media-capture) —
+   *  it guarantees neither a rear camera nor a camera at all. (ADR-0027) */
   mode?: "comment" | "photo";
   fields?: FieldSpec[];                  // consumer-defined inputs → MapEvent.fields
   categories?: { value: string; label: string }[];

@@ -15,9 +15,10 @@
 import { StrictMode, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import type { StorageAdapter } from "@mapatlas/core";
+import type { MapEvent, StorageAdapter } from "@mapatlas/core";
 import type { FieldSpec } from "@mapatlas/react/event-composer";
 import { EventComposer } from "@mapatlas/react/event-composer";
+import { createIdbStorageAdapter } from "@mapatlas/storage-idb";
 
 type SaveInput = Parameters<Parameters<typeof EventComposer>[0]["onSave"]>[0];
 
@@ -25,6 +26,9 @@ interface ComposerSetup {
   fields?: FieldSpec[];
   categories?: { value: string; label: string }[];
   occurredAt?: number;
+  mode?: "comment" | "photo";
+  /** Persist through a real IndexedDB adapter, as a consumer would, instead of recording. */
+  persist?: boolean;
 }
 
 declare global {
@@ -36,6 +40,14 @@ declare global {
       cancels: number;
       /** Every store method the composer invoked; the numeric scenarios expect none. */
       storeCalls: string[];
+      /** Id of the event the consumer persisted, when `persist` was asked for. */
+      persistedId?: string | undefined;
+      /** The persisted event as it was read back out of IndexedDB. */
+      readEvent(id: string): Promise<MapEvent | undefined>;
+      /** The bytes behind a blob key, as a plain array so it crosses the bridge. */
+      readBlob(key: string): Promise<number[] | undefined>;
+      /** Which element currently has focus, by class — the mode scenarios read this. */
+      activeClass(): string;
     };
   }
 }
@@ -70,14 +82,26 @@ function recordingStore(): StorageAdapter {
 
 let instance = 0;
 
+/** One real adapter for the whole page, on a database name the scenarios can reason about. */
+const persistent = createIdbStorageAdapter({ databaseName: "mapatlas-composer-e2e" });
+
 window.composer = {
   saves: [],
   cancels: 0,
   storeCalls: [],
+  readEvent: (id) => persistent.getEvent(id),
+  readBlob: async (key) => {
+    const blob = await persistent.getBlob(key);
+    if (blob === undefined) return undefined;
+    return [...new Uint8Array(await blob.arrayBuffer())];
+  },
+  activeClass: () => document.activeElement?.className ?? "",
   setup: (config) => {
     window.composer.saves = [];
     window.composer.cancels = 0;
     window.composer.storeCalls = [];
+    window.composer.persistedId = undefined;
+    const { persist = false, ...composerProps } = config;
     instance += 1;
     root.render(
       createElement(
@@ -86,14 +110,23 @@ window.composer = {
         createElement(EventComposer, {
           key: instance,
           at: { lat: 59.33, lng: 18.06 },
-          store: recordingStore(),
+          store: persist ? persistent : recordingStore(),
           onSave: (input) => {
             window.composer.saves.push(input);
+            if (!persist) return;
+            // What a consumer actually does with the handoff: reattach the position the
+            // composer was opened at, mint an id, and persist. From here the blob is the
+            // consumer's — the round-trip scenario reads it back through the same adapter.
+            const id = `evt-${String(instance)}`;
+            const event: MapEvent = { ...input, id, position: { lat: 59.33, lng: 18.06 } };
+            void persistent.saveEvent(event).then(() => {
+              window.composer.persistedId = id;
+            });
           },
           onCancel: () => {
             window.composer.cancels += 1;
           },
-          ...config,
+          ...composerProps,
         }),
       ),
     );

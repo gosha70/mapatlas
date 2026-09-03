@@ -1,6 +1,21 @@
 // @vitest-environment happy-dom
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * **Convention: never click a node without asserting it is still connected.**
+ *
+ * React 18 attaches listeners at the root container and delegates, so a *detached* node's
+ * `click()` reaches no handler at all — it is a silent no-op, not an error. A test that
+ * retains a button, does something that unmounts it, and then clicks it therefore passes
+ * whatever the component does. Two tests in this file were written that way and were removed
+ * or rewritten once measured; `clickLive` exists so the next one fails loudly instead.
+ *
+ * The corollary, also learned the hard way: to exercise a handler on a node that is *about*
+ * to unmount, both activations must happen inside one `act` — and even then the flush is not
+ * uniform. A click (Decline) leaves the sibling button connected for the rest of the task; a
+ * `change` dispatch on the file input does not. Assert connectivity rather than predicting it.
+ */
+
 import { act } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -162,6 +177,14 @@ async function mount(overrides: Partial<ComposerProps> = {}): Promise<Mounted> {
   };
 }
 
+/** Activate a node, refusing to do so if it has already left the document (see the header). */
+function clickLive(node: HTMLElement, what: string): void {
+  if (!node.isConnected) {
+    throw new Error(`${what} is detached: clicking it would reach no handler and prove nothing`);
+  }
+  node.click();
+}
+
 /** The one element matching `selector`, or a loud failure naming what is missing. */
 function find<T extends Element>(container: ParentNode, selector: string): T {
   const element = container.querySelector<T>(selector);
@@ -179,14 +202,14 @@ function field<T extends HTMLInputElement | HTMLSelectElement>(
 async function clickSave(container: ParentNode): Promise<void> {
   const button = find<HTMLButtonElement>(container, ".mapatlas-composer-save");
   await act(async () => {
-    button.click();
+    clickLive(button, "the Save button");
   });
 }
 
 async function clickCancel(container: ParentNode): Promise<void> {
   const button = find<HTMLButtonElement>(container, ".mapatlas-composer-cancel");
   await act(async () => {
-    button.click();
+    clickLive(button, "the Cancel button");
   });
 }
 
@@ -1680,12 +1703,15 @@ describe("EventComposer — analyzer authorization and admission (ADR-0005, ADR-
 
   const analyse = async (container: ParentNode): Promise<void> => {
     await act(async () => {
-      find<HTMLButtonElement>(container, ".mapatlas-composer-analyze").click();
+      clickLive(find<HTMLButtonElement>(container, ".mapatlas-composer-analyze"), "Analyse");
     });
   };
   const accept = async (container: ParentNode): Promise<void> => {
     await act(async () => {
-      find<HTMLButtonElement>(container, ".mapatlas-composer-disclosure-accept").click();
+      clickLive(
+        find<HTMLButtonElement>(container, ".mapatlas-composer-disclosure-accept"),
+        "Accept",
+      );
     });
   };
   const disclosure = (container: ParentNode): Element | null =>
@@ -1733,6 +1759,61 @@ describe("EventComposer — analyzer authorization and admission (ADR-0005, ADR-
     });
     expect(disclosure(c.container), "a disclosure outlived the photo it named").toBeNull();
     expect(remote.calls).toEqual([]);
+  });
+
+  it("spends one disclosure on exactly one send, however often Accept is activated", async () => {
+    // `setDisclosing(false)` is queued, so between the click and the commit the Accept button
+    // is still mounted and still calls its handler. Admission cannot refuse the second
+    // activation either — the composition is legitimately open in between.
+    const remote = counting();
+    const c = await mounted(remote.analyzer);
+    await analyse(c.container);
+    const button = find<HTMLButtonElement>(c.container, ".mapatlas-composer-disclosure-accept");
+
+    await act(async () => {
+      clickLive(button, "Accept (first activation)");
+      clickLive(button, "Accept (second activation)");
+    });
+
+    expect(remote.calls, "one disclosure authorised two sends").toHaveLength(1);
+  });
+
+  it("voids an outstanding disclosure the moment the photo is removed", async () => {
+    // The reachable, spendable case for the clear inside `endAnalysis`. Removing the photo
+    // leaves the composition open — so admission still permits an accept — and the Accept
+    // button stays connected for the rest of the task in which Remove was activated. Only
+    // the synchronous void refuses it. `clickLive` is what keeps this honest: if a future
+    // React changes the flush and the button detaches, this fails loudly rather than passing
+    // for the reason the deleted photo-change test passed.
+    const remote = counting();
+    const c = await mounted(remote.analyzer);
+    await analyse(c.container);
+    const accepted = find<HTMLButtonElement>(c.container, ".mapatlas-composer-disclosure-accept");
+    const remove = find<HTMLButtonElement>(c.container, ".mapatlas-composer-photo-remove");
+
+    await act(async () => {
+      clickLive(remove, "Remove photo");
+      clickLive(accepted, "Accept after removing the photo");
+    });
+
+    expect(remote.calls, "a disclosure outlived the photo it authorised sending").toEqual([]);
+  });
+
+  it("voids an outstanding disclosure the moment it is declined", async () => {
+    // Same shape, same reason: the decline's re-render has not committed, so the Accept button
+    // is still mounted and still live. Only the synchronous void refuses it.
+    const remote = counting();
+    const c = await mounted(remote.analyzer);
+    await analyse(c.container);
+    const accepted = find<HTMLButtonElement>(c.container, ".mapatlas-composer-disclosure-accept");
+    const declined = find<HTMLButtonElement>(c.container, ".mapatlas-composer-disclosure-decline");
+
+    await act(async () => {
+      clickLive(declined, "Decline");
+      clickLive(accepted, "Accept after declining");
+    });
+
+    expect(remote.calls, "a declined disclosure was still spendable").toEqual([]);
   });
 
   it("refuses an Accept activated reentrantly from onCancel", async () => {

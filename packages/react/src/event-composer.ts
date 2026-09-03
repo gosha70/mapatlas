@@ -227,6 +227,18 @@ export function EventComposer(props: {
    * while it is invisible.
    */
   const analyzeSeq = useRef(0);
+  /**
+   * The one outstanding disclosure, as a **synchronous, single-use authorization** naming the
+   * exact request it authorises.
+   *
+   * `disclosing` cannot carry this. It is React state, so its clearing is queued: until the
+   * commit, the Accept button is still mounted and still calls its handler, and two
+   * activations in one task would start two sends from one disclosure. Nor is admission
+   * enough — the composition is legitimately open in between. Consuming a ref before the
+   * send is what makes one disclosure authorise one request; naming the request in it is what
+   * stops a retained button from spending a disclosure shown for different bytes.
+   */
+  const authorized = useRef<{ source: MediaAnalyzer; file: File } | undefined>(undefined);
   // The object URL to revoke at unmount. State cannot be read from an unmount cleanup that
   // closes over the first render, so the live value is mirrored here.
   const photoUrl = useRef<string | undefined>(undefined);
@@ -244,13 +256,14 @@ export function EventComposer(props: {
     };
   }, []);
 
-  // A replaced analyzer invalidates anything the previous one is still computing, and
-  // withdraws the acceptance the user gave for *its* egress — consent to send a photo to one
-  // service is not consent to send it to the next.
+  // A replaced analyzer invalidates anything the previous one is still computing, and voids
+  // an outstanding disclosure — a panel naming one service cannot authorise a send to the
+  // next. There is no persistent acceptance to withdraw: consent is per request.
   const analyzer = props.analyzer;
   useEffect(() => {
     analyzeSeq.current += 1;
     setAnalyzing(false);
+    authorized.current = undefined;
     setDisclosing(false);
   }, [analyzer]);
 
@@ -434,6 +447,12 @@ export function EventComposer(props: {
   const endAnalysis = (): void => {
     analyzeSeq.current += 1;
     setAnalyzing(false);
+    // Reachable, not defensive. Every caller — Save, Cancel, and `dropAnalysis` from photo
+    // replacement or removal — can run while a disclosure is open, so `authorized` can be
+    // defined here in all of them. Removal is the case that is also *spendable*: it leaves
+    // the composition open, so admission still permits an accept, and the button is still
+    // mounted for the rest of the task in which Remove was activated.
+    authorized.current = undefined;
     setDisclosing(false);
   };
 
@@ -516,6 +535,7 @@ export function EventComposer(props: {
     // activations send the photo with no disclosure at all, which is not a gate on the action
     // but a gate on the first action.
     if (source.runsRemotely) {
+      authorized.current = { source, file };
       setDisclosing(true);
       return;
     }
@@ -529,9 +549,57 @@ export function EventComposer(props: {
     // the moment `onCancel` runs, so a consumer's cancel callback can synchronously activate
     // a button it retained and reach this handler on a settled composer. The DOM being about
     // to disappear is not the same as the handler being unreachable.
-    if (!acceptsWork()) return;
+    const pending = authorized.current;
+    if (pending === undefined) return;
+    // **The second stated belief.** These two checks encode different things — "no
+    // outstanding disclosure" above, "the composition is not terminal" here — and they
+    // coincide only because every terminal transition voids the authorization. Reaching here
+    // with a live authorization on a settled composer would mean that coincidence had broken,
+    // which is a fact worth announcing rather than a case worth quietly refusing.
+    //
+    // The enumeration is of the *transitions*, not of `endAnalysis`'s callers — callers ⊆
+    // transitions is trivially true and proves nothing. Every assignment that makes
+    // `acceptsWork()` false:
+    //   - `outcome = "saved"` on the photo-free path — `save` voids before branching;
+    //   - `outcome = "saved"` after a write lands — `save` already voided, and no disclosure
+    //     can have opened since, because admission refuses while `writing` is true;
+    //   - `outcome = "cancelled"` in `cancel` — voids;
+    //   - `writing = true` in `save` — voids before setting it.
+    // The analyzer's own failure paths are not transitions: the catch touches neither
+    // `outcome` nor `writing`. So this throw is uncovered by design, like the mismatch above,
+    // and a mutation deleting it likewise survives — an **accepted survivor**, not a gap.
+    if (!acceptsWork()) {
+      throw new Error(
+        "EventComposer: a terminal composition still holds an outstanding photo disclosure. " +
+          "Every path that ends a composition must void its authorization to send.",
+      );
+    }
+    // **A stated belief, not a silent branch.** No known route reaches this handler with an
+    // authorization for a different request: every route that could — a changed photo, a
+    // changed analyzer — closes the panel first, and React delegates events at the root, so a
+    // detached button's handler never runs. That is a claim about React's scheduler rather
+    // than about this file, so it is asserted loudly instead of defended quietly: if a future
+    // path (a drop handler, an async source) ever mounts a second way in, this announces it
+    // rather than silently declining and leaving a dead branch nobody can falsify.
+    //
+    // **Accepted survivor.** A mutation deleting this throw passes the suite, and that is the
+    // intended status, not a gap: an invariant nothing can currently violate has no failing
+    // test to write. Do not "fix" it by deleting the assertion.
+    if (pending.source !== source || pending.file !== file) {
+      throw new Error(
+        "EventComposer: a photo disclosure was accepted for a request it does not describe. " +
+          "The disclosure names the exact photo and analyzer it authorises, and no send may " +
+          "reuse another request's consent.",
+      );
+    }
+    authorized.current = undefined;
     setDisclosing(false);
     runAnalysis(source, file);
+  };
+
+  const declineDisclosure = (): void => {
+    authorized.current = undefined;
+    setDisclosing(false);
   };
 
   const keepSuggestions = (result: MediaAnalysis): void => {
@@ -626,9 +694,7 @@ export function EventComposer(props: {
                         {
                           type: "button",
                           className: "mapatlas-composer-disclosure-decline",
-                          onClick: () => {
-                            setDisclosing(false);
-                          },
+                          onClick: declineDisclosure,
                         },
                         "Not now",
                       ),

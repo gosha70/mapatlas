@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import { consoleFor, watchConsole } from "./fixtures/browser.js";
 
@@ -76,4 +77,94 @@ test("typed overflow cannot hand over a non-finite value; correction permits Sav
   await page.locator(".mapatlas-composer-save").click();
   const counts = await page.evaluate(() => window.composer.saves.map((s) => s.fields?.["count"]));
   expect(counts, "a corrected value must go through on the same instance").toEqual([2]);
+});
+
+/**
+ * T5.3 increment 2 — the photo path, in a real browser.
+ *
+ * The file is supplied through an armed `filechooser` opened by **activating the visible
+ * capture affordance**, never through `setInputFiles` on the element. That distinction is the
+ * point: `setInputFiles` writes the input's files directly, so a capture button wired to
+ * nothing at all would still pass. Here, removing the activation wiring fails before
+ * persistence is ever reached.
+ *
+ * No physical-camera claim is made or possible: `capture` requests a preferred facing mode
+ * (W3C html-media-capture) and Chromium under test has no camera.
+ */
+const PHOTO = {
+  name: "field-shot.jpg",
+  mimeType: "image/jpeg",
+  buffer: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]),
+};
+
+/** Open the picker by activating the affordance, and answer it with the fixture. */
+async function captureThroughChooser(page: Page): Promise<void> {
+  const chooser = page.waitForEvent("filechooser");
+  await page.locator(".mapatlas-composer-photo").click();
+  await (await chooser).setFiles(PHOTO);
+}
+
+test("a photo chosen through the picker survives into storage as the same bytes", async ({
+  page,
+}) => {
+  await page.evaluate(() => window.composer.setup({ persist: true, occurredAt: 9 }));
+  await captureThroughChooser(page);
+
+  // The preview proves the selection reached the component, not merely the input element.
+  await expect(page.locator(".mapatlas-composer-preview")).toBeVisible();
+  await page.locator(".mapatlas-composer-save").click();
+
+  await expect.poll(() => page.evaluate(() => window.composer.persistedId)).toBe("evt-1");
+  const stored = await page.evaluate(async () => {
+    const id = window.composer.persistedId;
+    if (id === undefined) return null;
+    const event = await window.composer.readEvent(id);
+    const key = event?.media?.[0]?.blobKey;
+    if (key === undefined) return null;
+    return { mime: event?.media?.[0]?.mime, bytes: await window.composer.readBlob(key) };
+  });
+
+  expect(stored?.mime).toBe("image/jpeg");
+  expect(
+    stored?.bytes,
+    "the bytes read back from IndexedDB are not the bytes that were selected",
+  ).toEqual([...PHOTO.buffer]);
+});
+
+test("photo mode makes capture the initially active control; comment mode does not", async ({
+  page,
+}) => {
+  await page.evaluate(() => window.composer.setup({ mode: "photo" }));
+  await expect
+    .poll(() => page.evaluate(() => window.composer.activeClass()))
+    .toContain("mapatlas-composer-photo");
+  expect(
+    await page.locator(".mapatlas-composer-photo").getAttribute("capture"),
+    "photo mode should request a facing mode",
+  ).toBe("environment");
+
+  await page.evaluate(() => window.composer.setup({ mode: "comment" }));
+  await expect
+    .poll(() => page.evaluate(() => window.composer.activeClass()))
+    .toContain("mapatlas-composer-comment");
+  // `mode` moved the focus and nothing else: the camera preference is still requested, so a
+  // comment-first composition that later adds a photo is not quietly downgraded.
+  expect(
+    await page.locator(".mapatlas-composer-photo").getAttribute("capture"),
+    "comment mode dropped the facing-mode request",
+  ).toBe("environment");
+});
+
+test("removing the photo returns the composition to the photo-free path", async ({ page }) => {
+  await page.evaluate(() => window.composer.setup({ persist: true, occurredAt: 9 }));
+  await captureThroughChooser(page);
+  await expect(page.locator(".mapatlas-composer-preview")).toBeVisible();
+
+  await page.locator(".mapatlas-composer-photo-remove").click();
+  await expect(page.locator(".mapatlas-composer-preview")).toHaveCount(0);
+
+  await page.locator(".mapatlas-composer-save").click();
+  await expect.poll(() => page.evaluate(() => window.composer.saves.length)).toBe(1);
+  const media = await page.evaluate(() => window.composer.saves[0]?.media);
+  expect(media, "a removed photo still reached the handoff").toEqual([]);
 });

@@ -169,8 +169,10 @@ export function EventComposer(props: {
             "select",
             { className: "mapatlas-composer-category", ref: categoryRef },
             createElement("option", { value: "" }, ""),
-            ...props.categories.map((entry) =>
-              createElement("option", { key: entry.value, value: entry.value }, entry.label),
+            // Keyed by position, for the reason the field options are — `categories[].value`
+            // is equally unrestricted, so two categories may share a value.
+            ...props.categories.map((entry, index) =>
+              createElement("option", { key: index, value: entry.value }, entry.label),
             ),
           ),
         ),
@@ -258,8 +260,13 @@ function renderField(
         "select",
         shared,
         createElement("option", { value: "" }, spec.placeholder ?? ""),
-        ...(spec.options ?? []).map((option) =>
-          createElement("option", { key: option.value, value: option.value }, option.label),
+        // Keyed by position, not by value: the contract restricts `options[].value` in no
+        // way, so two options may deliberately share one — presentation differing over the
+        // same stored value loses nothing, unlike a duplicate `FieldSpec.key`. Value-keying
+        // would collide those siblings in reconciliation. Position is a sound identity here
+        // because the option list is configuration, fixed for the mounted composition.
+        ...(spec.options ?? []).map((option, index) =>
+          createElement("option", { key: index, value: option.value }, option.label),
         ),
       );
       break;

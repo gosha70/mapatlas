@@ -875,9 +875,21 @@ barrel is SSR-safe by contract and `MapCanvas` depends on that — a library tou
 import time breaks SSR for the whole package, not just for charts; (3) the acceptance criterion
 needs a labelled time series with a unit and no interactivity at all. Nothing on those three
 favours a dependency.
+**The chart breaks at a pause, as the map does.** One polyline per segment rather than one
+across the track. A single line runs straight from the last sample before a stop to the first
+after it, which draws the pause as though the trip continued through it at some rate — and the
+rendered track already refuses to say that (`render-differential.e2e.ts` pins "the pause holds no
+line"), as does the replay marker under ADR-0030. A chart that glided across the gap would be
+the one surface in the engine asserting continuity through a stop. The alternative — interpolate
+on the chart because a time series "wants" to be continuous — was considered and rejected: the
+gap is data, and hiding it is a claim.
 **Consequences.** Axis, scale and path construction are ours, and so are their bugs; the mutation
 list carries a time-not-index bar because an evenly-spaced plot of unevenly-timed samples is the
-mistake a hand-rolled implementation makes first. Should a later requirement need interaction —
+mistake a hand-rolled implementation makes first. Segment-splitting means a channel sampled
+during a pause — which a `SensorSource` may well keep emitting — has samples that fall in no
+segment and so are not plotted; they still reach `computeStats`, so a chart can legitimately show
+less than its own average summarises. T5.5's cursor inherits the segment boundaries this
+introduces. Should a later requirement need interaction —
 brushing, tooltips, zoom — this decision is reopened rather than worked around, and criterion (3)
 is the one that will have changed. Criteria (1) and (2) hold regardless and would still bind the
 choice to a library that is tree-shakeable and import-safe.

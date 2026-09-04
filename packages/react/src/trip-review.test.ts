@@ -274,6 +274,12 @@ const UNEVEN = {
 
 const chartRegion = (c: ParentNode): Element | null => c.querySelector(".mapatlas-trip-charts");
 
+/** Every plotted x, in document order, across however many polylines the chart is drawn as. */
+const chartXs = (c: ParentNode): number[] =>
+  [...c.querySelectorAll(".mapatlas-trip-chart-line")].flatMap((el) =>
+    (el.getAttribute("points") ?? "").split(" ").map((pair) => Number(pair.split(",")[0])),
+  );
+
 describe("TripReview — stats and channel charts (T5.4 increment 2)", () => {
   it("renders stats from computeStats, excluding the pause from moving time", async () => {
     // The single-implementation bar, killed by a value rather than a spy: `movingTimeMs` sums
@@ -289,12 +295,30 @@ describe("TripReview — stats and channel charts (T5.4 increment 2)", () => {
     // The middle samples sit at 1s and 9s of a 10s span — 10% and 90% across. An index plot
     // would place them at 33% and 67%, which draws the stop as though the trip continued.
     const { container } = await mount({ track: UNEVEN });
-    const points =
-      container.querySelector(".mapatlas-trip-chart-line")?.getAttribute("points") ?? "";
-    const xs = points.split(" ").map((pair) => Number(pair.split(",")[0]));
-    expect(xs, "four samples").toHaveLength(4);
+    const xs = chartXs(container);
+    expect(xs, "four samples across however many polylines").toHaveLength(4);
     expect(xs[1], "the 1s sample belongs at 10% of the width, not 33%").toBeCloseTo(30, 0);
     expect(xs[2], "the 9s sample belongs at 90% of the width, not 67%").toBeCloseTo(270, 0);
+  });
+
+  it("breaks the chart line at a pause, as the map breaks the track line", async () => {
+    // The map holds no line across a pause and ADR-0030 carries that to the replay marker; a
+    // chart drawn as one polyline would be the single surface asserting the trip continued
+    // through the stop at some rate. One polyline per segment, sharing the time axis.
+    const { container } = await mount({ track: UNEVEN });
+    const polylines = [...container.querySelectorAll(".mapatlas-trip-chart-line")];
+    expect(polylines, "one line per segment, not one across the pause").toHaveLength(2);
+
+    const spans = polylines.map((el) => {
+      const xs = (el.getAttribute("points") ?? "")
+        .split(" ")
+        .map((pair) => Number(pair.split(",")[0]));
+      return [Math.min(...xs), Math.max(...xs)] as const;
+    });
+    // Neither line may span the gap between 1s (x=30) and 9s (x=270).
+    for (const [from, to] of spans) {
+      expect(to - from, "a line crossed the pause").toBeLessThan(60);
+    }
   });
 
   /** Non-English label and unit on purpose: nothing here may be derived, only carried. */
@@ -305,6 +329,18 @@ describe("TripReview — stats and channel charts (T5.4 increment 2)", () => {
 
   const caption = (c: ParentNode): string =>
     c.querySelector(".mapatlas-trip-chart figcaption")?.textContent ?? "";
+
+  it("gives the chart an accessible name from the descriptor", async () => {
+    // `role="img"` without a name is an unnamed image to a screen reader, and the name has to
+    // come from the descriptor like everything else the chart says.
+    const { container } = await mount({ track: LOCALISED });
+    const svg = container.querySelector(".mapatlas-trip-chart svg");
+    expect(svg?.getAttribute("role")).toBe("img");
+    const name = svg?.getAttribute("aria-label") ?? "";
+    expect(name, "an image role needs an accessible name").not.toBe("");
+    expect(name, "named from the descriptor, verbatim").toContain("Puls");
+    expect(name).toContain("slag/min");
+  });
 
   it("renders the descriptor's label and unit verbatim", async () => {
     const { container } = await mount({ track: LOCALISED });

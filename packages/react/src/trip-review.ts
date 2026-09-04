@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { createElement } from "react";
+import { createElement, useMemo } from "react";
 import type { ReactElement } from "react";
 
 import { computeStats } from "@mapatlas/core";
@@ -112,8 +112,13 @@ function reviewBody(props: TripReviewProps): ReactElement[] {
   // recorder, the summary and the export all use, and the first thing it would get wrong is
   // `movingTimeMs`, which excludes pauses — a naive walk of the points sums straight through
   // them.
-  const stats = computeStats(props.track);
-  const charts = chartable(props.track, props.channels);
+  // Derived from `track`/`channels` alone, and the parent re-renders far more often than a
+  // finalized track changes.
+  const stats = useMemo(() => computeStats(props.track), [props.track]);
+  const charts = useMemo(
+    () => chartable(props.track, props.channels),
+    [props.track, props.channels],
+  );
   return [
     createElement(StatsPanel, { key: "stats", stats }),
     ...(charts.length === 0
@@ -193,8 +198,8 @@ function ChannelChart(props: {
 }): ReactElement {
   const { descriptor, track } = props;
   const samples = track.points
-    .filter((p) => p.channels?.[descriptor.key] !== undefined)
-    .map((p) => ({ t: p.t, v: p.channels?.[descriptor.key] ?? 0 }));
+    .map((p, index) => ({ index, t: p.t, v: p.channels?.[descriptor.key] }))
+    .filter((s): s is { index: number; t: number; v: number } => s.v !== undefined);
 
   // **Against time, not sample index.** Pauses make the spacing uneven by construction, and an
   // evenly-spaced plot of unevenly-timed samples misstates the trip — it draws a stop as though
@@ -202,14 +207,32 @@ function ChannelChart(props: {
   const t0 = samples[0]?.t ?? 0;
   const t1 = samples[samples.length - 1]?.t ?? t0;
   const span = t1 - t0;
-  const lo = descriptor.min ?? Math.min(...samples.map((s) => s.v));
-  const hi = descriptor.max ?? Math.max(...samples.map((s) => s.v));
+  // Folded rather than spread: `Math.min(...xs)` passes one argument per sample, and the
+  // argument-count ceiling is in the tens to hundreds of thousands depending on the engine —
+  // a multi-hour recording at 1 Hz sits inside that range.
+  const lo =
+    descriptor.min ?? samples.reduce((m, s) => (s.v < m ? s.v : m), Number.POSITIVE_INFINITY);
+  const hi =
+    descriptor.max ?? samples.reduce((m, s) => (s.v > m ? s.v : m), Number.NEGATIVE_INFINITY);
   const range = hi - lo;
   const x = (t: number): number => (span === 0 ? 0 : ((t - t0) / span) * CHART_W);
   const y = (v: number): number =>
     range === 0 ? CHART_H / 2 : CHART_H - ((v - lo) / range) * CHART_H;
 
-  const points = samples.map((s) => `${x(s.t).toFixed(2)},${y(s.v).toFixed(2)}`).join(" ");
+  // **One polyline per segment, not one across the track.** A single line would run straight
+  // from the last sample before a pause to the first after it — drawing the stop as though the
+  // trip continued through it at some rate, which is exactly what the map refuses to do: the
+  // rendered track holds no line across a pause, and ADR-0030 carries the same rule to the
+  // replay marker. A chart that glides across the gap would be the one surface asserting the
+  // trip continued.
+  const lines = track.segments
+    .map((segment) =>
+      samples
+        .filter((s) => s.index >= segment.startIndex && s.index <= segment.endIndex)
+        .map((s) => `${x(s.t).toFixed(2)},${y(s.v).toFixed(2)}`)
+        .join(" "),
+    )
+    .filter((points) => points !== "");
   // `label`, `unit` and `precision` rendered verbatim from the descriptor — the engine never
   // derives any of the three, because doing so would be learning what the number means
   // (ADR-0009).
@@ -222,8 +245,19 @@ function ChannelChart(props: {
     createElement("figcaption", null, `${descriptor.label}${summary}`),
     createElement(
       "svg",
-      { viewBox: `0 0 ${String(CHART_W)} ${String(CHART_H)}`, role: "img" },
-      createElement("polyline", { className: "mapatlas-trip-chart-line", points }),
+      {
+        viewBox: `0 0 ${String(CHART_W)} ${String(CHART_H)}`,
+        role: "img",
+        // `role="img"` without a name is an unnamed image to a screen reader.
+        "aria-label": `${descriptor.label} over time, in ${descriptor.unit}`,
+      },
+      ...lines.map((points, index) =>
+        createElement("polyline", {
+          key: index,
+          className: "mapatlas-trip-chart-line",
+          points,
+        }),
+      ),
     ),
   );
 }

@@ -8,6 +8,7 @@ import type { Id, MapEvent, MediaRef, StorageAdapter, TileSource, Track } from "
 import type { EventPresentation, MapController, MapControllerOptions } from "@mapatlas/maplibre";
 
 import { renderComponent } from "./testing/render-hook.js";
+import type { ReplayClock } from "./trip-review.js";
 import { TripReviewInternal } from "./trip-review.js";
 
 /**
@@ -26,6 +27,7 @@ interface Recorded {
   tracks: (Track | null)[];
   events: MapEvent[][];
   terrains: unknown[];
+  live: ({ lat: number; lng: number; t: number } | null)[];
   clickListeners: ((id: Id) => void)[];
 }
 
@@ -41,6 +43,7 @@ function recordingController(): {
       tracks: [],
       events: [],
       terrains: [],
+      live: [],
       clickListeners: [],
     };
     seen.push(record);
@@ -58,7 +61,9 @@ function recordingController(): {
       renderEvents: (e: MapEvent[]) => {
         record.events.push(e);
       },
-      showLivePosition: () => undefined,
+      showLivePosition: (point: { lat: number; lng: number; t: number } | null) => {
+        record.live.push(point);
+      },
       renderDraft: () => undefined,
       onMapTap: () => () => undefined,
       onEventClick: (cb: (id: Id) => void) => {
@@ -280,6 +285,43 @@ async function flushMicrotasks(): Promise<void> {
     await Promise.resolve();
     await Promise.resolve();
   });
+}
+
+/** The one element matching `selector`, or a loud failure naming what is missing. */
+function find<T extends Element>(container: ParentNode, selector: string): T {
+  const element = container.querySelector<T>(selector);
+  if (element === null) throw new Error(`no element matches ${selector}`);
+  return element;
+}
+
+/**
+ * Activate a node, refusing if it has already left the document.
+ *
+ * React 18 delegates events at the root, so a detached node's `click()` reaches no handler at
+ * all — a silent no-op, not an error. The composer's suite learned this the hard way; the same
+ * convention applies here.
+ */
+function clickLive(node: HTMLElement, what: string): void {
+  if (!node.isConnected) {
+    throw new Error(`${what} is detached: clicking it would reach no handler and prove nothing`);
+  }
+  node.click();
+}
+
+/**
+ * Move a range input the way a user does, as far as React can tell.
+ *
+ * Assigning `.value` directly is not enough: React keeps a value tracker per input and treats
+ * an event whose value matches the tracker as "no change", so the handler never fires — the
+ * input visibly holds the new value while the component never hears about it. Going through
+ * the prototype's setter updates the element without updating the tracker, which is what makes
+ * the dispatched event look like a real edit.
+ */
+function setRange(input: HTMLInputElement, value: number): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (setter === undefined) throw new Error("no value setter on HTMLInputElement.prototype");
+  setter.call(input, String(value));
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 const chartRegion = (c: ParentNode): Element | null => c.querySelector(".mapatlas-trip-charts");
@@ -765,5 +807,174 @@ describe("TripReview — resolution identity is (store, blobKey)", () => {
     } finally {
       fake.restore();
     }
+  });
+});
+
+describe("TripReview — the replay cursor (T5.5 increment 2)", () => {
+  /**
+   * A clock the test drives. A real one makes "advanced by one second" a race, and
+   * `requestAnimationFrame` in happy-dom would make it a race against a fake too.
+   */
+  function testClock(): { clock: ReplayClock; advance: (ms: number) => Promise<void> } {
+    let now = 0;
+    let pending: (() => void) | undefined;
+    const clock: ReplayClock = {
+      now: () => now,
+      schedule: (callback) => {
+        pending = callback;
+        return () => {
+          pending = undefined;
+        };
+      },
+    };
+    return {
+      clock,
+      advance: async (ms) => {
+        now += ms;
+        await act(async () => {
+          pending?.();
+        });
+      },
+    };
+  }
+
+  const toggle = (c: ParentNode): HTMLButtonElement =>
+    find<HTMLButtonElement>(c, ".mapatlas-trip-replay-toggle");
+  const scrub = (c: ParentNode): HTMLInputElement =>
+    find<HTMLInputElement>(c, ".mapatlas-trip-replay-scrub");
+  /** The position handed to the map, which is the only thing the marker can be drawn from. */
+  const marker = (seen: Recorded[]): { lat: number; lng: number; t: number } | undefined =>
+    seen[0]?.live.at(-1) ?? undefined;
+
+  it("mounts paused at the first point's timestamp", async () => {
+    // ADR-0030: opening a review must not start a time-dependent action on its own.
+    const { clock } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    expect(toggle(container).textContent, "must not be playing").toBe("Play");
+    expect(scrub(container).value).toBe("0");
+    expect(marker(seen), "the marker starts on the first point").toMatchObject({
+      lat: 59.3,
+      lng: 18.0,
+      t: 0,
+    });
+  });
+
+  it("does not advance without an explicit Play", async () => {
+    const { clock, advance } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    await advance(5_000);
+    expect(scrub(container).value, "time passed but the cursor moved").toBe("0");
+    expect(marker(seen)?.t).toBe(0);
+  });
+
+  it("advances with the clock once played, and Pause freezes it where it stands", async () => {
+    const { clock, advance } = testClock();
+    const { container } = await mount({ track: UNEVEN, clock });
+    await act(async () => {
+      clickLive(toggle(container), "Play");
+    });
+    expect(toggle(container).textContent).toBe("Pause");
+
+    await advance(500);
+    expect(scrub(container).value).toBe("500");
+
+    await act(async () => {
+      clickLive(toggle(container), "Pause");
+    });
+    await advance(5_000);
+    expect(scrub(container).value, "a paused cursor kept moving").toBe("500");
+    expect(toggle(container).textContent).toBe("Play");
+  });
+
+  it("scrubs the same cursor the marker is drawn from", async () => {
+    // One cursor. The map marker and (next increment) the chart cursor cannot disagree.
+    const { clock } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    await act(async () => {
+      setRange(scrub(container), 500);
+    });
+    expect(scrub(container).value).toBe("500");
+    // Half of the first segment: halfway between (59.3,18.0) and (59.31,18.0).
+    expect(marker(seen)?.lat).toBeCloseTo(59.305, 5);
+  });
+
+  it("holds the marker still across a pause", async () => {
+    // The whole point of ADR-0032 reaching the marker: scrubbing into the stop must not slide.
+    const { clock } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    const at = async (t: number): Promise<void> => {
+      await act(async () => {
+        setRange(scrub(container), t);
+      });
+    };
+    await at(5_000);
+    const mid = marker(seen);
+    await at(8_999);
+    expect(marker(seen)?.lat, "the marker moved during a pause").toBe(mid?.lat);
+    await at(9_000);
+    expect(marker(seen)?.lat, "the next segment must take over when it begins").toBe(59.32);
+  });
+
+  it("stops at the end rather than running past it", async () => {
+    const { clock, advance } = testClock();
+    const { container } = await mount({ track: UNEVEN, clock });
+    await act(async () => {
+      clickLive(toggle(container), "Play");
+    });
+    await advance(99_000);
+    expect(scrub(container).value, "the cursor ran past the last point").toBe("10000");
+    expect(toggle(container).textContent, "playback must stop at the end").toBe("Play");
+  });
+
+  it("resets the cursor into range when the track is replaced", async () => {
+    // Internal replay state must not survive into a track that never covered that time —
+    // `positionAt` would answer `undefined` forever.
+    const { clock } = testClock();
+    const mounted = await mount({ track: UNEVEN, clock });
+    await act(async () => {
+      setRange(scrub(mounted.container), 9_000);
+    });
+    expect(scrub(mounted.container).value).toBe("9000");
+
+    await mounted.rerender({
+      track: TRACK,
+      events: EVENTS,
+      store: STORE,
+      sources: SOURCES,
+      create: mounted.create,
+      clock,
+    } as never);
+
+    // TRACK spans 1000..2000; 9000 is outside it entirely.
+    expect(scrub(mounted.container).value, "a stale cursor outlived its track").toBe("1000");
+  });
+
+  it("bounds the scrub to the track's own endpoints", async () => {
+    // The range attributes are what keep the cursor inside the trip: an out-of-range cursor
+    // asks `positionAt` for a time the track never covered, which answers `undefined` and
+    // leaves the marker nowhere. Asserted on the attributes *and* on the outcome, because the
+    // browser clamps before the handler sees the value — a second clamp inside the component
+    // would be unfalsifiable, and is not there.
+    const { clock } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    expect(scrub(container).getAttribute("min"), "bounded by the first point").toBe("0");
+    expect(scrub(container).getAttribute("max"), "bounded by the last point").toBe("10000");
+
+    setRange(scrub(container), -5_000);
+    await act(async () => undefined);
+    expect(scrub(container).value, "a cursor before the trip began").toBe("0");
+    expect(marker(seen)?.lat, "the marker must stay on the track").toBe(59.3);
+
+    setRange(scrub(container), 99_000);
+    await act(async () => undefined);
+    expect(scrub(container).value, "a cursor after the trip ended").toBe("10000");
+    expect(marker(seen)?.lat).toBe(59.33);
+  });
+
+  it("renders no controls for a track with no points", async () => {
+    const { clock } = testClock();
+    const empty = { ...TRACK, points: [], segments: [] } satisfies Track;
+    const { container } = await mount({ track: empty, clock });
+    expect(container.querySelector(".mapatlas-trip-replay")).toBeNull();
   });
 });

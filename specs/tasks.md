@@ -956,10 +956,12 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   invisible for the same reason. It is removed, and both core and React now compare parameter
   tuples, return types and key sets exactly rather than by assignment.
 
-  *Scope.* `api.md` §9's remaining surface is `MapCanvas` and `EventComposer`, owned by T5.2 and
-  T5.3. `index.test.ts` names them absent, exactly as it named these two before they were built —
-  an assertion that failed the moment they were exported, which is what forced them into the
-  exact checks instead of appearing unverified.
+  *Scope.* Both components are now built, so `api.md` §9's React surface is complete and the
+  absent-name list is gone rather than kept empty — a loop over nothing is a test that cannot
+  fail. The mechanism earned its keep three times (`useTrackList`, `useTrackDraft`,
+  `EventComposer`): declaring an unbuilt name and asserting it absent is what failed the moment
+  each reached the barrel, forcing it into the exact checks instead of letting it appear
+  unverified. Restore it the same way if §9 ever publishes ahead of implementation again.
 - **T5.2 `<MapCanvas>`.** Wraps MapController incl. `style`/`terrain`/`presentation`/draw mode;
   SSR-safe (no window at import). _AC:_ renders track+events; toggling `drawMode` enters and
   exits cleanly.
@@ -997,6 +999,15 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   not a rear-camera guarantee (ADR-0027);
   a `FieldSpec` of each type round-trips into `fields`; analyze path works with `noopAnalyzer`;
   remote-analyzer disclosure shown when `runsRemotely`.
+  **Done** — `040af2a` (fields/comment/category/save/cancel), `272f27d` (duplicate option
+  values), `84fd1ea` (photo + ADR-0027 blob ownership), `1ce57df` (analyzer), `85e586a`
+  (per-request disclosure authorization), plus this closure increment: `EventComposer` and
+  `FieldSpec` are exported and pinned to §9 by exact parameter, return, key-set and nested
+  `options: { value, label }` comparisons. Two decisions settled during the work and recorded
+  in `api.md`: an absent `occurredAt` is captured once when the composition opens and never
+  resampled, and `""` is not reserved — a `select` or category option may carry it, so
+  missing-ness is the placeholder being selected, never the empty string. `FieldSpec.key` is an
+  identity and duplicates are rejected rather than resolved by order.
 - **T5.4 `<TripReview>`.** Map (sources/terrain/presentation) + replay + events/photos + stats
   panel + per-channel charts. _AC:_ renders a finalized trip on a basemap with start/finish
   marks; a track with a `heartRateBpm`-style channel charts it against time with the

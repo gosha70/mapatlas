@@ -8,6 +8,10 @@
 // props type; exporting MapCanvasProps here would quietly add public API outside the contract —
 // invisibly, since a type-only export never appears in Object.keys. index.test.ts guards it.
 export { MapCanvas } from "./map-canvas.js";
+// `FieldSpec` *is* exported, unlike `MapCanvasProps`: api.md §9 publishes it as a named
+// interface, so withholding it would be as much a contract breach as adding one.
+export type { FieldSpec } from "./event-composer.js";
+export { EventComposer } from "./event-composer.js";
 export type { EventLogBinding } from "./use-event-log.js";
 export { useEventLog } from "./use-event-log.js";
 export type { OfflineRegionsBinding } from "./use-offline-regions.js";

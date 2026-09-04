@@ -72,33 +72,41 @@ function recordingController(): {
   return { create, seen };
 }
 
-const SOURCES: TileSource[] = [
+/**
+ * **Fixtures the compiler owns.** These were written with `as never`, which is assignable to
+ * everything and so disabled all checking — the track below was missing `segments`, `status`
+ * and `origin`, compiled anyway, passed increment 1, and failed with a runtime
+ * `TypeError: segments is not iterable` two increments later when `computeStats` first read
+ * one. This source literal was worse: it carried a `tiles` array `TileSource` does not declare.
+ * `satisfies` keeps the inferred literal type while making the compiler check the shape, so the
+ * next missing or invented field is a compile error here rather than a failure downstream.
+ */
+const SOURCES = [
   {
     id: "base",
     kind: "raster",
-    tiles: ["https://example.invalid/{z}/{x}/{y}.png"],
+    transport: "template",
+    url: "https://example.invalid/{z}/{x}/{y}.png",
     attribution: "x",
   },
-] as never;
+] satisfies TileSource[];
 
-const TRACK: Track = {
+const TRACK = {
   id: "t1",
   startedAt: 1_000,
   endedAt: 2_000,
+  status: "finalized",
+  origin: "recorded",
   points: [
     { lat: 59.3, lng: 18.0, t: 1_000 },
     { lat: 59.4, lng: 18.1, t: 2_000 },
   ],
-  // Present because a `Track` has them and `computeStats` reads them — the first version of
-  // this fixture omitted both and passed increment 1, then broke the moment stats were
-  // computed from it. A fixture that is not a valid instance of its type is a test that has
-  // not decided what it is testing.
   segments: [{ id: "s1", startIndex: 0, endIndex: 1, startedAt: 1_000, endedAt: 2_000 }],
-} as never;
+} satisfies Track;
 
-const EVENTS: MapEvent[] = [
+const EVENTS = [
   { id: "e1", position: { lat: 59.35, lng: 18.05 }, occurredAt: 1_500, media: [], tags: [] },
-] as never;
+] satisfies MapEvent[];
 
 const STORE = {} as StorageAdapter;
 
@@ -245,10 +253,12 @@ describe("TripReview — composition and pass-through (T5.4 increment 1)", () =>
  *
  * Two segments — 0..1s and 9..10s — with an 8s stop between them.
  */
-const UNEVEN: Track = {
+const UNEVEN = {
   id: "t2",
   startedAt: 0,
   endedAt: 10_000,
+  status: "finalized",
+  origin: "recorded",
   points: [
     { lat: 59.3, lng: 18.0, t: 0, channels: { heartRateBpm: 60 } },
     { lat: 59.31, lng: 18.0, t: 1_000, channels: { heartRateBpm: 72.6 } },
@@ -260,7 +270,7 @@ const UNEVEN: Track = {
     { id: "s2", startIndex: 2, endIndex: 3, startedAt: 9_000, endedAt: 10_000 },
   ],
   channels: [{ key: "heartRateBpm", label: "Heart rate", unit: "bpm" }],
-} as never;
+} satisfies Track;
 
 const chartRegion = (c: ParentNode): Element | null => c.querySelector(".mapatlas-trip-charts");
 
@@ -287,19 +297,30 @@ describe("TripReview — stats and channel charts (T5.4 increment 2)", () => {
     expect(xs[2], "the 9s sample belongs at 90% of the width, not 67%").toBeCloseTo(270, 0);
   });
 
-  it("renders the descriptor's label and unit verbatim, at its precision", async () => {
-    // `precision: 0` against a fractional average is the discriminating fixture: default
-    // formatting would show a decimal.
-    const track = {
-      ...UNEVEN,
-      channels: [{ key: "heartRateBpm", label: "Puls", unit: "slag/min", precision: 0 }],
-    } as never;
-    const { container } = await mount({ track });
-    const caption = container.querySelector(".mapatlas-trip-chart figcaption")?.textContent ?? "";
-    expect(caption, "the label is the consumer's, verbatim").toContain("Puls");
-    expect(caption, "so is the unit").toContain("slag/min");
-    expect(caption, "precision 0 must round away the fraction").toMatch(/\b86 slag\/min\b/);
-    expect(caption, "a fractional average must not leak past precision 0").not.toMatch(/\d\.\d/);
+  /** Non-English label and unit on purpose: nothing here may be derived, only carried. */
+  const LOCALISED = {
+    ...UNEVEN,
+    channels: [{ key: "heartRateBpm", label: "Puls", unit: "slag/min", precision: 0 }],
+  } satisfies Track;
+
+  const caption = (c: ParentNode): string =>
+    c.querySelector(".mapatlas-trip-chart figcaption")?.textContent ?? "";
+
+  it("renders the descriptor's label and unit verbatim", async () => {
+    const { container } = await mount({ track: LOCALISED });
+    expect(caption(container), "the label is the consumer's, verbatim").toContain("Puls");
+    expect(caption(container), "so is the unit").toContain("slag/min");
+  });
+
+  it("formats the channel average at the descriptor's precision", async () => {
+    // Its own test so the falsification table can name one killer per row. `precision: 0`
+    // against a fractional average is the discriminating fixture — default formatting shows a
+    // decimal, so a component ignoring `precision` fails here and nowhere else.
+    const { container } = await mount({ track: LOCALISED });
+    expect(caption(container), "precision 0 must round away the fraction").toMatch(
+      /\b86 slag\/min\b/,
+    );
+    expect(caption(container), "no fraction may leak past precision 0").not.toMatch(/\d\.\d/);
   });
 
   it("shows the chart region when a channel is chartable — the positive control", async () => {
@@ -310,7 +331,12 @@ describe("TripReview — stats and channel charts (T5.4 increment 2)", () => {
 
   describe("the five readings of 'no channels' — the region is absent, not empty", () => {
     it("1. no descriptors on the track", async () => {
-      const { container } = await mount({ track: { ...UNEVEN, channels: undefined } as never });
+      // Built by *omitting* the key, not by setting it to `undefined`:
+      // `exactOptionalPropertyTypes` rejects the second, which is the same distinction the
+      // component's own conditional spreads rest on.
+      const noDescriptors: Track = { ...UNEVEN };
+      delete noDescriptors.channels;
+      const { container } = await mount({ track: noDescriptors });
       expect(chartRegion(container)).toBeNull();
     });
 
@@ -318,14 +344,14 @@ describe("TripReview — stats and channel charts (T5.4 increment 2)", () => {
       const track = {
         ...UNEVEN,
         channels: [{ key: "depthM", label: "Depth", unit: "m" }],
-      } as never;
+      } satisfies Track;
       expect(chartRegion((await mount({ track })).container)).toBeNull();
     });
 
     it("3. samples whose key has no descriptor", async () => {
       // Data alone is not chartable: no label, no unit, and inventing them would be the engine
       // learning what the number means (ADR-0009).
-      const track = { ...UNEVEN, channels: [] } as never;
+      const track = { ...UNEVEN, channels: [] } satisfies Track;
       expect(chartRegion((await mount({ track })).container)).toBeNull();
     });
 
@@ -348,7 +374,7 @@ describe("TripReview — stats and channel charts (T5.4 increment 2)", () => {
         { key: "depthM", label: "Depth", unit: "m" },
       ],
       points: UNEVEN.points.map((p) => ({ ...p, channels: { ...p.channels, depthM: 3 } })),
-    } as never;
+    } satisfies Track;
     const { container } = await mount({ track, channels: ["depthM"] });
     const charts = [...container.querySelectorAll(".mapatlas-trip-chart")].map((el) =>
       el.getAttribute("data-channel"),

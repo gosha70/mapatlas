@@ -13,7 +13,6 @@
     // this resolves them to the sources that produce it.
     "paths": {
       "@mapatlas/react/map-canvas": ["./packages/react/src/map-canvas.ts"],
-      "@mapatlas/react/trip-review": ["./packages/react/src/trip-review.ts"],
       "@mapatlas/maplibre/controller": ["./packages/maplibre/src/controller/browser.ts"],
       "@mapatlas/maplibre/engine-layers": ["./packages/maplibre/src/controller/engine-layers.ts"],
       "@mapatlas/maplibre/controller-internal": [

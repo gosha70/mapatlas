@@ -572,6 +572,75 @@ describe("TripReview — photos (T5.4 increment 3, ADR-0028)", () => {
     }
   });
 
+  it("clears a resolved-absent key when the media list moves on", async () => {
+    // The stale-`null` case. The URL map holds only keys that resolved to a URL, so pruning
+    // from it leaves an absent key's `null` behind — and A → B → A then shows "unavailable"
+    // before the re-fetch instead of "Loading", reporting the old answer even if the blob was
+    // written in between.
+    const blobs: Record<string, Blob> = {};
+    const fake = photoStore(blobs);
+    try {
+      const withMissing = [eventWith([{ id: "m1", mime: "image/jpeg", blobKey: "later" }])];
+      const other = [eventWith([{ id: "m2", mime: "image/jpeg", blobKey: "k2" }])];
+      blobs["k2"] = new Blob([new Uint8Array([2])], { type: "image/jpeg" });
+
+      const mounted = await mount({ events: withMissing, store: fake.store });
+      await flushMicrotasks();
+      expect(mounted.container.querySelector(".mapatlas-trip-photo-missing")).not.toBeNull();
+
+      const back = (events: MapEvent[]): never =>
+        ({
+          track: TRACK,
+          events,
+          store: fake.store,
+          sources: SOURCES,
+          create: mounted.create,
+        }) as never;
+      await mounted.rerender(back(other));
+      await flushMicrotasks();
+
+      // The blob arrives while the other trip is on screen.
+      blobs["later"] = new Blob([new Uint8Array([9])], { type: "image/jpeg" });
+      await mounted.rerender(back(withMissing));
+
+      // Before any re-fetch resolves, the key must read as *loading*, not as the stale answer.
+      expect(
+        mounted.container.querySelector(".mapatlas-trip-photo-missing"),
+        "a stale resolved-absent verdict outlived its media list",
+      ).toBeNull();
+      await flushMicrotasks();
+      expect(mounted.container.querySelector(".mapatlas-trip-photo-image")).not.toBeNull();
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("describes the photo for a screen reader, from the event's own words", async () => {
+    const fake = photoStore({});
+    try {
+      const events = [
+        {
+          ...eventWith([{ id: "m1", mime: "image/jpeg", url: "https://x.invalid/a.jpg" }]),
+          comment: "the heron on the far bank",
+        } satisfies MapEvent,
+      ];
+      const { container } = await mount({ events, store: fake.store });
+      expect(
+        img(container)?.getAttribute("alt"),
+        "the only visual record of the event may not be marked decorative",
+      ).toBe("the heron on the far bank");
+
+      const silent = [
+        eventWith([{ id: "m2", mime: "image/jpeg", url: "https://x.invalid/b.jpg" }]),
+      ];
+      const second = await mount({ events: silent, store: fake.store });
+      const fallback = img(second.container)?.getAttribute("alt") ?? "";
+      expect(fallback, "a photo with no comment still needs a description").not.toBe("");
+    } finally {
+      fake.restore();
+    }
+  });
+
   it("renders no photo region for a trip whose events carry none", async () => {
     const fake = photoStore({});
     try {

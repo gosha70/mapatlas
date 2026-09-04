@@ -1024,6 +1024,13 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   "defaults to all" means when descriptors and data disagree is settled by the same ADR — the
   default is the descriptors — rather than being a sixth case.
 
+  **Done** — `fb10e02`/`f8d57a3` (contract: ADR-0028 `store`, ADR-0029 the five readings,
+  ADR-0030 replay split out, ADR-0031 charts), `595925b`/`48386f6` (composition, every forward
+  falsified at the controller rather than in the DOM), `9402475`/`7138548`/`3e2a6bb` (stats and
+  charts; the chart breaks at a pause as the map does), `569df0e` (photos, three outcomes told
+  apart, both revocation moments), and the closure increment: `TripReview` exported and pinned
+  to §9, `TripReviewInternal` held off the barrel, the harness alias retired.
+
 - **T5.5 Replay.** A time cursor over the finalized track, with play/pause and scrub, driving
   the map marker and a matching cursor on each channel chart. _AC:_ the marker interpolates
   between samples; **it holds rather than sliding across a pause**, the same discontinuity

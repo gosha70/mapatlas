@@ -289,7 +289,7 @@ function Photos(props: { events: MapEvent[]; store: StorageAdapter }): ReactElem
       createElement(
         "li",
         { key: `${event.id}:${media.id}`, className: "mapatlas-trip-photo" },
-        renderPhoto(media, resolved),
+        renderPhoto(event, media, resolved),
       ),
     ),
   );
@@ -298,14 +298,14 @@ function Photos(props: { events: MapEvent[]; store: StorageAdapter }): ReactElem
 /** `null` means resolved-and-absent; a string is an object URL; missing means still resolving. */
 type Resolution = Record<string, string | null>;
 
-function renderPhoto(media: MediaRef, resolved: Resolution): ReactElement {
+function renderPhoto(event: MapEvent, media: MediaRef, resolved: Resolution): ReactElement {
+  // Not decorative: this is the only visual record of the event, so `alt=""` would give a
+  // screen reader nothing at all. The consumer's own words when there are any; a neutral
+  // description otherwise, since the engine has no idea what the photo shows.
+  const alt = event.comment ?? "Photo attached to this event";
   // A hosted URL wins outright and needs no lookup — the store is for blobs.
   if (media.url !== undefined) {
-    return createElement("img", {
-      className: "mapatlas-trip-photo-image",
-      src: media.url,
-      alt: "",
-    });
+    return createElement("img", { className: "mapatlas-trip-photo-image", src: media.url, alt });
   }
   if (media.blobKey === undefined) {
     return createElement(
@@ -325,7 +325,7 @@ function renderPhoto(media: MediaRef, resolved: Resolution): ReactElement {
       "This photo is unavailable.",
     );
   }
-  return createElement("img", { className: "mapatlas-trip-photo-image", src: url, alt: "" });
+  return createElement("img", { className: "mapatlas-trip-photo-image", src: url, alt });
 }
 
 /**
@@ -358,14 +358,19 @@ function useResolvedBlobs(refs: { media: MediaRef }[], store: StorageAdapter): R
       if (!keys.includes(key)) {
         URL.revokeObjectURL(url);
         urls.current.delete(key);
-        setResolved((previous) => {
-          if (!(key in previous)) return previous;
-          const rest = { ...previous };
-          delete rest[key];
-          return rest;
-        });
       }
     }
+    // Pruned from `keys`, not from the URL map — the map holds only keys that *resolved to a
+    // URL*, so a key that resolved to `null` (absent from the store) would never be pruned by
+    // it. Its stale `null` then outlives the media list: swap trips A → B → A and that key
+    // renders "unavailable" for a frame before the re-fetch instead of "Loading", and reports
+    // the old answer if the blob was written in between.
+    setResolved((previous) => {
+      const kept = Object.fromEntries(
+        Object.entries(previous).filter(([key]) => keys.includes(key)),
+      );
+      return Object.keys(kept).length === Object.keys(previous).length ? previous : kept;
+    });
     let live = true;
     void (async () => {
       for (const key of keys) {

@@ -138,6 +138,20 @@ type PublishedEventComposer = (props: {
   onCancel(): void;
 }) => ReactElement;
 
+type PublishedTripReview = (props: {
+  track: Track;
+  events: MapEvent[];
+  /** Required, not optional — ADR-0028. An optional store makes "the photo did not render"
+   *  ambiguous between not-supplied and not-found; the consumer should fail to compile. */
+  store: StorageAdapter;
+  sources: TileSource[];
+  style?: string | JSONValue;
+  terrain?: TerrainOptions | null;
+  presentation?: EventPresentation;
+  channels?: string[];
+  onEventClick?(id: Id): void;
+}) => ReactElement;
+
 type PublishedUseTrackDraft = (opts?: { from?: Track; store?: StorageAdapter }) => {
   points: DraftTrackPoint[];
   canUndo: boolean;
@@ -231,11 +245,36 @@ const shapesMatch: [
   // an option is `{ value, label }`, both strings, and nothing more.
   Exactly<NonNullable<barrel.FieldSpec["options"]>[number], { value: string; label: string }>,
   ExactKeys<NonNullable<barrel.FieldSpec["options"]>[number], { value: string; label: string }>,
-] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
+  // `Exactly` on the parameter tuple, not `ExactKeys` alone: making `store` optional leaves the
+  // key set identical, so only a type-level comparison catches it.
+  Exactly<Parameters<typeof barrel.TripReview>, Parameters<PublishedTripReview>>,
+  Exactly<ReturnType<typeof barrel.TripReview>, ReturnType<PublishedTripReview>>,
+  ExactKeys<Parameters<typeof barrel.TripReview>[0], Parameters<PublishedTripReview>[0]>,
+] = [
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+];
 
 /** What the package exports today. Compared as a set, so an addition is as visible as a removal. */
 const EXPECTED_EXPORTS = [
   "EventComposer",
+  "TripReview",
   "MapCanvas",
   "PACKAGE_NAME",
   "useEventLog",
@@ -246,19 +285,26 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 /**
- * Published by `api.md` §9 and **not yet built**: `TripReview`, owned by T5.4.
+ * **`NOT_YET_BUILT` is gone, and this time nothing is.** `api.md` §9 declares three components
+ * for this package and all three are exported. The list is not kept empty: a loop over nothing
+ * is a test that cannot fail, which is the shape this file exists to avoid.
  *
- * The list earns its keep by failing: it once held `useTrackList`, `useTrackDraft`,
- * `MapCanvas` and `EventComposer`, and each assertion went red the moment its name reached
- * the barrel, which is what forced it into the exact checks above instead of appearing with
- * nothing verifying it. It was briefly deleted on the claim that nothing was unbuilt — that
- * claim was wrong, because §9 declares three components and only two exist.
+ * It earned its keep four times — `useTrackList`, `useTrackDraft`, `MapCanvas`, `TripReview` —
+ * each assertion going red the moment its name reached the barrel, which is what forced it into
+ * the exact checks above rather than letting it appear with nothing verifying it. It was once
+ * deleted early, on a claim that nothing was unbuilt while `TripReview` still was; restore it
+ * the same way if §9 publishes ahead of implementation again, and check that claim against §9
+ * rather than against memory. `git log -S NOT_YET_BUILT` has the pattern.
  */
-const NOT_YET_BUILT = ["TripReview"] as const;
 
 /** Internal to the package: seams and test infrastructure that must never reach a consumer. */
 const MUST_NOT_ESCAPE = [
   "MapCanvasInternal",
+  // The controller-injection seam. It exists so pass-through can be observed at the controller
+  // rather than in the DOM, where every forwarded prop has a default that renders something —
+  // a consumer has no use for it, and the increment that would notice a stray export is the one
+  // about exports.
+  "TripReviewInternal",
   "browserRecorderEnvironment",
   "renderHook",
   "createEventLog",
@@ -291,12 +337,6 @@ const propsTypeStaysPrivate: MapCanvasPropsMustStayPrivate | undefined = undefin
 describe("@mapatlas/react's public surface", () => {
   it("reports its package identity", () => {
     expect(barrel.PACKAGE_NAME).toBe("@mapatlas/react");
-  });
-
-  it("still leaves T5.4's component unbuilt, and says so", () => {
-    for (const name of NOT_YET_BUILT) {
-      expect(Object.keys(barrel), `${name} is not built yet`).not.toContain(name);
-    }
   });
 
   it("exports the five published hooks, both built components, and nothing else", () => {
@@ -333,6 +373,7 @@ describe("@mapatlas/react's public surface", () => {
       barrel.useTrackDraft,
       barrel.MapCanvas,
       barrel.EventComposer,
+      barrel.TripReview,
     ]) {
       expect(hook).toBeTypeOf("function");
     }
@@ -340,6 +381,6 @@ describe("@mapatlas/react's public surface", () => {
     expect(returnsMatch).toEqual([true, true, true, true, true, true]);
     // Fifteen: the eight that were here, plus EventComposer's parameters, return and key set,
     // and FieldSpec by value and by key set with its nested option shape checked both ways.
-    expect(shapesMatch).toEqual(Array.from({ length: 15 }, () => true));
+    expect(shapesMatch).toEqual(Array.from({ length: 18 }, () => true));
   });
 });

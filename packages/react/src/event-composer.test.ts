@@ -1814,6 +1814,42 @@ describe("EventComposer — analyzer authorization and admission (ADR-0005, ADR-
     expect(input.value, "Remove left the control holding the file").toBe("");
   });
 
+  it("closes an outstanding disclosure when the analyzer is replaced", async () => {
+    // The `[analyzer]` effect's void, pinned directly. It used to be covered incidentally by
+    // the consent-withdrawal test; once persistent consent was deleted, that test passed
+    // whether or not this void existed — every remote request discloses anyway — so removing
+    // the void left the suite green. What it actually protects is this: a panel opened for the
+    // analyzer the consumer has just replaced must not stay spendable, or Accept sends to a
+    // service the consumer has removed.
+    const first = counting("first-cloud");
+    const second = counting("second-cloud");
+    const store = parkedStore();
+    const at = { lat: 59.33, lng: 18.06 };
+    const props = (a: MediaAnalyzer): ComposerProps =>
+      ({
+        at,
+        store: store.adapter,
+        occurredAt: 9,
+        analyzer: a,
+        onSave: () => undefined,
+        onCancel: () => undefined,
+      }) as ComposerProps;
+
+    const harness = await renderComponent(EventComposer, props(first.analyzer));
+    await selectPhoto(harness.container, photoFile());
+    await analyse(harness.container);
+    expect(harness.container.querySelector(".mapatlas-composer-disclosure")).not.toBeNull();
+
+    await harness.rerender(props(second.analyzer));
+
+    expect(
+      harness.container.querySelector(".mapatlas-composer-disclosure"),
+      "a disclosure survived the replacement of the analyzer it named",
+    ).toBeNull();
+    expect(first.calls, "the replaced analyzer was still sent to").toEqual([]);
+    expect(second.calls).toEqual([]);
+  });
+
   it("voids an outstanding disclosure the moment it is declined", async () => {
     // Same shape, same reason: the decline's re-render has not committed, so the Accept button
     // is still mounted and still live. Only the synchronous void refuses it.

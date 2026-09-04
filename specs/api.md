@@ -773,11 +773,19 @@ export interface MapAssetStore {
   delete(key: string): Promise<void>;
   list(): Promise<string[]>;
   estimateBytes(): Promise<number>;
-  /** Wipes downloaded map assets only. `StorageAdapter.clearAll()` must not touch them. */
+  /** Wipes downloaded map assets only. `StorageAdapter.clearAll()` must not touch them.
+   *  This includes the region manifests `OfflineRegionStore` keeps under its own reserved key
+   *  prefix — map bytes are replaceable and go together (ADR-0016, ADR-0034). */
   clear(): Promise<void>;
 }
 
-/** `download()` and `estimateSize()` both refuse a source without `offlineLicensed: true`,
+/** For `transport: "pmtiles"` the **archive is the unit**: `download()` copies the whole archive
+ *  into the `MapAssetStore`, and `bbox`/`minZoom`/`maxZoom` describe the region rather than
+ *  selecting within it — §5's "cached whole for offline" (ADR-0034). `estimateSize()` therefore
+ *  reports the archive's size, not a sub-region's. A non-`pmtiles` transport is **refused**, not
+ *  skipped: a silently omitted source is a region that looks downloaded and fails in the field.
+ *
+ *  `download()` and `estimateSize()` both refuse a source without `offlineLicensed: true`,
  *  throwing `OfflineLicenseError` — absence is refusal, not permission (ADR-0033,
  *  `architecture.md` §8). A UI must not be able to quote a size for a region the store will
  *  then refuse to fetch, so the same check guards both entry points.

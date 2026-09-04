@@ -996,3 +996,44 @@ optional field breaks none of them, but every one that is later handed to a regi
 be annotated — including the demo's own archives, where the annotation is true by construction
 since they are self-built. A consumer who forgets gets a named error at download time rather
 than a silent violation.
+
+## ADR-0034 — For PMTiles, the archive is the unit a region downloads
+**Context.** `tasks.md` describes `download()` as "download bbox×zoom per `sourceIds`", and the
+§7 signature takes `bbox`/`minZoom`/`maxZoom`, which together invite reading it as *select the
+tiles covering this box and fetch those*. That reading is not the architecture's. §5 says a region
+is "a single file per region, read via HTTP range requests online and **cached whole** for
+offline"; ADR-0004 chose PMTiles as "single-file, range-request"; and ADR-0017 already warns that
+a region still needing a range request "can look downloaded and fail in the field".
+
+This ADR therefore **records an existing decision rather than making a new one** — the framing
+matters, because presenting it as a fresh choice would make it look reversible on cost grounds
+when in fact the range-selecting alternative is the deviation.
+
+**Decision.**
+1. **For `transport: "pmtiles"`, the archive is the unit.** `download()` fetches the whole
+   archive and copies it into `MapAssetStore`. `bbox`, `minZoom` and `maxZoom` are **descriptive**
+   of the region the archive represents, not a selector over it — the archive already bounds
+   itself, and the fixtures are cut to their region at build time.
+2. **`estimateSize()` returns the archive's byte size**, not a sub-region figure. That is the
+   cost of (1) and is stated rather than left to be discovered: asking for a corner of an existing
+   archive quotes the whole archive. It needs one network request; so does `download()`, so
+   nothing new is asked of the caller.
+3. **Non-`pmtiles` transports are refused with a named error, not skipped.** The package is
+   `@mapatlas/offline-pmtiles` and §5 scopes regions to PMTiles; enumerating a template, WMS or
+   TileJSON source is a different task with its own failure modes. Refusing rather than skipping
+   is the same shape as ADR-0033's absence-means-refuse, for the same reason — a silently omitted
+   source produces a region that *looks* downloaded and is not, which is precisely ADR-0017's
+   failure in the field.
+4. **The store owns a reserved key namespace** in `MapAssetStore` for region manifests, since that
+   seam offers only blob get/put/delete/list and a region's metadata has to live somewhere.
+   `MapAssetStore.clear()` therefore wipes manifests along with archives — correct under ADR-0016's
+   lifecycle isolation, where map bytes are replaceable and are meant to go together, and recorded
+   here so nobody "fixes" it into leaving orphaned manifests behind.
+
+**Consequences.** `sourceIds` defaults to "all base+overlay", which excludes the `terrain` and
+`hillshade` roles — so a region taking the default omits the DEM. In `apps/demo/src/lab/lab.ts`
+the terrain archive carries `role: "hillshade"` and the contour archive takes the default
+`"overlay"`, meaning a defaulted region there would carry contours and omit terrain: the exact
+thing T6.1's acceptance criterion is about. The default is left alone — changing it is a contract
+change with no criterion driving it — and callers that need terrain name their `sourceIds`
+explicitly. Recorded so Phase 7's demo does not rediscover it offline in the field.

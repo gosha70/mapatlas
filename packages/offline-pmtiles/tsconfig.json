@@ -2,7 +2,11 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    // `Blob` and `fetch`, as `storage-idb` does for the same reason: a region store copies
+    // bytes over the network into a browser blob store, so its default implementation is
+    // browser-shaped even though the seams it exposes are not.
+    "lib": ["ES2022", "DOM"]
   },
   "include": ["src/**/*.ts"],
   "references": [

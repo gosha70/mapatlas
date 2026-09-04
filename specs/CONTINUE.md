@@ -17,7 +17,7 @@ plus replay). `NOT_YET_BUILT` in `packages/react/src/index.test.ts` is retired �
 times, each time a component reached the barrel unverified, which is what forced it into the
 exact §9 checks.
 
-### Why T6.1 runs ahead of T4.6's items 7–9
+### Why T6.1 runs ahead of what is left in T4.6
 
 T4.6's fixture track, simulated GPS and `/lab` route are **built** (`apps/demo/src/lab/`), and
 so is the zero-egress scenario's infrastructure — `render-differential.e2e.ts` already fails

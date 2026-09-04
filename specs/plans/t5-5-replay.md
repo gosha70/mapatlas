@@ -16,8 +16,23 @@ drift `computeStats` exists to prevent — plus a consumer writing their own rep
 way to match `TripReview`. ADR-0030 makes *playback state* internal; it never said the geometry
 had to be.
 
+## The prerequisite the survey turned up
+
+`assertValidTrackGeometry` enforced non-decreasing timestamps **within each segment only**, so a
+track whose second segment predates its first validates today — and `computeStats` returns a
+**negative `durationMs`** for it, measured. That is a live defect, not a `positionAt` edge: at a
+`t` covered by both segments the projection has two plausible answers, and ADR-0030's cursor
+range `[first.t, last.t]` is not a range.
+
+The invariant is corrected rather than `positionAt` carrying a precondition: **timestamps are
+non-decreasing across the whole canonical `points[]`, boundaries included.** A boundary breaks
+geometry, not chronology. Increment 1 updates the validator alongside the projection.
+
 ## Settled calls
 
+0. **Boundary instants belong to the later segment.** `A.end.t < t < B.start.t` gives `A`'s last
+   point; `t === B.start.t` gives `B`'s, including when the two are equal — at that instant `B`
+   is the current observation. Meaningful only because of the global invariant above.
 1. **Mounts paused at `first.t`.** The cursor starts at the first point's timestamp with the
    marker on the first point, and nothing advances until an explicit Play. Opening a review
    should not start a time-dependent action on its own, and inventing autoplay is choosing a
@@ -41,15 +56,19 @@ had to be.
 
 ## Testing lanes
 
-- **Vitest** — `positionAt` in core, every semantic in ADR-0032 pinned separately; then the
+- **Vitest** — `positionAt` in core, every semantic in ADR-0032 pinned separately, including
+  that it *assumes* validated geometry rather than re-validating per tick, as `computeStats`
+  does; then the
   React state machine over a controlled clock, since a real one makes "advanced by 1s" a race.
 - **Playwright** — that the marker actually moves on the map, which the unit lane cannot
   establish: it asserts what was handed to the controller, not what MapLibre drew.
 
 ## Increments
 
-1. **`positionAt` in core.** The projection and its seven semantics, published and conformance-
-   checked. No React.
+1. **`positionAt` in core, and the validator alongside it.** The projection and its semantics,
+   published and conformance-checked against `api.md` **§4**, where it is declared beside
+   finalization and statistics — not §1. The global temporal invariant lands here too, since the
+   projection is unsound without it. No React.
 2. **The cursor and its controls.** Play/pause/scrub in `TripReview`, paused at `first.t`, the
    marker driven through `livePoint`.
 3. **The chart cursor**, reading the same value, and the browser scenario.
@@ -64,5 +83,7 @@ had to be.
 - accept a non-finite `t` instead of throwing → fails;
 - autoplay on mount → the paused-at-start bar fails;
 - initialise the cursor anywhere but `first.t` → fails;
-- omit `positionAt` from the core barrel or its §1 conformance → fails;
+- omit `positionAt` from the core barrel or its **§4** conformance → fails;
+- remove the cross-boundary temporal validation, so `B` may begin before `A` ends → fails;
+- at an equal-time boundary choose `A`'s last point instead of `B`'s first → fails;
 - let the chart cursor and the map marker read different values → fails.

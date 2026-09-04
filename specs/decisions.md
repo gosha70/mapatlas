@@ -924,6 +924,29 @@ makes every one of them a promise:
   interval to interpolate across, and no division by zero.
 - No points: `undefined`. Non-finite `t`: `RangeError`, as elsewhere for meaningless numerics.
 
+**Prerequisite, and a live defect it exposes: the temporal invariant must be global.**
+`assertValidTrackGeometry` checked non-decreasing timestamps *within each segment only*, on the
+reasoning that "expecting continuity across a pause would be a category error". That conflated
+two different continuities. A boundary breaks **geometry** — nothing is drawn or interpolated
+from one segment into the next, and that stands — but it does not break **chronology**: the
+pause between two segments may not run backwards.
+
+The gap is not hypothetical. A track whose second segment predates its first passes validation
+today, and `computeStats` — which derives `durationMs` as `last.t - first.t` — returns **−200 ms**
+for it. `positionAt` would inherit worse: at a `t` covered by both segments there are two
+plausible answers, and ADR-0030's cursor range `[first.t, last.t]` is not a range at all.
+
+So the invariant is corrected rather than `positionAt` being given a special precondition:
+**timestamps are non-decreasing over the whole canonical `points[]`, segment boundaries
+included.** ADR-0020's temporal rule is amended accordingly, and the validator is updated
+alongside `positionAt` in increment 1. Non-decreasing rather than strictly increasing stays
+right: imported and rounded observations legitimately share a timestamp.
+
+That invariant is what makes the boundary-equality rule meaningful. At `t === B.start.t`, `B`
+wins — including when `A.end.t === B.start.t`, since at that instant `B` is the current
+observation and the rule generalises "held until the next segment begins". Without global order,
+"the later segment" would not be a statement about time.
+
 **Consequences.** Holding through a pause means a replay marker sits still for the duration of a
 stop, which is correct and will look like a stall to anyone expecting animation — that is the
 same complaint the map's empty gap invites, and the same answer: the engine has no evidence of

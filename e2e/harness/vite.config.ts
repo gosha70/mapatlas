@@ -44,6 +44,11 @@ export default defineConfig({
       // Harness-only: MapCanvas is deliberately not on the package barrel until T5.2's
       // checkpoint 3. The component mounted is the public-shaped one; the deep path is the
       // harness's established privilege, same as the controller probes above.
+      // Harness-only, same privilege and the same expiry as EventComposer's was: TripReview
+      // stays off the barrel until T5.4's closure increment, which retires this alias.
+      "@mapatlas/react/trip-review": fileURLToPath(
+        new URL("../../packages/react/dist/trip-review.js", import.meta.url),
+      ),
       "@mapatlas/react/map-canvas": fileURLToPath(
         new URL("../../packages/react/dist/map-canvas.js", import.meta.url),
       ),

@@ -45,6 +45,12 @@ function chunk(type: string, body: Buffer): Buffer {
  * variable in every test that draws one. Flat grey, since nothing asserts on tile pixels —
  * the assertions are about the engine's own layers, which are drawn over these.
  */
+/** Exported so a scenario needing *a real, decodable image* reuses the one MapLibre already
+ *  renders, rather than hand-writing PNG bytes that only look like a PNG. */
+export function fixturePng(): Buffer {
+  return tilePng();
+}
+
 function tilePng(): Buffer {
   const size = 256;
   const stride = size * 3 + 1;

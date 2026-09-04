@@ -69,7 +69,8 @@ and mount handling that `MapCanvas` already did.
 3. **Photos.** `blobKey` resolved through `store`, `url` rendered directly, object URLs
    revoked; the browser round-trip against a real adapter.
 4. **Surface + closure.** Exported, §9 conformance including the new `store` prop, out of
-   `NOT_YET_BUILT`, `tasks.md`. **`TripReviewInternal` goes into `MUST_NOT_ESCAPE`** alongside
+   `NOT_YET_BUILT`, `tasks.md`. The harness-only `@mapatlas/react/trip-review` alias is **retired** here, and
+   **`TripReviewInternal` goes into `MUST_NOT_ESCAPE`** alongside
    `MapCanvasInternal` — it exists only so tests can inject the controller seam, and the barrel
    test will otherwise let it out without anyone noticing. Noted here rather than left for the
    closure increment to remember, because that increment is about exports and is exactly where

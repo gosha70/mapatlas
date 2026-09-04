@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 // SPDX-License-Identifier: Apache-2.0
 
+import { act } from "react";
 import { describe, expect, it } from "vitest";
 
-import type { Id, MapEvent, StorageAdapter, TileSource, Track } from "@mapatlas/core";
+import type { Id, MapEvent, MediaRef, StorageAdapter, TileSource, Track } from "@mapatlas/core";
 import type { EventPresentation, MapController, MapControllerOptions } from "@mapatlas/maplibre";
 
 import { renderComponent } from "./testing/render-hook.js";
@@ -272,6 +273,15 @@ const UNEVEN = {
   channels: [{ key: "heartRateBpm", label: "Heart rate", unit: "bpm" }],
 } satisfies Track;
 
+/** Let queued microtasks settle inside `act`, so a resolved blob's state update commits. */
+async function flushMicrotasks(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 const chartRegion = (c: ParentNode): Element | null => c.querySelector(".mapatlas-trip-charts");
 
 /** Every plotted x, in document order, across however many polylines the chart is drawn as. */
@@ -416,5 +426,159 @@ describe("TripReview — stats and channel charts (T5.4 increment 2)", () => {
       el.getAttribute("data-channel"),
     );
     expect(charts).toEqual(["depthM"]);
+  });
+});
+
+describe("TripReview — photos (T5.4 increment 3, ADR-0028)", () => {
+  /** Records every store call, so "no lookup" is a fact about the adapter, not an inference. */
+  function photoStore(blobs: Record<string, Blob>): {
+    store: StorageAdapter;
+    lookups: string[];
+    revoked: string[];
+    restore: () => void;
+  } {
+    const lookups: string[] = [];
+    const revoked: string[] = [];
+    const created = new Map<Blob, string>();
+    let next = 0;
+    const realCreate = URL.createObjectURL;
+    const realRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = (blob: Blob): string => {
+      next += 1;
+      const url = `blob:fake/${String(next)}`;
+      created.set(blob, url);
+      return url;
+    };
+    URL.revokeObjectURL = (url: string): void => {
+      revoked.push(url);
+    };
+    const store = {
+      getBlob: (key: string): Promise<Blob | undefined> => {
+        lookups.push(key);
+        return Promise.resolve(blobs[key]);
+      },
+    } as unknown as StorageAdapter;
+    return {
+      store,
+      lookups,
+      revoked,
+      restore: () => {
+        URL.createObjectURL = realCreate;
+        URL.revokeObjectURL = realRevoke;
+      },
+    };
+  }
+
+  const eventWith = (media: MediaRef[]): MapEvent =>
+    ({
+      id: `e-${media[0]?.id ?? "none"}`,
+      position: { lat: 59.35, lng: 18.05 },
+      occurredAt: 1_500,
+      media,
+      tags: [],
+    }) satisfies MapEvent;
+
+  const img = (c: ParentNode): HTMLImageElement | null =>
+    c.querySelector(".mapatlas-trip-photo-image");
+
+  it("renders a hosted url directly, without touching the store", async () => {
+    const fake = photoStore({});
+    try {
+      const events = [
+        eventWith([{ id: "m1", mime: "image/jpeg", url: "https://x.invalid/a.jpg" }]),
+      ];
+      const { container } = await mount({ events, store: fake.store });
+      expect(img(container)?.getAttribute("src")).toBe("https://x.invalid/a.jpg");
+      expect(fake.lookups, "a hosted url must need no lookup").toEqual([]);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("resolves a blobKey through the store and renders it", async () => {
+    const fake = photoStore({ k1: new Blob([new Uint8Array([1, 2])], { type: "image/jpeg" }) });
+    try {
+      const events = [eventWith([{ id: "m1", mime: "image/jpeg", blobKey: "k1" }])];
+      const { container } = await mount({ events, store: fake.store });
+      await flushMicrotasks();
+      expect(fake.lookups).toEqual(["k1"]);
+      expect(img(container)?.getAttribute("src")).toMatch(/^blob:fake\//);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("says a blobKey the store does not hold is unavailable, rather than showing nothing", async () => {
+    // The case the required store was argued for: the event records that a photo exists, so
+    // rendering nothing would misreport it as having none.
+    const fake = photoStore({});
+    try {
+      const events = [eventWith([{ id: "m1", mime: "image/jpeg", blobKey: "missing" }])];
+      const { container } = await mount({ events, store: fake.store });
+      await flushMicrotasks();
+      expect(fake.lookups).toEqual(["missing"]);
+      expect(img(container), "nothing may be rendered as an image").toBeNull();
+      expect(
+        container.querySelector(".mapatlas-trip-photo-missing")?.textContent,
+        "the absence must be stated, not silent",
+      ).toContain("unavailable");
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("revokes object URLs when the media list changes under it", async () => {
+    // The revocation a mount/unmount-only test never reaches: a review that swaps trips would
+    // otherwise leak every previous trip's URLs for as long as the page lives.
+    const fake = photoStore({
+      k1: new Blob([new Uint8Array([1])], { type: "image/jpeg" }),
+      k2: new Blob([new Uint8Array([2])], { type: "image/jpeg" }),
+    });
+    try {
+      const first = [eventWith([{ id: "m1", mime: "image/jpeg", blobKey: "k1" }])];
+      const mounted = await mount({ events: first, store: fake.store });
+      await flushMicrotasks();
+      const firstUrl = img(mounted.container)?.getAttribute("src");
+      expect(firstUrl).toMatch(/^blob:fake\//);
+
+      await mounted.rerender({
+        track: TRACK,
+        events: [eventWith([{ id: "m2", mime: "image/jpeg", blobKey: "k2" }])],
+        store: fake.store,
+        sources: SOURCES,
+        create: mounted.create,
+      } as never);
+      await flushMicrotasks();
+
+      expect(fake.revoked, "the departing photo's url was leaked").toContain(firstUrl);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("revokes object URLs on unmount", async () => {
+    const fake = photoStore({ k1: new Blob([new Uint8Array([1])], { type: "image/jpeg" }) });
+    try {
+      const mounted = await mount({
+        events: [eventWith([{ id: "m1", mime: "image/jpeg", blobKey: "k1" }])],
+        store: fake.store,
+      });
+      await flushMicrotasks();
+      const url = img(mounted.container)?.getAttribute("src");
+      await mounted.unmount();
+      expect(fake.revoked, "unmount leaked the object url").toContain(url);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("renders no photo region for a trip whose events carry none", async () => {
+    const fake = photoStore({});
+    try {
+      const { container } = await mount({ store: fake.store });
+      expect(container.querySelector(".mapatlas-trip-photos")).toBeNull();
+    } finally {
+      fake.restore();
+    }
   });
 });

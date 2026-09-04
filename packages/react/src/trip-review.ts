@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { createElement, useMemo } from "react";
+import { createElement, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
 import { computeStats } from "@mapatlas/core";
@@ -9,6 +9,7 @@ import type {
   Id,
   JSONValue,
   MapEvent,
+  MediaRef,
   StorageAdapter,
   TerrainOptions,
   TileSource,
@@ -120,6 +121,7 @@ function reviewBody(props: TripReviewProps): ReactElement[] {
     [props.track, props.channels],
   );
   return [
+    createElement(Photos, { key: "photos", events: props.events, store: props.store }),
     createElement(StatsPanel, { key: "stats", stats }),
     ...(charts.length === 0
       ? []
@@ -260,4 +262,138 @@ function ChannelChart(props: {
       ),
     ),
   );
+}
+
+/**
+ * The photos attached to this trip's events.
+ *
+ * Three outcomes, deliberately distinguishable — this is what ADR-0028's required `store` was
+ * argued for. A `MediaRef` with a `url` is already hosted and is rendered from it **without
+ * touching the store at all**. One with a `blobKey` is resolved through the store. One whose
+ * `blobKey` the store does not hold renders an explicit *unavailable* placeholder rather than
+ * nothing: the event records that a photo exists, and showing nothing would misreport the event
+ * as having none — the same ambiguity the required store removed at the API level, reintroduced
+ * at the pixel level.
+ */
+function Photos(props: { events: MapEvent[]; store: StorageAdapter }): ReactElement | null {
+  const refs = useMemo(
+    () => props.events.flatMap((event) => event.media.map((media) => ({ event, media }))),
+    [props.events],
+  );
+  const resolved = useResolvedBlobs(refs, props.store);
+  if (refs.length === 0) return null;
+  return createElement(
+    "ul",
+    { className: "mapatlas-trip-photos" },
+    ...refs.map(({ event, media }) =>
+      createElement(
+        "li",
+        { key: `${event.id}:${media.id}`, className: "mapatlas-trip-photo" },
+        renderPhoto(media, resolved),
+      ),
+    ),
+  );
+}
+
+/** `null` means resolved-and-absent; a string is an object URL; missing means still resolving. */
+type Resolution = Record<string, string | null>;
+
+function renderPhoto(media: MediaRef, resolved: Resolution): ReactElement {
+  // A hosted URL wins outright and needs no lookup — the store is for blobs.
+  if (media.url !== undefined) {
+    return createElement("img", {
+      className: "mapatlas-trip-photo-image",
+      src: media.url,
+      alt: "",
+    });
+  }
+  if (media.blobKey === undefined) {
+    return createElement(
+      "p",
+      { className: "mapatlas-trip-photo-missing" },
+      "This photo is unavailable.",
+    );
+  }
+  const url = resolved[media.blobKey];
+  if (url === undefined) {
+    return createElement("p", { className: "mapatlas-trip-photo-loading" }, "Loading photo…");
+  }
+  if (url === null) {
+    return createElement(
+      "p",
+      { className: "mapatlas-trip-photo-missing" },
+      "This photo is unavailable.",
+    );
+  }
+  return createElement("img", { className: "mapatlas-trip-photo-image", src: url, alt: "" });
+}
+
+/**
+ * Resolve `blobKey`s to object URLs, revoking them when they stop being needed.
+ *
+ * **Two revocation moments, not one.** Unmount is the obvious one; the other is the media list
+ * changing under a live component, which a mount/unmount test never reaches — a review that
+ * swaps trips would leak every previous trip's URLs for as long as the page lives.
+ */
+function useResolvedBlobs(refs: { media: MediaRef }[], store: StorageAdapter): Resolution {
+  const [resolved, setResolved] = useState<Resolution>({});
+  const urls = useRef(new Map<string, string>());
+
+  const keys = useMemo(
+    () =>
+      [
+        ...new Set(
+          refs
+            .filter(({ media }) => media.url === undefined && media.blobKey !== undefined)
+            .map(({ media }) => media.blobKey ?? ""),
+        ),
+      ].sort(),
+    [refs],
+  );
+  const keyId = keys.join("\u0000");
+
+  useEffect(() => {
+    // Anything we hold that this render no longer asks for is released now, not at unmount.
+    for (const [key, url] of [...urls.current]) {
+      if (!keys.includes(key)) {
+        URL.revokeObjectURL(url);
+        urls.current.delete(key);
+        setResolved((previous) => {
+          if (!(key in previous)) return previous;
+          const rest = { ...previous };
+          delete rest[key];
+          return rest;
+        });
+      }
+    }
+    let live = true;
+    void (async () => {
+      for (const key of keys) {
+        if (urls.current.has(key)) continue;
+        const blob = await store.getBlob(key);
+        if (!live) return;
+        if (blob === undefined) {
+          setResolved((previous) => ({ ...previous, [key]: null }));
+          continue;
+        }
+        const url = URL.createObjectURL(blob);
+        urls.current.set(key, url);
+        setResolved((previous) => ({ ...previous, [key]: url }));
+      }
+    })();
+    return () => {
+      live = false;
+    };
+    // `keyId` rather than `keys`: a fresh array each render would re-run this every time.
+  }, [keyId, store]);
+
+  const held = urls.current;
+  useEffect(() => {
+    return () => {
+      for (const url of held.values()) URL.revokeObjectURL(url);
+      held.clear();
+    };
+  }, [held]);
+
+  return resolved;
 }

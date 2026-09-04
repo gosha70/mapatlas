@@ -22,5 +22,8 @@ export type { TrackListBinding } from "./use-track-list.js";
 export { useTrackList } from "./use-track-list.js";
 export type { TrackRecorderBinding, UseTrackRecorderOptions } from "./use-track-recorder.js";
 export { useTrackRecorder } from "./use-track-recorder.js";
+// `TripReview`'s props are inline in §9, like `MapCanvas`'s — no named props type is published,
+// and `TripReviewInternal` is a test seam that `index.test.ts` asserts never escapes.
+export { TripReview } from "./trip-review.js";
 
 export const PACKAGE_NAME = "@mapatlas/react";

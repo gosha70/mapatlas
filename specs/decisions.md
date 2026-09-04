@@ -806,3 +806,90 @@ be API that §9 does not publish.
 `mode: "photo"` means the capture affordance is the initially active, accessible control, with
 the picker invoked through a user action — not an automatic camera launch, which user-activation
 rules do not permit anyway.
+
+## ADR-0028 — `TripReview` takes a `StorageAdapter`, because photos have no other route
+**Context.** `tasks.md` scoped T5.4 as "events/photos", but §9's `TripReview` had no store.
+`MediaRef` addresses media two ways: `blobKey` into a `StorageAdapter`, or `url` for
+already-hosted media. Without a store the component can render the second and not the first —
+so it could not display a photo `EventComposer` had just written, which is the ordinary case.
+The alternatives were to drop photos from the task (scope overstates) or to render `url`-backed
+media only and document the hole.
+**Decision.** Add `store: StorageAdapter` to `TripReview`, required rather than optional. A
+`MediaRef` with `url` renders from it directly and needs no lookup; one with `blobKey` is
+resolved through the store.
+**Consequences.** The review surface gains a persistence dependency that `MapCanvas` does not
+have, which is a real asymmetry and is the price of the composer and the review agreeing about
+one event. Required rather than optional because an optional store makes "the photo did not
+render" ambiguous between *not supplied* and *not found* — the consumer should fail to compile,
+not fail silently. Object URLs created for display are revoked on unmount, as in the composer.
+
+## ADR-0029 — "No channels" has five readings; `channels` defaults to the descriptors
+**Context.** T5.4's acceptance line says a track with no channels renders without an empty
+chart frame. That settles the *outcome* and not the *antecedent*: "no channels" can mean no
+descriptors on the track, descriptors with no samples in any point, samples whose key has no
+descriptor, a `channels?` prop naming nothing that matches, or a prop given as `[]`. The doc
+comment said `channels?` "defaults to all" without saying all of what — and descriptors and
+data can disagree in both directions.
+**Decision.** The default is **the descriptors in `track.channels`**. A descriptor is the
+consumer's statement that a channel exists and how to label it; data carrying a key with no
+descriptor has neither a label nor a unit and is not charted. A named or defaulted key with no
+samples charts nothing rather than an empty frame, and `channels: []` charts nothing. The chart
+region is absent entirely when nothing is chartable, not present and empty.
+**Consequences.** Two silent omissions, in mirror image, and both are accepted rather than
+overlooked. A consumer who records a channel and forgets its descriptor sees no chart —
+inventing a label and unit for an unnamed key would be the engine learning what the number
+means, which ADR-0009 forbids. And a consumer who *declares* a descriptor but records no
+samples also sees nothing, so a declared-but-empty channel is indistinguishable in the UI from
+an undeclared one. That second case is the one that will be reported as a bug: the consumer can
+see their descriptor in the code and no chart on the screen. It is still the right outcome —
+the alternative is the empty frame the acceptance criterion forbids — but the engine offers no
+signal to tell the two apart, and a consumer needing one must check `points[].channels` itself.
+The five readings are each pinned by a test, since one implementation satisfying the AC's
+wording could fail any of the other four.
+
+## ADR-0030 — Replay is internal state, and holds across a pause
+**Context.** "Replay" appeared exactly once in the entire spec tree — the T5.4 scope line —
+with no criterion, no signature support and no ADR. The prevailing pattern elsewhere (Strava
+Flyby/Flyover, LeafletPlayback) is a video-player surface over a time cursor: play/pause, speed,
+scrub, and a marker interpolated between samples. LeafletPlayback additionally stops
+interpolating across a gap larger than a threshold rather than extrapolating through it.
+**Decision.** T5.5 owns replay. A time cursor over `[first.t, last.t]` drives the map marker
+and a cursor on each channel chart; play/pause and scrub are the controls. The marker
+interpolates between samples but **holds across a pause rather than sliding through it** — the
+same discontinuity the rendered line already honours, which `render-differential.e2e.ts` pins as
+"the pause holds no line". Playback state is internal, so §9 gains no props.
+**Consequences.** A consumer cannot drive or observe playback in v1; controlled playback is a
+later addition and a strictly additive one. Holding across a pause is deliberately not the
+smoothest animation — a marker that glides across a gap the map draws as empty tells the viewer
+the trip continued through it, which is the one thing the rendered line refuses to say.
+
+## ADR-0031 — Charts are hand-rolled SVG; no charting dependency
+**Context.** T5.4 renders a channel as a time series under the map. The obvious move is a
+charting library, and the decision was initially recorded as a settled call inside T5.4's plan —
+the wrong home, because a plan is read by whoever does that task while this question is asked
+again by whoever later wants to add a chart library.
+**Decision.** Hand-rolled SVG, no dependency. Decided on criteria fixed before candidates were
+considered: (1) bundle cost falls on every consumer of `@mapatlas/react`, including the majority
+who never render a chart, and a published library package cannot pass that on lightly; (2) the
+barrel is SSR-safe by contract and `MapCanvas` depends on that — a library touching `window` at
+import time breaks SSR for the whole package, not just for charts; (3) the acceptance criterion
+needs a labelled time series with a unit and no interactivity at all. Nothing on those three
+favours a dependency.
+**The chart breaks at a pause, as the map does.** One polyline per segment rather than one
+across the track. A single line runs straight from the last sample before a stop to the first
+after it, which draws the pause as though the trip continued through it at some rate — and the
+rendered track already refuses to say that (`render-differential.e2e.ts` pins "the pause holds no
+line"), as does the replay marker under ADR-0030. A chart that glided across the gap would be
+the one surface in the engine asserting continuity through a stop. The alternative — interpolate
+on the chart because a time series "wants" to be continuous — was considered and rejected: the
+gap is data, and hiding it is a claim.
+**Consequences.** Axis, scale and path construction are ours, and so are their bugs; the mutation
+list carries a time-not-index bar because an evenly-spaced plot of unevenly-timed samples is the
+mistake a hand-rolled implementation makes first. Segment-splitting means a channel sampled
+during a pause — which a `SensorSource` may well keep emitting — has samples that fall in no
+segment and so are not plotted; they still reach `computeStats`, so a chart can legitimately show
+less than its own average summarises. T5.5's cursor inherits the segment boundaries this
+introduces. Should a later requirement need interaction —
+brushing, tooltips, zoom — this decision is reopened rather than worked around, and criterion (3)
+is the one that will have changed. Criteria (1) and (2) hold regardless and would still bind the
+choice to a library that is tree-shakeable and import-safe.

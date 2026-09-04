@@ -1007,10 +1007,36 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   resampled, and `""` is not reserved — a `select` or category option may carry it, so
   missing-ness is the placeholder being selected, never the empty string. `FieldSpec.key` is an
   identity and duplicates are rejected rather than resolved by order.
-- **T5.4 `<TripReview>`.** Map (sources/terrain/presentation) + replay + events/photos + stats
-  panel + per-channel charts. _AC:_ renders a finalized trip on a basemap with start/finish
-  marks; a track with a `heartRateBpm`-style channel charts it against time with the
-  descriptor's label and unit; a track with no channels renders without an empty chart frame.
+- **T5.4 `<TripReview>`.** Map (sources/terrain/presentation) + events/photos + stats panel +
+  per-channel charts. **Replay is T5.5**, split out because this task already carries five
+  surfaces and T5.3 showed what that costs. _AC:_ renders a finalized trip on a basemap with
+  start/finish marks; a track with a `heartRateBpm`-style channel charts it against time with
+  the descriptor's label and unit; a track with no channels renders without an empty chart
+  frame; an event whose `MediaRef` carries a `blobKey` renders its photo, resolved through the
+  `store` prop added to §9 for exactly this (ADR-0028).
+
+  *Settled here, because scope named what the signature could not do.* §9 had no
+  `StorageAdapter`, so "photos" was unbuildable as written — `store` is added rather than
+  photos dropped, since a review that cannot show what the composer just wrote is a seam with
+  a hole in it. And "no channels" has five readings, enumerated in ADR-0029 and pinned one test
+  each: no descriptors on the track; a descriptor with no samples; samples whose key has no
+  descriptor; a `channels?` prop naming nothing that matches; and `channels: []`. What
+  "defaults to all" means when descriptors and data disagree is settled by the same ADR — the
+  default is the descriptors — rather than being a sixth case.
+
+  **Done** — `fb10e02`/`f8d57a3` (contract: ADR-0028 `store`, ADR-0029 the five readings,
+  ADR-0030 replay split out, ADR-0031 charts), `595925b`/`48386f6` (composition, every forward
+  falsified at the controller rather than in the DOM), `9402475`/`7138548`/`3e2a6bb` (stats and
+  charts; the chart breaks at a pause as the map does), `569df0e` (photos, three outcomes told
+  apart, both revocation moments), and the closure increment: `TripReview` exported and pinned
+  to §9, `TripReviewInternal` held off the barrel, the harness alias retired.
+
+- **T5.5 Replay.** A time cursor over the finalized track, with play/pause and scrub, driving
+  the map marker and a matching cursor on each channel chart. _AC:_ the marker interpolates
+  between samples; **it holds rather than sliding across a pause**, the same discontinuity
+  `render-differential.e2e.ts` already pins in the rendered line; scrubbing to a time moves
+  both the marker and the chart cursors; playback state is internal, so §9 gains no props
+  (ADR-0030).
 
 ## Phase 6 — Offline regions
 - **T6.1 PMTiles region store.** `@mapatlas/offline-pmtiles`: implement `OfflineRegionStore`

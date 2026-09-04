@@ -18,6 +18,7 @@ import { createRoot } from "react-dom/client";
 import type { MapEvent, StorageAdapter } from "@mapatlas/core";
 import type { FieldSpec } from "@mapatlas/react";
 import { EventComposer } from "@mapatlas/react";
+import { TripReview } from "@mapatlas/react";
 import { createIdbStorageAdapter } from "@mapatlas/storage-idb";
 
 type SaveInput = Parameters<Parameters<typeof EventComposer>[0]["onSave"]>[0];
@@ -50,6 +51,12 @@ declare global {
       readBlob(key: string): Promise<number[] | undefined>;
       /** Which element currently has focus, by class — the mode scenarios read this. */
       activeClass(): string;
+      /**
+       * Close the loop: mount `TripReview` over the *same* adapter the composer wrote to, with
+       * the event the consumer just persisted. A separate adapter would prove only that two
+       * stores can hold bytes; the claim is that what the composer wrote, the review can show.
+       */
+      review(eventId: string): Promise<void>;
       /** URLs the analyzer actually requested. The disclosure scenario expects none. */
       egress: string[];
     };
@@ -100,6 +107,53 @@ window.composer = {
     return [...new Uint8Array(await blob.arrayBuffer())];
   },
   activeClass: () => document.activeElement?.className ?? "",
+  review: async (eventId) => {
+    const event = await persistent.getEvent(eventId);
+    if (event === undefined) throw new Error(`no persisted event ${eventId}`);
+    root.render(
+      createElement(
+        StrictMode,
+        null,
+        createElement(TripReview, {
+          track: {
+            id: "reviewed",
+            startedAt: event.occurredAt - 1_000,
+            endedAt: event.occurredAt + 1_000,
+            status: "finalized",
+            origin: "recorded",
+            points: [
+              { lat: 59.32, lng: 18.05, t: event.occurredAt - 1_000 },
+              { lat: 59.34, lng: 18.07, t: event.occurredAt + 1_000 },
+            ],
+            segments: [
+              {
+                id: "s1",
+                startIndex: 0,
+                endIndex: 1,
+                startedAt: event.occurredAt - 1_000,
+                endedAt: event.occurredAt + 1_000,
+              },
+            ],
+          },
+          events: [event],
+          store: persistent,
+          sources: [
+            {
+              id: "base",
+              kind: "raster",
+              transport: "template",
+              // `tiles.invalid` is the host the browser fixtures actually serve. Pointing at
+              // an unserved host would make the map log an AJAXError per tile, and the console
+              // guard would fail this scenario for the map's noise rather than for the photo it
+              // is about — the fixtures are served rather than the errors ignored.
+              url: "https://tiles.invalid/{z}/{x}/{y}.png",
+              attribution: "harness",
+            },
+          ],
+        }),
+      ),
+    );
+  },
   egress: [],
   setup: (config) => {
     window.composer.saves = [];

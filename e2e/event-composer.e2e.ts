@@ -2,7 +2,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { consoleFor, watchConsole } from "./fixtures/browser.js";
+import { consoleFor, fixturePng, serveMapFixtures, watchConsole } from "./fixtures/browser.js";
 
 /**
  * T5.3's numeric boundary under the real number-input contract
@@ -94,7 +94,11 @@ test("typed overflow cannot hand over a non-finite value; correction permits Sav
 const PHOTO = {
   name: "field-shot.jpg",
   mimeType: "image/jpeg",
-  buffer: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]),
+  // A real, decodable PNG — the same one the tile fixtures serve. The first version of this
+  // was a PNG signature followed by four arbitrary bytes, which round-trips through storage
+  // perfectly and renders as a zero-sized broken image, so `toBeVisible` failed on a fixture
+  // defect rather than on the component.
+  buffer: fixturePng(),
 };
 
 /** Open the picker by activating the affordance, and answer it with the fixture. */
@@ -227,4 +231,44 @@ test("a local analyzer runs without a disclosure", async ({ page }) => {
   await expect(page.locator(".mapatlas-composer-suggestions")).toBeVisible();
   expect(await page.evaluate(() => window.composer.egress)).toEqual(["/__analyzer__/on-device"]);
   await expect(page.locator(".mapatlas-composer-disclosure")).toHaveCount(0);
+});
+
+/**
+ * T5.4 increment 3 — the loop closed against one adapter.
+ *
+ * The composer writes a photo through a real IndexedDB adapter and the consumer persists the
+ * event; `TripReview` then mounts over **the same adapter instance** and resolves the same
+ * `blobKey` for display. Two adapters would prove only that two stores can hold bytes; the
+ * claim under test is that what the composer wrote, the review can show — which is the reason
+ * ADR-0028 put a required `store` on `TripReview` in the first place.
+ */
+test("a photo written by the composer is displayed by the review", async ({ page }) => {
+  // The review mounts a real map, so its tiles must be served — see the fixture's note on why
+  // ignoring the errors instead is the wrong trade.
+  await serveMapFixtures(page);
+  await page.evaluate(() => window.composer.setup({ persist: true, occurredAt: 9 }));
+  await captureThroughChooser(page);
+  await page.locator(".mapatlas-composer-save").click();
+  await expect.poll(() => page.evaluate(() => window.composer.persistedId)).toBe("evt-1");
+
+  await page.evaluate(() => window.composer.review("evt-1"));
+
+  const photo = page.locator(".mapatlas-trip-photo-image");
+  await expect(photo).toBeVisible();
+  // A blob: URL, not the hosted-url path — this went through the store.
+  await expect(photo).toHaveAttribute("src", /^blob:/);
+  await expect(
+    page.locator(".mapatlas-trip-photo-missing"),
+    "the review could not resolve what the composer wrote",
+  ).toHaveCount(0);
+
+  // And the bytes behind that src are the bytes that were selected.
+  const bytes = await page.evaluate(async () => {
+    const src = document.querySelector<HTMLImageElement>(".mapatlas-trip-photo-image")?.src ?? "";
+    const blob = await (await fetch(src)).blob();
+    return [...new Uint8Array(await blob.arrayBuffer())];
+  });
+  expect(bytes, "the displayed photo is not the photo that was captured").toEqual([
+    ...PHOTO.buffer,
+  ]);
 });

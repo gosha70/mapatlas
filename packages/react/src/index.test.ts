@@ -246,17 +246,15 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 /**
- * **`NOT_YET_BUILT` is gone, because nothing is.** With `EventComposer` on the barrel, every
- * name `api.md` §9 publishes for this package is exported and covered by the exact checks
- * above. The list is not kept empty: a loop over nothing is a test that cannot fail, which is
- * the shape this file exists to avoid.
+ * Published by `api.md` §9 and **not yet built**: `TripReview`, owned by T5.4.
  *
- * It earned its keep and should come back the same way if §9 ever publishes ahead of
- * implementation again — declare the unbuilt name, assert it absent, and the assertion fails
- * the moment it reaches the barrel, which is what forces it into the exact checks rather than
- * letting it appear with nothing verifying it. `useTrackList`, `useTrackDraft` and
- * `EventComposer` each arrived that way; `git log -S NOT_YET_BUILT` has the pattern.
+ * The list earns its keep by failing: it once held `useTrackList`, `useTrackDraft`,
+ * `MapCanvas` and `EventComposer`, and each assertion went red the moment its name reached
+ * the barrel, which is what forced it into the exact checks above instead of appearing with
+ * nothing verifying it. It was briefly deleted on the claim that nothing was unbuilt — that
+ * claim was wrong, because §9 declares three components and only two exist.
  */
+const NOT_YET_BUILT = ["TripReview"] as const;
 
 /** Internal to the package: seams and test infrastructure that must never reach a consumer. */
 const MUST_NOT_ESCAPE = [
@@ -295,10 +293,17 @@ describe("@mapatlas/react's public surface", () => {
     expect(barrel.PACKAGE_NAME).toBe("@mapatlas/react");
   });
 
-  it("exports the five published hooks, both components, and nothing else", () => {
+  it("still leaves T5.4's component unbuilt, and says so", () => {
+    for (const name of NOT_YET_BUILT) {
+      expect(Object.keys(barrel), `${name} is not built yet`).not.toContain(name);
+    }
+  });
+
+  it("exports the five published hooks, both built components, and nothing else", () => {
     // A set comparison rather than a handful of `toBeDefined` checks: those would pass while
     // the barrel quietly grew an export nobody reviewed, and the barrel is the package's whole
-    // contract. With T5.3 closed this set is api.md §9's React surface, complete.
+    // contract. With T5.3 closed this is §9's React surface minus `TripReview`, which T5.4
+    // owns and which the list above asserts absent.
     expect(Object.keys(barrel).sort()).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

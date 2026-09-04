@@ -815,12 +815,18 @@ describe("TripReview — the replay cursor (T5.5 increment 2)", () => {
    * A clock the test drives. A real one makes "advanced by one second" a race, and
    * `requestAnimationFrame` in happy-dom would make it a race against a fake too.
    */
-  function testClock(): { clock: ReplayClock; advance: (ms: number) => Promise<void> } {
+  function testClock(): {
+    clock: ReplayClock;
+    advance: (ms: number) => Promise<void>;
+    scheduled: () => number;
+  } {
     let now = 0;
+    let scheduled = 0;
     let pending: (() => void) | undefined;
     const clock: ReplayClock = {
       now: () => now,
       schedule: (callback) => {
+        scheduled += 1;
         pending = callback;
         return () => {
           pending = undefined;
@@ -829,6 +835,7 @@ describe("TripReview — the replay cursor (T5.5 increment 2)", () => {
     };
     return {
       clock,
+      scheduled: () => scheduled,
       advance: async (ms) => {
         now += ms;
         await act(async () => {
@@ -969,6 +976,68 @@ describe("TripReview — the replay cursor (T5.5 increment 2)", () => {
     await act(async () => undefined);
     expect(scrub(container).value, "a cursor after the trip ended").toBe("10000");
     expect(marker(seen)?.lat).toBe(59.33);
+  });
+
+  it("refuses to play a zero-duration track, and schedules nothing", async () => {
+    // One point: `first.t === last.t`, so there is no interval to advance across. Playing it
+    // would schedule a tick that can only resolve to the same instant — and, before the guard
+    // existed, would flip the control to Pause for a trip that cannot move.
+    const instant = {
+      ...TRACK,
+      points: [{ lat: 1, lng: 2, t: 500 }],
+      segments: [{ id: "s1", startIndex: 0, endIndex: 0, startedAt: 500, endedAt: 500 }],
+      startedAt: 500,
+      endedAt: 500,
+    } satisfies Track;
+    const { clock, advance, scheduled } = testClock();
+    const { container, seen } = await mount({ track: instant, clock });
+
+    expect(scrub(container).value).toBe("500");
+    expect(marker(seen), "a finite position, not NaN").toMatchObject({ lat: 1, lng: 2, t: 500 });
+
+    await act(async () => {
+      clickLive(toggle(container), "Play");
+    });
+    expect(toggle(container).textContent, "a zero-duration trip must not enter playback").toBe(
+      "Play",
+    );
+    expect(scheduled(), "nothing may be scheduled for a trip that cannot advance").toBe(0);
+
+    await advance(5_000);
+    expect(scrub(container).value).toBe("500");
+  });
+
+  it("stops playback when the track is replaced mid-play", async () => {
+    // The active-playback case, distinct from replacing while paused: the replacement resets
+    // the cursor *and* clears `playing`, so a scheduled tick from the previous trip cannot
+    // carry playback into the new one.
+    const { clock, advance } = testClock();
+    const mounted = await mount({ track: UNEVEN, clock });
+    await act(async () => {
+      clickLive(toggle(mounted.container), "Play");
+    });
+    await advance(500);
+    expect(scrub(mounted.container).value).toBe("500");
+    expect(toggle(mounted.container).textContent).toBe("Pause");
+
+    await mounted.rerender({
+      track: TRACK,
+      events: EVENTS,
+      store: STORE,
+      sources: SOURCES,
+      create: mounted.create,
+      clock,
+    } as never);
+
+    expect(scrub(mounted.container).value, "the cursor must land in the new track").toBe("1000");
+    expect(toggle(mounted.container).textContent, "playback carried into a different trip").toBe(
+      "Play",
+    );
+
+    await advance(5_000);
+    expect(scrub(mounted.container).value, "a disowned tick kept advancing the cursor").toBe(
+      "1000",
+    );
   });
 
   it("renders no controls for a track with no points", async () => {

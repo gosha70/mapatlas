@@ -56,7 +56,7 @@ export interface FieldSpec {
 /**
  * Compose one event at a position: comment, category, consumer-defined fields, one optional
  * photo, optional analysis of it, and save/cancel (`api.md` §9, ADR-0005, ADR-0027).
- * Everything documented here is built; only the barrel export remains.
+ * Everything documented here is built and exported.
  *
  * **An uncontrolled form, read at Save.** The draft lives in the DOM until the moment it is
  * handed over: nothing re-renders per keystroke, and a Save blocked by validation preserves the
@@ -180,6 +180,10 @@ export function EventComposer(props: {
   const openedAt = useRef(Date.now());
 
   const commentRef = useRef<HTMLTextAreaElement | null>(null);
+  /** Read by `removePhoto`: the input keeps its value after removal, and a browser fires no
+   *  `change` when the same file is picked again, so the photo would be unrecoverable without
+   *  choosing a different one first. */
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
   const categoryRef = useRef<HTMLSelectElement | null>(null);
   const fieldControls = useRef(new Map<string, HTMLInputElement | HTMLSelectElement>());
   const [missingLabels, setMissingLabels] = useState<readonly string[]>([]);
@@ -203,8 +207,20 @@ export function EventComposer(props: {
     { result: MediaAnalysis; confirmed: boolean } | undefined
   >(undefined);
   const [analyzing, setAnalyzing] = useState(false);
-  /** The disclosure panel is open. Opening it is the *refusal* to send, not a send. */
-  const [disclosing, setDisclosing] = useState(false);
+  /**
+   * The open disclosure, **as the request it describes** rather than a boolean.
+   *
+   * A boolean forced the panel to name `props.analyzer` and Accept to pass it, while the
+   * authorization ref held the analyzer the disclosure was actually opened for. Those diverge
+   * for one committed frame whenever a consumer replaces the analyzer through a non-discrete
+   * update — the panel would name the new service while the ref authorised the old one, and a
+   * click in that frame sent bytes to something other than what the user had just read.
+   * Carrying the request in the state closes that by construction: the panel names what would
+   * be sent, and Accept sends what the panel named.
+   */
+  const [disclosure, setDisclosure] = useState<{ source: MediaAnalyzer; file: File } | undefined>(
+    undefined,
+  );
   /**
    * Monotonic request token. Every resolution names the request it belongs to, and every
    * event that invalidates one bumps it, so the accept/discard test is a single comparison
@@ -231,7 +247,7 @@ export function EventComposer(props: {
    * The one outstanding disclosure, as a **synchronous, single-use authorization** naming the
    * exact request it authorises.
    *
-   * `disclosing` cannot carry this. It is React state, so its clearing is queued: until the
+   * The panel state cannot carry this. It is React state, so its clearing is queued: until the
    * commit, the Accept button is still mounted and still calls its handler, and two
    * activations in one task would start two sends from one disclosure. Nor is admission
    * enough — the composition is legitimately open in between. Consuming a ref before the
@@ -264,7 +280,7 @@ export function EventComposer(props: {
     analyzeSeq.current += 1;
     setAnalyzing(false);
     authorized.current = undefined;
-    setDisclosing(false);
+    setDisclosure(undefined);
   }, [analyzer]);
 
   // Placed after the hooks so this render's hook sequence is complete before it can abort.
@@ -453,7 +469,7 @@ export function EventComposer(props: {
     // the composition open, so admission still permits an accept, and the button is still
     // mounted for the rest of the task in which Remove was activated.
     authorized.current = undefined;
-    setDisclosing(false);
+    setDisclosure(undefined);
   };
 
   /** The same, plus forgetting the result and the error that described the departing photo. */
@@ -493,6 +509,10 @@ export function EventComposer(props: {
     if (photoUrl.current !== undefined) URL.revokeObjectURL(photoUrl.current);
     photoUrl.current = undefined;
     setPhoto(undefined);
+    // Clear the control too. Removing only the component's state leaves the input holding the
+    // file, and re-picking the same one then fires no `change` — the photo could not be added
+    // back without choosing a different file first.
+    if (photoInputRef.current !== null) photoInputRef.current.value = "";
     // Nothing is persisted before Save, so removal has nothing to clean up.
   };
 
@@ -535,77 +555,58 @@ export function EventComposer(props: {
     // activations send the photo with no disclosure at all, which is not a gate on the action
     // but a gate on the first action.
     if (source.runsRemotely) {
-      authorized.current = { source, file };
-      setDisclosing(true);
+      // One object in both places, so the panel and the authorization cannot describe
+      // different requests.
+      const request = { source, file };
+      authorized.current = request;
+      setDisclosure(request);
       return;
     }
     runAnalysis(source, file);
   };
 
-  const acceptDisclosure = (source: MediaAnalyzer, file: File): void => {
-    // Admission is rechecked here, and this check *is* falsifiable — an earlier version of
-    // this file argued it was unreachable because every terminal transition closes the panel.
-    // That was wrong: closing the panel is a state update, which React has not committed at
-    // the moment `onCancel` runs, so a consumer's cancel callback can synchronously activate
-    // a button it retained and reach this handler on a settled composer. The DOM being about
-    // to disappear is not the same as the handler being unreachable.
+  const acceptDisclosure = (request: { source: MediaAnalyzer; file: File }): void => {
+    // Single-use, and synchronous: `setDisclosure(undefined)` is queued, so between the click
+    // and the commit the button is still mounted and still calls this. Consuming the ref is
+    // what makes one disclosure authorise one send.
+    // No identity comparison here any more, and its absence is the point. It used to guard
+    // against the panel and the authorization describing different requests; they are now the
+    // same object, set together in `requestAnalysis`, so the mismatch it checked for cannot be
+    // constructed. That is a fix by construction replacing an assertion — and it also retires
+    // an accepted-survivor row, since the check could never be falsified either.
     const pending = authorized.current;
     if (pending === undefined) return;
-    // **The second stated belief.** These two checks encode different things — "no
-    // outstanding disclosure" above, "the composition is not terminal" here — and they
-    // coincide only because every terminal transition voids the authorization. Reaching here
-    // with a live authorization on a settled composer would mean that coincidence had broken,
-    // which is a fact worth announcing rather than a case worth quietly refusing.
+    // **The second stated belief.** "No outstanding disclosure" is checked above; this checks
+    // "the composition is not terminal". They coincide only because every terminal transition
+    // voids the authorization, and reaching here with a live one on a settled composer would
+    // mean that coincidence had broken — worth announcing, not quietly refusing.
     //
-    // `acceptsWork()` reads exactly two things — `outcome` and `writing` — and nothing else;
-    // adding a third input to that predicate is a change to the enumeration below, not just
-    // to the predicate.
-    //
-    // The enumeration is of the *transitions*, not of `endAnalysis`'s callers — callers ⊆
-    // transitions is trivially true and proves nothing. Every assignment that makes
-    // `acceptsWork()` false:
+    // `acceptsWork()` reads exactly `outcome` and `writing`, nothing else; a third input would
+    // be a change to this enumeration. Every assignment that makes it false:
     //   - `outcome = "saved"` on the photo-free path — `save` voids before branching;
     //   - `outcome = "saved"` after a write lands — `save` already voided, and no disclosure
-    //     can have opened since, because admission refuses while `writing` is true (asserted,
-    //     not merely read off the code: "admits no analyzer work after handoff, or while a
-    //     Save is pending" checks that no panel opens, not only that no call is made);
+    //     can have opened since, because admission refuses while `writing` is true (asserted:
+    //     "admits no analyzer work after handoff, or while a Save is pending" checks that no
+    //     panel opens, not only that no call is made);
     //   - `outcome = "cancelled"` in `cancel` — voids;
     //   - `writing = true` in `save` — voids before setting it.
-    // The analyzer's own failure paths are not transitions: the catch touches neither
-    // `outcome` nor `writing`. So this throw is uncovered by design, like the mismatch above,
-    // and a mutation deleting it likewise survives — an **accepted survivor**, not a gap.
+    // The analyzer's failure paths are not transitions: the catch touches neither. So this
+    // throw is uncovered by design, and a mutation deleting it survives — an **accepted
+    // survivor**, not a gap. Do not resolve it by deleting the assertion.
     if (!acceptsWork()) {
       throw new Error(
         "EventComposer: a terminal composition still holds an outstanding photo disclosure. " +
           "Every path that ends a composition must void its authorization to send.",
       );
     }
-    // **A stated belief, not a silent branch.** No known route reaches this handler with an
-    // authorization for a different request: every route that could — a changed photo, a
-    // changed analyzer — closes the panel first, and React delegates events at the root, so a
-    // detached button's handler never runs. That is a claim about React's scheduler rather
-    // than about this file, so it is asserted loudly instead of defended quietly: if a future
-    // path (a drop handler, an async source) ever mounts a second way in, this announces it
-    // rather than silently declining and leaving a dead branch nobody can falsify.
-    //
-    // **Accepted survivor.** A mutation deleting this throw passes the suite, and that is the
-    // intended status, not a gap: an invariant nothing can currently violate has no failing
-    // test to write. Do not "fix" it by deleting the assertion.
-    if (pending.source !== source || pending.file !== file) {
-      throw new Error(
-        "EventComposer: a photo disclosure was accepted for a request it does not describe. " +
-          "The disclosure names the exact photo and analyzer it authorises, and no send may " +
-          "reuse another request's consent.",
-      );
-    }
     authorized.current = undefined;
-    setDisclosing(false);
-    runAnalysis(source, file);
+    setDisclosure(undefined);
+    runAnalysis(request.source, request.file);
   };
 
   const declineDisclosure = (): void => {
     authorized.current = undefined;
-    setDisclosing(false);
+    setDisclosure(undefined);
   };
 
   const keepSuggestions = (result: MediaAnalysis): void => {
@@ -628,6 +629,7 @@ export function EventComposer(props: {
       createElement("span", null, "Photo"),
       createElement("input", {
         className: "mapatlas-composer-photo",
+        ref: photoInputRef,
         type: "file",
         accept: "image/*",
         onChange: choosePhoto,
@@ -674,15 +676,18 @@ export function EventComposer(props: {
                   },
                   analyzing ? "Analysing…" : "Analyse photo",
                 ),
-                disclosing
-                  ? createElement(
+                disclosure === undefined
+                  ? null
+                  : createElement(
                       "div",
                       { className: "mapatlas-composer-disclosure", role: "alertdialog" },
                       createElement(
                         "p",
                         null,
-                        `Analysing sends this photo to ${analyzer.id}, off this device. ` +
-                          "Nothing is sent unless you choose to continue.",
+                        // Named from the disclosed request, never from current props: the panel
+                        // must name the service the bytes would actually go to.
+                        `Analysing sends this photo to ${disclosure.source.id}, off this ` +
+                          "device. Nothing is sent unless you choose to continue.",
                       ),
                       createElement(
                         "button",
@@ -690,7 +695,7 @@ export function EventComposer(props: {
                           type: "button",
                           className: "mapatlas-composer-disclosure-accept",
                           onClick: () => {
-                            acceptDisclosure(analyzer, photo.file);
+                            acceptDisclosure(disclosure);
                           },
                         },
                         "Send the photo and analyse",
@@ -704,8 +709,7 @@ export function EventComposer(props: {
                         },
                         "Not now",
                       ),
-                    )
-                  : null,
+                    ),
                 analysisNotice === undefined
                   ? null
                   : createElement(

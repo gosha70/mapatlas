@@ -300,8 +300,17 @@ and only the layer that received it knows which.
 **non-decreasing**, `points[i].t >= points[i - 1].t`, so only a strict decrease throws — equal
 milliseconds are degenerate but not corrupt, two fixes can share one, and imported files often
 round to the second. `computeStats` is then responsible for not deriving an instantaneous speed
-from a pair whose `dt` is zero. The check runs **within** each segment and never across a
-boundary, where a gap is the entire point of the segmentation. Segment ranges are validated too —
+from a pair whose `dt` is zero.
+
+> **Amended by ADR-0032.** The check originally ran **within** each segment and never across a
+> boundary, on the reasoning that a gap is the entire point of the segmentation. That conflated
+> two continuities. Timestamps remain non-decreasing, but the check is **global over the
+> canonical `points[]`, segment boundaries included**: a boundary breaks *geometry*, not
+> *chronology* — no distance, line or interpolation crosses it, while the next segment may not
+> begin earlier than the preceding one ended. The original rule admitted a track whose second
+> segment predated its first, for which `computeStats` returned a negative `durationMs`. The
+> layer table below is unchanged: `finalizeTrack` still owns canonical validation; only the
+> invariant it enforces has strengthened. Segment ranges are validated too —
 in bounds, not inverted, not overlapping — because a malformed range produces wrong geometry and
 wrong statistics just as silently. **All validation happens before any derivation**: finalization
 either returns a wholly valid track or throws having computed nothing.

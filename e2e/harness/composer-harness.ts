@@ -57,6 +57,8 @@ declare global {
        * stores can hold bytes; the claim is that what the composer wrote, the review can show.
        */
       review(eventId: string): Promise<void>;
+      /** Mount TripReview over a paused two-segment track, for the replay scenarios. */
+      replay(): void;
       /** URLs the analyzer actually requested. The disclosure scenario expects none. */
       egress: string[];
     };
@@ -107,6 +109,47 @@ window.composer = {
     return [...new Uint8Array(await blob.arrayBuffer())];
   },
   activeClass: () => document.activeElement?.className ?? "",
+  replay: () => {
+    root.render(
+      createElement(
+        StrictMode,
+        null,
+        createElement(TripReview, {
+          track: {
+            id: "replayed",
+            startedAt: 0,
+            endedAt: 10_000,
+            status: "finalized",
+            origin: "recorded",
+            // Degrees apart, not hundredths. The unit fixtures use a tight cluster because they
+            // assert coordinates; this one is measured in *screen pixels* on a map at world
+            // zoom, where 0.01° is comfortably sub-pixel and a correct marker looks stationary.
+            points: [
+              { lat: 20, lng: 0, t: 0 },
+              { lat: 30, lng: 0, t: 1_000 },
+              { lat: 50, lng: 0, t: 9_000 },
+              { lat: 60, lng: 0, t: 10_000 },
+            ],
+            segments: [
+              { id: "s1", startIndex: 0, endIndex: 1, startedAt: 0, endedAt: 1_000 },
+              { id: "s2", startIndex: 2, endIndex: 3, startedAt: 9_000, endedAt: 10_000 },
+            ],
+          },
+          events: [],
+          store: persistent,
+          sources: [
+            {
+              id: "base",
+              kind: "raster",
+              transport: "template",
+              url: "https://tiles.invalid/{z}/{x}/{y}.png",
+              attribution: "harness",
+            },
+          ],
+        }),
+      ),
+    );
+  },
   review: async (eventId) => {
     const event = await persistent.getEvent(eventId);
     if (event === undefined) throw new Error(`no persisted event ${eventId}`);

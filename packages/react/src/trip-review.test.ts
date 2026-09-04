@@ -1040,6 +1040,49 @@ describe("TripReview — the replay cursor (T5.5 increment 2)", () => {
     );
   });
 
+  it("draws the chart cursor from the same value as the map marker", async () => {
+    // The bar from checkpoint 0. Two surfaces, one cursor: if the chart derived its own time
+    // the two could disagree about where the trip was, which is the reason there is one value.
+    // Asserted as a correspondence — the chart's x and the marker's position must both be the
+    // answer for the *same* t, so a chart reading a different time fails even if it looks
+    // plausible on its own.
+    const { clock } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    const cursorX = (): number =>
+      Number(find<Element>(container, ".mapatlas-trip-chart-cursor").getAttribute("x1"));
+
+    setRange(scrub(container), 500);
+    await act(async () => undefined);
+    // t=500 of a 10 000 ms span across 300 units: 15. And halfway along the first segment.
+    expect(cursorX(), "the chart cursor is not at the cursor's time").toBeCloseTo(15, 1);
+    expect(marker(seen)?.lat, "the marker is not at the cursor's time").toBeCloseTo(59.305, 5);
+
+    setRange(scrub(container), 9_500);
+    await act(async () => undefined);
+    expect(cursorX(), "the chart cursor did not follow").toBeCloseTo(285, 1);
+    expect(marker(seen)?.lat).toBeCloseTo(59.325, 5);
+  });
+
+  it("holds the chart cursor and the marker at the same place through a pause", async () => {
+    // Both surfaces refuse to interpolate across the stop, but they refuse *differently*: the
+    // chart's cursor keeps moving in x because time keeps passing, while the marker holds its
+    // position because the track has no observation there. Same value, different projections.
+    const { clock } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    const cursorX = (): number =>
+      Number(find<Element>(container, ".mapatlas-trip-chart-cursor").getAttribute("x1"));
+
+    setRange(scrub(container), 5_000);
+    await act(async () => undefined);
+    const held = marker(seen)?.lat;
+    expect(cursorX(), "time still passes during a pause").toBeCloseTo(150, 1);
+
+    setRange(scrub(container), 8_000);
+    await act(async () => undefined);
+    expect(cursorX(), "the chart cursor must advance with time").toBeCloseTo(240, 1);
+    expect(marker(seen)?.lat, "the marker must not move during the pause").toBe(held);
+  });
+
   it("renders no controls for a track with no points", async () => {
     const { clock } = testClock();
     const empty = { ...TRACK, points: [], segments: [] } satisfies Track;

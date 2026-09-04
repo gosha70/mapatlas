@@ -100,7 +100,7 @@ export function TripReviewInternal(
       ? createElement(MapCanvas, canvas)
       : createElement(MapCanvasInternal, { ...canvas, create: props.create }),
     createElement(ReplayControls, { key: "replay", track: props.track, replay }),
-    ...reviewBody(props),
+    ...reviewBody(props, replay.cursor),
   );
 }
 
@@ -277,7 +277,7 @@ function useReplay(
 }
 
 /** The non-map half: the stats panel, then one chart per chartable channel. */
-function reviewBody(props: TripReviewProps): ReactElement[] {
+function reviewBody(props: TripReviewProps, cursor: number | undefined): ReactElement[] {
   // `computeStats` and nothing else. A second implementation here would drift from the one the
   // recorder, the summary and the export all use, and the first thing it would get wrong is
   // `movingTimeMs`, which excludes pauses — a naive walk of the points sums straight through
@@ -294,7 +294,15 @@ function reviewBody(props: TripReviewProps): ReactElement[] {
     createElement(StatsPanel, { key: "stats", stats }),
     ...(charts.length === 0
       ? []
-      : [createElement(ChannelCharts, { key: "charts", track: props.track, charts, stats })]),
+      : [
+          createElement(ChannelCharts, {
+            key: "charts",
+            track: props.track,
+            charts,
+            stats,
+            cursor,
+          }),
+        ]),
   ];
 }
 
@@ -347,6 +355,7 @@ function ChannelCharts(props: {
   track: Track;
   charts: ChannelDescriptor[];
   stats: TrackStats;
+  cursor: number | undefined;
 }): ReactElement {
   return createElement(
     "div",
@@ -357,6 +366,7 @@ function ChannelCharts(props: {
         descriptor,
         track: props.track,
         stats: props.stats.channels?.[descriptor.key],
+        cursor: props.cursor,
       }),
     ),
   );
@@ -366,6 +376,7 @@ function ChannelChart(props: {
   descriptor: ChannelDescriptor;
   track: Track;
   stats: { min: number; max: number; avg: number } | undefined;
+  cursor: number | undefined;
 }): ReactElement {
   const { descriptor, track } = props;
   const samples = track.points
@@ -429,6 +440,19 @@ function ChannelChart(props: {
           points,
         }),
       ),
+      // **The same cursor value the map marker is drawn from.** Not a second time source: if
+      // the chart derived its own, the two surfaces could disagree about where the trip was,
+      // which is the whole reason there is one cursor. Absent when the cursor lies outside
+      // this channel's own samples — a channel that started late has nothing to point at.
+      props.cursor === undefined || props.cursor < t0 || props.cursor > t1
+        ? null
+        : createElement("line", {
+            className: "mapatlas-trip-chart-cursor",
+            x1: x(props.cursor).toFixed(2),
+            x2: x(props.cursor).toFixed(2),
+            y1: 0,
+            y2: CHART_H,
+          }),
     ),
   );
 }

@@ -279,7 +279,15 @@ export function EventComposer(props: {
   useEffect(() => {
     analyzeSeq.current += 1;
     setAnalyzing(false);
-    authorized.current = undefined;
+    // Clearing the panel state *is* the void here. The authorization is only ever spendable
+    // through the panel's Accept, and the panel's lifetime is now this state's, so a ref clear
+    // alongside would be unfalsifiable — a mutation dropping it survives, because by the time
+    // this passive effect runs the commit has already removed the button and no click can
+    // reach the handler in the same task.
+    //
+    // Note the asymmetry with `endAnalysis`, which does clear the ref and is falsified for it:
+    // its callers are discrete events, so the panel is still mounted for the rest of the task
+    // in which Remove was activated, and the ref is the only thing that can refuse that click.
     setDisclosure(undefined);
   }, [analyzer]);
 

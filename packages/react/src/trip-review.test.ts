@@ -1063,7 +1063,7 @@ describe("TripReview — the replay cursor (T5.5 increment 2)", () => {
     expect(marker(seen)?.lat).toBeCloseTo(59.325, 5);
   });
 
-  it("holds the chart cursor and the marker at the same place through a pause", async () => {
+  it("advances the chart cursor with time while the marker holds through a pause", async () => {
     // Both surfaces refuse to interpolate across the stop, but they refuse *differently*: the
     // chart's cursor keeps moving in x because time keeps passing, while the marker holds its
     // position because the track has no observation there. Same value, different projections.

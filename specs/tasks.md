@@ -956,12 +956,11 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   invisible for the same reason. It is removed, and both core and React now compare parameter
   tuples, return types and key sets exactly rather than by assignment.
 
-  *Scope.* Both components are now built, so `api.md` §9's React surface is complete and the
-  absent-name list is gone rather than kept empty — a loop over nothing is a test that cannot
-  fail. The mechanism earned its keep three times (`useTrackList`, `useTrackDraft`,
-  `EventComposer`): declaring an unbuilt name and asserting it absent is what failed the moment
-  each reached the barrel, forcing it into the exact checks instead of letting it appear
-  unverified. Restore it the same way if §9 ever publishes ahead of implementation again.
+  *Scope.* `api.md` §9's remaining React surface is `TripReview`, owned by T5.4, and
+  `index.test.ts` names it absent. The mechanism has earned its keep four times
+  (`useTrackList`, `useTrackDraft`, `MapCanvas`, `EventComposer`): declaring an unbuilt name
+  and asserting it absent is what failed the moment each reached the barrel, forcing it into
+  the exact checks instead of letting it appear unverified.
 - **T5.2 `<MapCanvas>`.** Wraps MapController incl. `style`/`terrain`/`presentation`/draw mode;
   SSR-safe (no window at import). _AC:_ renders track+events; toggling `drawMode` enters and
   exits cleanly.

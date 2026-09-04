@@ -734,8 +734,10 @@ describe("TripReview — resolution identity is (store, blobKey)", () => {
     }
   });
 
-  it("returns to Loading, not a stale Unavailable, when the store changes", async () => {
+  it("drops the previous store's Unavailable verdict when the store changes", async () => {
     // The sharper leg: A said absent, B has it. The old `null` must not be shown as B's answer.
+    // Named for what the oracle proves — the intervening frame is not separately observable
+    // through `act`, so the title does not claim it.
     const fake = twoStores({}, { [KEY]: new Blob([new Uint8Array([2])], { type: "image/jpeg" }) });
     try {
       const mounted = await mount({ events: oneEvent, store: fake.A });

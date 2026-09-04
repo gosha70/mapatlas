@@ -1037,3 +1037,62 @@ the terrain archive carries `role: "hillshade"` and the contour archive takes th
 thing T6.1's acceptance criterion is about. The default is left alone — changing it is a contract
 change with no criterion driving it — and callers that need terrain name their `sourceIds`
 explicitly. Recorded so Phase 7's demo does not rediscover it offline in the field.
+
+## ADR-0035 — A downloaded archive is served under its own url, not a local one
+**Context.** MapLibre reaches a PMTiles archive through the `pmtiles://` protocol handler
+(ADR-0004, `protocols/pmtiles.ts`), which resolves `pmtiles://<url>` by looking `<url>` up in a
+registry of `PMTiles` instances. Once T6.1 stores archive bytes locally, something has to make
+the renderer read those bytes instead of the network. Two shapes were available: rewrite the
+style's urls to point at local storage when a region exists, or leave the urls alone and change
+what the protocol resolves them *to*.
+
+**Decision.** Leave the urls alone. `@mapatlas/offline-pmtiles` exports
+`createStoredArchiveSource`, a PMTiles `Source` whose `getBytes` slices the stored `Blob` and
+whose `getKey()` returns the `TileSource.url` **unchanged**, and `installOfflineArchives`, which
+registers one such source per downloaded archive with the protocol.
+
+1. **The style is connectivity-independent.** The same `TileSource` list, the same style layers,
+   the same layer ids online and offline. Rewriting urls would give every style two forms, and
+   every filter, expression and `setSources` call built on those ids would have to keep both in
+   step — a class of bug that only appears offline, which is where it is hardest to see.
+2. **The archive key has one definition.** `installOfflineArchives` reads back through the same
+   `archiveKey(regionId, sourceId)` that `download()` wrote with. Two derivations would agree
+   until the day one of them moved.
+3. **A missing archive raises `MissingArchiveError` rather than returning zero bytes.** Map
+   assets are evictable (ADR-0016), so a manifest can outlive its bytes; empty bytes decode as
+   "this archive contains nothing here" and render as a blank map, which is ADR-0017's failure
+   wearing a success's clothes.
+4. **When two regions cover one source, the most recently downloaded registration wins.** The
+   protocol registry is keyed by url and the last registration replaces earlier ones, so
+   *something* decides; "whichever `list()` yielded last" is not a rule anyone can reason about
+   when one of the two copies turns out to be stale.
+
+**Consequences.** Byte provenance becomes assertable in the unit lane: the source's output is
+compared against what `MapAssetStore.put()` holds, with the stored blob deliberately overwritten
+so a reader that re-fetched its url would be caught. This matters because the browser lane cannot
+prove it — **zero network requests is not evidence of local bytes**, since a service worker, a
+warm HTTP cache or a `blob:` url minted earlier all produce zero requests. The browser scenario
+proves the *other* half, that a downloaded region renders with the network cut and a deleted one
+does not (T6.1 increment 4); neither half is the claim alone.
+
+`installOfflineArchives` is called by the consumer, not by the store. That keeps
+`@mapatlas/offline-pmtiles` free of any dependency on the renderer package — it depends on
+`pmtiles` alone, which `architecture.md` §2 already permits — and `ArchiveRegistrar` is
+satisfied structurally by `pmtiles`'s own `Protocol`, which both packages can name because both
+depend on that package.
+
+**The registrar it needs is not reachable yet.** As of this ADR the renderer constructs the
+`Protocol` inside its environment (`controller/browser.ts`, `createProtocol()`), and
+`ensurePmtilesProtocol` (`protocols/pmtiles.ts`) passes only `protocol.tile` to `addProtocol`
+and retains no reference to the instance; nothing protocol-shaped leaves the `@mapatlas/maplibre`
+barrel. So the seam is complete and tested, and its only caller today is a test's fake. Making it
+reachable is **T6.1 increment 3b**: `ensurePmtilesProtocol` retains the instance, and the
+renderer's browser entry exports one function returning it. That is a public-interface change to
+the renderer, so it is its own increment with its own ADR rather than being smuggled in here.
+
+A consequence of the same code path constrains the calling order. Registration is **lazy** — the
+controller constructs a `Protocol` only when a source stack first needs one — so "before creating
+the map" names an instant at which no `Protocol` exists. The order that is true is: obtain the
+registrar from the renderer (which registers eagerly, 3b), then `installOfflineArchives`, then
+add the first `pmtiles` source. Archives registered after MapLibre has already requested a tile
+from that url do not retroactively serve it.

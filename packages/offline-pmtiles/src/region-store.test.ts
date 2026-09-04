@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createMemoryMapAssetStore } from "@mapatlas/core/testing";
 import type { MapAssetStore, TileSource } from "@mapatlas/core";
 
 import { OfflineLicenseError } from "./offline-license.js";
-import { UnsupportedTransportError, createPMTilesRegionStore } from "./region-store.js";
+import {
+  UnknownArchiveSizeError,
+  UnsupportedTransportError,
+  createPMTilesRegionStore,
+} from "./region-store.js";
 import type { RegionFetch } from "./region-store.js";
 
 const archive = (id: string, over: Partial<TileSource> = {}): TileSource =>
@@ -18,7 +22,7 @@ const archive = (id: string, over: Partial<TileSource> = {}): TileSource =>
     attribution: "fixture",
     offlineLicensed: true,
     ...over,
-  }) as TileSource;
+  }) satisfies TileSource;
 
 /** Records what was fetched, and answers with identifiable bytes per url. */
 function fetcher(): RegionFetch & { fetched: string[]; sized: string[] } {
@@ -163,5 +167,104 @@ describe("createPMTilesRegionStore (ADR-0034)", () => {
 
     await assets.clear();
     expect(await store.list(), "clear() wipes map bytes together (ADR-0016)").toEqual([]);
+  });
+
+  it("leaves nothing behind when a download fails part-way", async () => {
+    // The caller never received an id, so nothing short of `clear()` could reclaim what a
+    // half-finished attempt wrote — quota consumed invisibly, on a device in the field.
+    // Mutation: drop the rollback and the orphan below survives.
+    const assets = createMemoryMapAssetStore();
+    const net = fetcher();
+    const bytes = net.bytes.bind(net);
+    // What the store held at the moment the second source failed. Without this the test cannot
+    // tell "the rollback removed the orphan" from "there was never an orphan to remove".
+    let heldAtFailure: string[] = [];
+    net.bytes = async (url) => {
+      if (!url.endsWith("b.pmtiles")) return bytes(url);
+      heldAtFailure = await assets.list();
+      throw new Error("connection lost");
+    };
+    const store = createPMTilesRegionStore({
+      sources: [archive("a"), archive("b")],
+      assets,
+      fetcher: net,
+    });
+
+    await expect(store.download({ ...REGION, sourceIds: ["a", "b"] })).rejects.toThrow(
+      "connection lost",
+    );
+    expect(heldAtFailure, "the first source really had been stored").toHaveLength(1);
+    expect(await assets.list(), "and the failure took it back").toEqual([]);
+  });
+
+  it("records the resolved sourceIds, not the caller's absent ones", async () => {
+    // A manifest that says `undefined` cannot say what bytes it holds, and starts
+    // misrepresenting them the moment `sources` or the default changes.
+    const { store } = build([archive("contours"), archive("terrain", { role: "hillshade" })]);
+    const region = await store.download(REGION);
+    expect(region.sourceIds, "what was downloaded, named").toEqual(["contours"]);
+    expect((await store.list())[0]?.sourceIds, "and persisted that way").toEqual(["contours"]);
+  });
+
+  it("refuses a sourceId it was never given, from both entry points", async () => {
+    // This refusal is what keeps `resolve`'s undefined-source branch unreachable: the licence
+    // check and the lookup search the same array, so a resolved id is always found. The branch
+    // throws rather than skipping so that loosening this refusal surfaces as a crash instead of
+    // as the silent omission ADR-0034 item 3 refuses — and this test is what goes red first.
+    const { store } = build([archive("known")]);
+    await expect(store.download({ ...REGION, sourceIds: ["absent"] })).rejects.toThrow(
+      OfflineLicenseError,
+    );
+    await expect(store.estimateSize({ ...REGION, sourceIds: ["absent"] })).rejects.toThrow(
+      OfflineLicenseError,
+    );
+  });
+});
+
+describe("the default fetcher (no `fetcher` injected)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const stubFetch = (impl: (url: string, init?: { method?: string }) => Response): void => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: { method?: string }) => Promise.resolve(impl(url, init))),
+    );
+  };
+
+  const store = (): ReturnType<typeof createPMTilesRegionStore> =>
+    createPMTilesRegionStore({
+      sources: [archive("terrain")],
+      assets: createMemoryMapAssetStore(),
+    });
+
+  it("downloads through the platform fetch when none is injected", async () => {
+    stubFetch(() => new Response("archive-bytes"));
+    const region = await store().download({ ...REGION, sourceIds: ["terrain"] });
+    expect(region.sizeBytes).toBe("archive-bytes".length);
+  });
+
+  it("refuses to quote a size the server did not report", async () => {
+    // A HEAD with no Content-Length — routine behind a CDN, and on a compressed response.
+    // Quoting 0 would tell the user a 1.5 MB download is free. Mutation: return 0 for a null
+    // header and this test goes red.
+    stubFetch(() => new Response(null, { headers: {} }));
+    await expect(store().estimateSize({ ...REGION, sourceIds: ["terrain"] })).rejects.toThrow(
+      UnknownArchiveSizeError,
+    );
+  });
+
+  it("quotes the size the server did report", async () => {
+    stubFetch(() => new Response(null, { headers: { "content-length": "1500000" } }));
+    expect(await store().estimateSize({ ...REGION, sourceIds: ["terrain"] })).toBe(1500000);
+  });
+
+  it("fails loudly on a non-ok response, rather than storing the error page", async () => {
+    stubFetch(() => new Response("<html>404</html>", { status: 404 }));
+    await expect(store().download({ ...REGION, sourceIds: ["terrain"] })).rejects.toThrow("404");
+    await expect(store().estimateSize({ ...REGION, sourceIds: ["terrain"] })).rejects.toThrow(
+      "404",
+    );
   });
 });

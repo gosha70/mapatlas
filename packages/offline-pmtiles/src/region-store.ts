@@ -35,6 +35,20 @@ export class UnsupportedTransportError extends Error {
   }
 }
 
+/** A HEAD response carried no `Content-Length`, so the archive's size is unknown (ADR-0034). */
+export class UnknownArchiveSizeError extends Error {
+  readonly url: string;
+
+  constructor(url: string) {
+    super(
+      `the server did not report a Content-Length for ${url}, so this region's size cannot be ` +
+        `estimated. Quoting zero would tell the user the download is free.`,
+    );
+    this.name = "UnknownArchiveSizeError";
+    this.url = url;
+  }
+}
+
 /**
  * The store's own key namespace inside `MapAssetStore` (ADR-0034 item 4).
  *
@@ -47,8 +61,16 @@ const MANIFEST_PREFIX = "mapatlas/region/";
 const ARCHIVE_PREFIX = "mapatlas/archive/";
 
 const manifestKey = (id: Id): string => `${MANIFEST_PREFIX}${id}.json`;
-/** Keyed by region *and* source: no cross-region sharing, which is an optimisation, not T6.1. */
-const archiveKey = (id: Id, sourceId: string): string => `${ARCHIVE_PREFIX}${id}/${sourceId}`;
+/**
+ * Keyed by region *and* source: no cross-region sharing, which is an optimisation, not T6.1.
+ *
+ * Exported to this package, not from its barrel. `archive-source.ts` has to read back exactly
+ * what `download()` wrote, and the only way to guarantee that is one definition of the key —
+ * two would agree until the day one changed. It stays off the public surface because a consumer
+ * reaching into the asset store by key is reaching around `OfflineRegionStore`.
+ */
+export const archiveKey = (id: Id, sourceId: string): string =>
+  `${ARCHIVE_PREFIX}${id}/${sourceId}`;
 
 /** What `download()` fetches with, injected so the unit lane needs no network. */
 export interface RegionFetch {
@@ -65,7 +87,14 @@ const systemFetch: RegionFetch = {
   size: async (url) => {
     const response = await fetch(url, { method: "HEAD" });
     if (!response.ok) throw new Error(`sizing ${url} failed with ${String(response.status)}`);
-    return Number(response.headers.get("content-length") ?? 0);
+    const length = response.headers.get("content-length");
+    // Quoting 0 for an absent Content-Length — common behind CDNs and on compressed responses —
+    // would tell a user a 1.5 MB archive is free, which is the misleading quote ADR-0033 and
+    // ADR-0034 both refuse. Not knowing is reported, not rounded down.
+    if (length === null) {
+      throw new UnknownArchiveSizeError(url);
+    }
+    return Number(length);
   },
 };
 
@@ -99,14 +128,27 @@ export function createPMTilesRegionStore(options: {
     const resolved: TileSource[] = [];
     for (const id of requested) {
       const source = sources.find((candidate) => candidate.id === id);
-      // `assertOfflineLicensed` has already refused an unknown id, so this cannot be undefined.
-      if (source === undefined) continue;
+      // `assertOfflineLicensed` has already refused an unknown id, so this cannot happen — and
+      // the claim is enforced rather than assumed. A `continue` here would be unobservable
+      // defensive code, and worse: were that refusal ever loosened, it would become the silent
+      // skip ADR-0034 item 3 exists to refuse.
+      if (source === undefined) {
+        throw new Error(`unreachable: source ${JSON.stringify(id)} passed the licence check`);
+      }
       if (source.transport !== "pmtiles") {
         throw new UnsupportedTransportError(source.id, source.transport);
       }
       resolved.push(source);
     }
     return resolved;
+  };
+
+  /** Every archive blob a region wrote. Shared by `delete` and by `download`'s rollback. */
+  const removeArchives = async (id: Id): Promise<void> => {
+    const keys = await assets.list();
+    for (const key of keys.filter((candidate) => candidate.startsWith(archiveKey(id, "")))) {
+      await assets.delete(key);
+    }
   };
 
   const readManifest = async (key: string): Promise<OfflineRegion | undefined> => {
@@ -120,16 +162,29 @@ export function createPMTilesRegionStore(options: {
       const resolved = resolve(region.sourceIds);
       const id = newId();
       let sizeBytes = 0;
-      for (const [index, source] of resolved.entries()) {
-        // The whole archive, not a tile selection: §5's "cached whole for offline" (ADR-0034).
-        const blob = await fetcher.bytes(source.url);
-        await assets.put(archiveKey(id, source.id), blob);
-        sizeBytes += blob.size;
-        onProgress?.((index + 1) / resolved.length);
+      try {
+        for (const [index, source] of resolved.entries()) {
+          // The whole archive, not a tile selection: §5's "cached whole for offline" (ADR-0034).
+          const blob = await fetcher.bytes(source.url);
+          await assets.put(archiveKey(id, source.id), blob);
+          sizeBytes += blob.size;
+          onProgress?.((index + 1) / resolved.length);
+        }
+      } catch (failure) {
+        // Everything this attempt wrote goes back. Without this a second source failing on a
+        // flaky connection strands the first under an id the caller never received, so nothing
+        // short of `clear()` could ever reclaim it — quota consumed invisibly, on a device in
+        // the field, which is the situation offline regions exist for.
+        await removeArchives(id);
+        throw failure;
       }
       const stored: OfflineRegion = {
         ...region,
         id,
+        // The **resolved** ids, not the caller's. Persisting `undefined` when the default was
+        // taken leaves a manifest that cannot say what it holds, and misrepresents the bytes
+        // outright if `sources` or the default later changes.
+        sourceIds: resolved.map((source) => source.id),
         sizeBytes,
         downloadedAt: Date.now(),
       };
@@ -151,13 +206,9 @@ export function createPMTilesRegionStore(options: {
     },
 
     async delete(id) {
-      const keys = await assets.list();
-      // Every archive this region wrote, then the manifest — so a failure part-way leaves a
-      // region whose manifest still names assets that exist, rather than a manifest pointing at
-      // nothing.
-      for (const key of keys.filter((candidate) => candidate.startsWith(archiveKey(id, "")))) {
-        await assets.delete(key);
-      }
+      // Archives first, then the manifest — a failure part-way leaves a region whose manifest
+      // still names assets that exist, rather than a manifest pointing at nothing.
+      await removeArchives(id);
       await assets.delete(manifestKey(id));
     },
 

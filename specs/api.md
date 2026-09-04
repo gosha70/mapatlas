@@ -779,6 +779,14 @@ export interface MapAssetStore {
   clear(): Promise<void>;
 }
 
+/** How the region store reaches the network. The one seam between `download()`/`estimateSize()`
+ *  and `fetch`, so the unit lane exercises the store with no network and no live tile service —
+ *  `architecture.md` §8 binds the tests too. */
+export interface RegionFetch {
+  bytes(url: string): Promise<Blob>;
+  size(url: string): Promise<number>;
+}
+
 /** For `transport: "pmtiles"` the **archive is the unit**: `download()` copies the whole archive
  *  into the `MapAssetStore`, and `bbox`/`minZoom`/`maxZoom` describe the region rather than
  *  selecting within it — §5's "cached whole for offline" (ADR-0034). `estimateSize()` therefore
@@ -790,13 +798,66 @@ export interface MapAssetStore {
  *  `architecture.md` §8). A UI must not be able to quote a size for a region the store will
  *  then refuse to fetch, so the same check guards both entry points.
  *
+ *  The returned `OfflineRegion` records the **resolved** `sourceIds`, never the caller's
+ *  `undefined`: a manifest that cannot say what it holds misrepresents its bytes as soon as
+ *  `sources` or the default changes. A `download()` that throws leaves nothing behind — every
+ *  archive that attempt wrote is removed before the failure propagates, because the caller never
+ *  received the id and so could never `delete()` it.
+ *
+ *  `fetcher` overrides how the store reaches the network; it defaults to `fetch`. It exists so
+ *  the seam can be driven by a fake — no test in this repo may download from a real tile service.
+ *
  *  Default implementation, shipped as `@mapatlas/offline-pmtiles`. */
-export declare function createPMTilesRegionStore(o: { sources: TileSource[]; assets: MapAssetStore }): OfflineRegionStore;
+export declare function createPMTilesRegionStore(o: { sources: TileSource[]; assets: MapAssetStore; fetcher?: RegionFetch }): OfflineRegionStore;
 
 /** Thrown when a region names a source that is not marked `offlineLicensed` (ADR-0033). */
 export declare class OfflineLicenseError extends Error {
   readonly sourceId: string;
 }
+
+/** Thrown when a region names a source whose `transport` this store cannot download (ADR-0034). */
+export declare class UnsupportedTransportError extends Error {
+  readonly sourceId: string;
+  readonly transport: string;
+}
+
+/** Thrown by `estimateSize()` when a HEAD response carries no `Content-Length`. Not knowing a
+ *  size is reported, never rounded down to 0 — that would quote the user a free download. */
+export declare class UnknownArchiveSizeError extends Error {
+  readonly url: string;
+}
+
+// ── Reading a downloaded region back (ADR-0035) ────────────────────────────────────────────
+
+/** A PMTiles `Source` (from the `pmtiles` package) that reads a downloaded archive out of the
+ *  `MapAssetStore` instead of the network. `key` is what `download()` wrote; `url` is the
+ *  `TileSource.url`, and `getKey()` returns it **unchanged** — so `pmtiles://<TileSource.url>`
+ *  resolves to these bytes and the style is identical online and offline. */
+export declare function createStoredArchiveSource(o: {
+  assets: MapAssetStore; key: string; url: string;
+}): Source;
+
+/** Thrown when the manifest still names an archive whose bytes are gone — evicted (ADR-0016) or
+ *  deleted. Raised rather than answered with zero bytes: empty bytes decode as "nothing here"
+ *  and render as a blank map, which is a failure wearing a success's clothes. */
+export declare class MissingArchiveError extends Error {
+  readonly key: string;
+}
+
+/** The slice of `pmtiles`'s `Protocol` needed to register archives; `Protocol` satisfies it. */
+export interface ArchiveRegistrar { add(archive: PMTiles): void; }
+
+/** Point the PMTiles protocol at every archive these regions downloaded, and return the urls now
+ *  served locally. Call it once after `store.list()`, with a registrar obtained from the
+ *  renderer, and **before the first `pmtiles` source is added** — registration is lazy, so
+ *  "before creating the map" names an instant at which no `Protocol` exists. A manifest entry
+ *  for a source `sources` no longer configures is skipped — no style can name it, and there is
+ *  no url to register it under. When two regions cover one source the most recently downloaded
+ *  wins (ADR-0035). */
+export declare function installOfflineArchives(o: {
+  regions: readonly OfflineRegion[]; sources: readonly TileSource[];
+  assets: MapAssetStore; protocol: ArchiveRegistrar;
+}): string[];
 ```
 
 **Contract (`TileSource`):** `kind` describes content, `transport` describes how the source is

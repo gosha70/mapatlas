@@ -17,13 +17,18 @@ Two gaps were contract-level, not implementation-level, and are settled before a
 A third was a hidden ambiguity: "no channels" has five readings, and `channels?` "defaults to
 all" did not say all of what. Settled in ADR-0029 — the default is the *descriptors*.
 
+A fourth looked like the same class and was not. Start/finish marks appear in no `MapCanvas`
+prop, which reads like scope naming something the signature cannot do — the shape of the `store`
+gap exactly. It is not: `EventPresentation` already owns their styling and the controller
+already renders them from the track, on a channel distinct from event marks. Nothing is needed.
+Recorded because the wrong conclusion here costs an additive API change and a re-solve of SSR
+and mount handling that `MapCanvas` already did.
+
 ## Settled calls
 
-1. **Charting is hand-rolled SVG, not a library.** Decided on criteria before candidates: a
-   chart library costs bundle weight for every consumer who never renders a chart; the barrel
-   is SSR-safe by contract, and a library touching `window` at import breaks that for
-   `MapCanvas` too; and the AC needs no interactivity — a labelled time series with a unit.
-   Nothing on those criteria favours a dependency.
+1. **Charting is hand-rolled SVG, not a library — ADR-0031.** Recorded there rather than here:
+   a dependency decision on a published package is asked again by whoever later wants to add a
+   chart library, and they will not be reading this plan.
 2. **The chart region is absent, not empty, when nothing is chartable** (ADR-0029). Absence is
    the AC's word and the two are visually different.
 3. **Photos render from `url` directly and from `blobKey` through the store**, with object URLs
@@ -51,9 +56,14 @@ all" did not say all of what. Settled in ADR-0029 — the default is the *descri
 
 ## Increments
 
-1. **Map + events + marks.** `TripReview` renders a finalized track through the existing
-   controller, with start/finish marks and event marks; `onEventClick`. No stats, no charts, no
-   photos.
+1. **Map + events + marks.** `TripReview` composes `MapCanvas` — it does not drive the
+   controller itself, and it adds no marks route, because neither is needed. §9's
+   `EventPresentation` already declares `startMarker?(t)` and `finishMarker?(t)` with neutral
+   built-in defaults, and the controller already builds them from the track through
+   `buildTrackEndpointFeatures`, rendering them as `trackMarks` — **a separate channel from
+   `eventMarks`, so they are not clickable events and `onEventClick` is unaffected**. Passing
+   `track` is the whole of it. What this increment owns is composition and `onEventClick`
+   pass-through, not mark rendering. No stats, no charts, no photos.
 2. **Stats panel + channel charts.** `computeStats` output rendered; charts from descriptors,
    with all five "no channels" readings falsified.
 3. **Photos.** `blobKey` resolved through `store`, `url` rendered directly, object URLs

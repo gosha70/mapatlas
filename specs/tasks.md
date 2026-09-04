@@ -1018,9 +1018,11 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   *Settled here, because scope named what the signature could not do.* §9 had no
   `StorageAdapter`, so "photos" was unbuildable as written — `store` is added rather than
   photos dropped, since a review that cannot show what the composer just wrote is a seam with
-  a hole in it. And "no channels" has five readings, enumerated in ADR-0029: no descriptors, a
-  descriptor with no samples, data with no descriptor, the `channels?` prop filtering to none,
-  and what "defaults to all" means when descriptors and data disagree.
+  a hole in it. And "no channels" has five readings, enumerated in ADR-0029 and pinned one test
+  each: no descriptors on the track; a descriptor with no samples; samples whose key has no
+  descriptor; a `channels?` prop naming nothing that matches; and `channels: []`. What
+  "defaults to all" means when descriptors and data disagree is settled by the same ADR — the
+  default is the descriptors — rather than being a sixth case.
 
 - **T5.5 Replay.** A time cursor over the finalized track, with play/pause and scrub, driving
   the map marker and a matching cursor on each channel chart. _AC:_ the marker interpolates

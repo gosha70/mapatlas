@@ -893,3 +893,42 @@ introduces. Should a later requirement need interaction —
 brushing, tooltips, zoom — this decision is reopened rather than worked around, and criterion (3)
 is the one that will have changed. Criteria (1) and (2) hold regardless and would still bind the
 choice to a library that is tree-shakeable and import-safe.
+
+## ADR-0032 — Position-at-time is a core projection, not a replay detail
+**Context.** T5.5 needs the track's position at an arbitrary moment. The obvious home is the
+replay component, since ADR-0030 makes playback state internal to `TripReview`. But that ADR is
+about *playback behaviour and state*; it says nothing about where the geometry rule lives, and
+the rule in question is not replay's. "Do not invent travel through a pause" is already
+cross-surface: the rendered line refuses it (`render-differential.e2e.ts` pins "the pause holds
+no line"), the channel charts refuse it (ADR-0031, one polyline per segment), and replay must
+refuse it too. A third implementation inside React is precisely the drift a single shared
+`computeStats` exists to prevent, and a consumer building their own replay UI would have no way
+to match `TripReview`'s semantics.
+**Decision.** `positionAt(track: Pick<Track, "points" | "segments">, t): LatLng | undefined` is
+published from `@mapatlas/core`. It is a pure projection — no renderer, no clock, no playback
+state. React keeps the playback state machine and the controls.
+
+The semantics are pinned here rather than left accidental, because making the symbol public
+makes every one of them a promise:
+
+- `t` exactly on a recorded point returns that point's coordinates.
+- Within a segment, **linear interpolation of lat/lng between the two bracketing samples** — the
+  same piecewise geometry the track supplies. No geodesic path is introduced for animation; if
+  the antimeridian becomes a real requirement it changes here, once, rather than being patched
+  inside a component.
+- **Never across a segment boundary.** A `t` inside a pause returns the last point *before* it,
+  held until the next segment begins: `A` ends at 100, `B` begins at 200, so 150 and 199 both
+  return `A`'s last point and 200 returns `B`'s first.
+- Outside `[first.t, last.t]`: `undefined`, not clamped to an endpoint.
+- Adjacent samples sharing a timestamp resolve to the later sample in that segment — there is no
+  interval to interpolate across, and no division by zero.
+- No points: `undefined`. Non-finite `t`: `RangeError`, as elsewhere for meaningless numerics.
+
+**Consequences.** Holding through a pause means a replay marker sits still for the duration of a
+stop, which is correct and will look like a stall to anyone expecting animation — that is the
+same complaint the map's empty gap invites, and the same answer: the engine has no evidence of
+movement there. Returning `undefined` rather than clamping pushes range handling to the caller;
+the replay cursor constrains itself to the trip's own range, so the `undefined` arm is reachable
+only through direct use of the projection, which is exactly the case that should not get a
+fabricated answer. Publishing the symbol means these seven rules are now contract, and a
+consumer's replay can agree with the engine's instead of approximating it.

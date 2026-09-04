@@ -1036,7 +1036,14 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   between samples; **it holds rather than sliding across a pause**, the same discontinuity
   `render-differential.e2e.ts` already pins in the rendered line; scrubbing to a time moves
   both the marker and the chart cursors; playback state is internal, so §9 gains no props
-  (ADR-0030).
+  (ADR-0030); replay **mounts paused at `first.t`** and advances only on an explicit Play.
+
+  *Split by owner (ADR-0032).* Core owns **where the track was at a moment** — `positionAt` is a
+  pure projection with no renderer, clock or playback state, published because the
+  no-travel-through-a-pause rule is already cross-surface and a third implementation inside
+  React is the drift `computeStats` exists to prevent. React owns the playback state machine and
+  its controls. A `t` inside a pause holds at the **last point before** it: returning the next
+  segment's first point would leak a future observation backwards in time.
 
 ## Phase 6 — Offline regions
 - **T6.1 PMTiles region store.** `@mapatlas/offline-pmtiles`: implement `OfflineRegionStore`

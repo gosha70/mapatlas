@@ -496,6 +496,31 @@ export declare function computeStats(
   t: Pick<Track, "points" | "segments" | "channels">,
   policy?: Partial<StatsPolicy>,
 ): TrackStats;
+/**
+ * Where the track was at a moment — a pure projection over its own geometry (ADR-0032).
+ *
+ * In core rather than in the replay component because "does not invent travel through a pause"
+ * is already a cross-surface rule: the rendered line refuses it, the channel charts refuse it
+ * (ADR-0031), and replay must too. A third implementation in React is the drift `computeStats`
+ * exists to prevent. It has no renderer, no clock and no playback state, so a consumer building
+ * their own replay gets the same semantics `TripReview` does.
+ *
+ * - `t` exactly on a recorded point returns that point's coordinates.
+ * - Within a segment, interpolation is **linear in lat/lng between the two bracketing samples**
+ *   — the same piecewise geometry the track itself supplies. No geodesic path is introduced for
+ *   animation; if the antimeridian ever becomes a real requirement it changes here, once.
+ * - **Never between segments.** A `t` inside a pause returns the *last point before* it, held
+ *   until the next segment begins. Returning the next segment's first point would leak a future
+ *   observation backwards in time; holding says only "there is no evidence of movement after
+ *   this point", which is what the map says by drawing nothing.
+ * - Outside `[first.t, last.t]`: `undefined`, not clamped. A position at a time outside the trip
+ *   has no truthful answer, and the replay cursor constrains itself to that range anyway.
+ * - Adjacent samples sharing a timestamp: no division by zero — that instant resolves to the
+ *   later sample in the segment, there being no interval to interpolate across.
+ * - No points: `undefined`. Non-finite `t`: `RangeError`.
+ */
+export declare function positionAt(track: Pick<Track, "points" | "segments">, t: number): LatLng | undefined;
+
 /** Ramer–Douglas–Peucker over one continuous run of points.
  *
  *  Generic by design: it knows nothing about segments or pauses. `finalizeTrack` maps it

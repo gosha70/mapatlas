@@ -8,6 +8,7 @@ import type {
   StyleSpecification,
 } from "maplibre-gl";
 import { Protocol } from "pmtiles";
+import type { PMTiles } from "pmtiles";
 
 import type { EngineFeatureCollection } from "./engine-layers.js";
 import type {
@@ -19,6 +20,8 @@ import type {
 } from "./environment.js";
 import type { MapController, MapControllerOptions } from "./controller.js";
 import { createMapControllerInternal } from "./controller.js";
+import type { PmtilesProtocol, ProtocolRegistrar } from "../protocols/pmtiles.js";
+import { ensurePmtilesProtocol } from "../protocols/pmtiles.js";
 
 /**
  * The real MapLibre runtime, wired to the controller's seam.
@@ -173,15 +176,54 @@ export function createBrowserMapEnvironment(): MapEnvironment {
 
     document: globalThis.document,
 
-    protocolRegistrar: {
-      addProtocol(scheme: string, handler: unknown): void {
-        addProtocol(scheme, handler as Parameters<typeof addProtocol>[1]);
-      },
-      createProtocol(): { tile: unknown } {
-        return new Protocol();
-      },
-    },
+    protocolRegistrar: browserProtocolRegistrar,
   };
+}
+
+/**
+ * The real MapLibre protocol registry, named once because two call sites now need it — the
+ * controller's environment and `pmtilesArchiveRegistrar`.
+ *
+ * Sharing the object changes **nothing** observable, and the comment says so rather than
+ * implying otherwise: `ensurePmtilesProtocol` keys "already registered" off its own retained
+ * instance, so a fresh literal per call would register exactly once too. What single-instancing
+ * buys is one copy of the `addProtocol` cast and the `new Protocol()` call, which is a
+ * readability claim, not a correctness one.
+ */
+const browserProtocolRegistrar: ProtocolRegistrar = {
+  addProtocol(scheme: string, handler: unknown): void {
+    addProtocol(scheme, handler as Parameters<typeof addProtocol>[1]);
+  },
+  createProtocol(): PmtilesProtocol {
+    return new Protocol();
+  },
+};
+
+/**
+ * Somewhere to register a downloaded PMTiles archive, so MapLibre reads it from local bytes.
+ *
+ * The realm's one `Protocol`, registered **eagerly** — unlike the controller's own lazy path,
+ * which constructs it only when a source stack first needs it. An offline consumer calls this
+ * before adding any `pmtiles` source, precisely because at that moment no controller has
+ * created a protocol yet and there would be nothing to hand back (ADR-0036).
+ *
+ * Idempotent, and it returns the instance MapLibre actually resolves through: the realm flag
+ * already guarantees a single registration, and a second call returns that same object. An
+ * archive added to any other `Protocol` would be consulted by nothing, which fails as a map
+ * that silently goes to the network — or, offline, does not render at all.
+ *
+ * The return type is stated in this package's own vocabulary. It is structurally what
+ * `@mapatlas/offline-pmtiles`'s `installOfflineArchives` asks for, and deliberately not that
+ * type by name: neither package may depend on the other, and both already depend on `pmtiles`,
+ * which is where the `PMTiles` they exchange comes from.
+ */
+export function pmtilesArchiveRegistrar(): PmtilesArchiveRegistrar {
+  return ensurePmtilesProtocol(browserProtocolRegistrar);
+}
+
+/** Where a downloaded archive is registered. Satisfied by `pmtiles`'s own `Protocol`. */
+export interface PmtilesArchiveRegistrar {
+  add(archive: PMTiles): void;
 }
 
 /** Mount a MapLibre GL map over the real runtime. */

@@ -1096,3 +1096,50 @@ the map" names an instant at which no `Protocol` exists. The order that is true 
 registrar from the renderer (which registers eagerly, 3b), then `installOfflineArchives`, then
 add the first `pmtiles` source. Archives registered after MapLibre has already requested a tile
 from that url do not retroactively serve it.
+
+## ADR-0036 — The renderer publishes its PMTiles protocol instance
+**Context.** ADR-0035 put a store-backed PMTiles `Source` behind the archive's own url and left
+`installOfflineArchives` taking a registrar — an object with `add(archive)`. Nothing could supply
+one. `@mapatlas/maplibre` constructed a `Protocol` inside its environment's `createProtocol()`,
+`ensurePmtilesProtocol` passed only `protocol.tile` to `addProtocol` and dropped the instance,
+and the barrel exported nothing protocol-shaped. Both packages' tests passed; the pair did not
+connect. The seam's only caller was a test's fake.
+
+**Decision.**
+1. **`ensurePmtilesProtocol` retains the protocol and returns it.** The retained instance *is*
+   the "already registered" state — the boolean beside it is gone. One fact with two homes is
+   free to disagree the first time either is written without the other, and this one had to
+   become an instance regardless.
+2. **`@mapatlas/maplibre`'s browser entry exports `pmtilesArchiveRegistrar()`**, which registers
+   **eagerly** against the real runtime and returns that instance. Eagerly, because the
+   controller's registration is lazy — it constructs a `Protocol` only when a source stack first
+   needs one — and an offline consumer calls this *before* adding any `pmtiles` source, at which
+   point a lazy path would have nothing to hand back.
+3. **Neither package depends on the other.** The return type is declared here as
+   `PmtilesArchiveRegistrar`, structurally identical to `@mapatlas/offline-pmtiles`'s
+   `ArchiveRegistrar`; both packages already depend on `pmtiles`, which is where the `PMTiles`
+   they exchange is defined. The type is **not** moved into `core` to "share" it — `core` must
+   not know `pmtiles` exists (`architecture.md` §9).
+
+**Why the instance, rather than `MapControllerOptions` taking archives.** A `MapController` is
+per map; the protocol is per **realm**. `addProtocol` installs on the MapLibre module instance,
+which is why registration is realm-scoped and why `destroy()` leaves it alone (a controller
+tearing it down would break every other map in the realm). Downloaded archives are realm-scoped
+for the same reason: two controllers over one archive must resolve the same bytes. A
+controller-scoped option would register them once per map, or tie the second map's archives to
+the first map's lifetime. Publishing the realm-scoped object keeps the ownership where the
+lifetime already is.
+
+**Consequences.** This widens `@mapatlas/maplibre`'s public surface by one function and one
+type; `index.test.ts` asserts that surface exactly, so the addition is deliberate and reviewed
+rather than incidental. `ensurePmtilesProtocol` itself stays unexported — registering a global
+handler remains a capability the controller owns, and what a consumer receives is the result,
+not the ability to register.
+
+The `ProtocolRegistrar` seam now requires `add` alongside `tile`, so a fake must supply both.
+That is the point: a fake that could not accept archives would let the offline path typecheck
+against something the real protocol does differently. Single-instancing the browser registrar is
+**readability only** — `ensurePmtilesProtocol` keys off its own retained instance, so a fresh
+literal per call registers exactly once too; recorded because a mutation of it survives, and a
+surviving mutation with no defect behind it should be documented rather than defended with a
+test that asserts an implementation detail.

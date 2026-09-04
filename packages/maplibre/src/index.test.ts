@@ -11,11 +11,19 @@ import * as renderer from "./index.js";
 
 describe("the package surface", () => {
   it("publishes no translation internals", () => {
-    // Deliberately exact. The builders and the protocol bootstrap are both absent: the
-    // builders because exporting them would put MapLibre's style specifications on this
-    // package's public surface, and the bootstrap because registering a global handler is
-    // a runtime capability the controller owns, not a side effect of describing a source.
-    expect(Object.keys(renderer).sort()).toEqual(["PACKAGE_NAME", "createMapController"]);
+    // Deliberately exact. The builders stay absent because exporting them would put MapLibre's
+    // style specifications on this package's public surface. `ensurePmtilesProtocol` stays
+    // absent too: registering a global handler is a runtime capability the controller owns,
+    // not a side effect of describing a source.
+    //
+    // `pmtilesArchiveRegistrar` is the one thing published from that area, and only because
+    // an offline archive store cannot otherwise reach the `Protocol` MapLibre resolves through
+    // (ADR-0036). It returns the instance; it does not expose registration.
+    expect(Object.keys(renderer).sort()).toEqual([
+      "PACKAGE_NAME",
+      "createMapController",
+      "pmtilesArchiveRegistrar",
+    ]);
   });
 
   it("reports its identity", () => {

@@ -9,7 +9,7 @@ function spyRegistrar(): ProtocolRegistrar & {
   readonly createProtocol: ReturnType<typeof vi.fn>;
 } {
   const addProtocol = vi.fn();
-  const createProtocol = vi.fn(() => ({ tile: () => undefined }));
+  const createProtocol = vi.fn(() => ({ tile: () => undefined, add: () => undefined }));
   return { addProtocol, createProtocol };
 }
 
@@ -76,6 +76,28 @@ describe("registration is once per realm", () => {
 
     sameRealm.ensurePmtilesProtocol(spyRegistrar());
     expect(registrar.addProtocol).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the registered protocol is the one handed back", () => {
+  it("returns the very object whose handler MapLibre received", () => {
+    // The mutation this exists for: hand back a fresh `new Protocol()` instead. Everything
+    // still registers, every idempotence test still passes, and archives added to the returned
+    // object are consulted by nothing — a map that quietly goes to the network, or offline,
+    // does not render.
+    const registrar = spyRegistrar();
+    const returned = pmtiles.ensurePmtilesProtocol(registrar);
+
+    const created = registrar.createProtocol.mock.results[0]?.value as { tile: unknown };
+    expect(returned, "identity, not shape").toBe(created);
+    expect(registrar.addProtocol).toHaveBeenCalledWith("pmtiles", returned.tile);
+  });
+
+  it("hands every later caller that same instance", () => {
+    // Two call sites — a controller and an offline archive store — must reach one protocol.
+    const first = pmtiles.ensurePmtilesProtocol(spyRegistrar());
+    const second = pmtiles.ensurePmtilesProtocol(spyRegistrar());
+    expect(second).toBe(first);
   });
 });
 

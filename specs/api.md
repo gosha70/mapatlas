@@ -959,7 +959,29 @@ export interface MapController {
   destroy(): void;
 }
 export declare function createMapController(o: MapControllerOptions): MapController;
+
+/** Where a downloaded PMTiles archive is registered, so MapLibre reads it from local bytes.
+ *  Structurally what `installOfflineArchives` asks for, and satisfied by `pmtiles`'s own
+ *  `Protocol` — stated in this package's vocabulary because neither package may depend on the
+ *  other, and both already depend on `pmtiles` (ADR-0036). */
+export interface PmtilesArchiveRegistrar { add(archive: PMTiles): void; }
+
+/** The realm's one PMTiles `Protocol`, registered **eagerly** and returned. Idempotent: every
+ *  call yields the same instance MapLibre resolves `pmtiles://` through. An offline consumer
+ *  calls this, hands the result to `installOfflineArchives`, and only then adds its `pmtiles`
+ *  sources — the controller's own registration is lazy, so before that point no `Protocol`
+ *  exists to hand back (ADR-0036). */
+export declare function pmtilesArchiveRegistrar(): PmtilesArchiveRegistrar;
 ```
+
+**Why the instance is exposed rather than the controller taking archives as an option.** A
+`MapController` is per map; the PMTiles protocol is per **realm** — `addProtocol` installs on the
+MapLibre module instance, which is why registration is realm-scoped and `destroy()` deliberately
+leaves it alone. Downloaded archives belong to the realm for the same reason: two controllers
+over one archive must resolve the same bytes, and a controller-scoped option would either
+register them twice or make the second map's archives depend on the first map's lifetime. So the
+renderer publishes the realm-scoped object, and the archives are registered against it by
+whoever owns them.
 
 **`maplibre-gl` is a peer dependency of `@mapatlas/maplibre`**, pinned to one exact version
 per T0.1 — no ranges for renderer dependencies, because the browser lane exercises exactly one

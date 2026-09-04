@@ -91,6 +91,36 @@ test("typed overflow cannot hand over a non-finite value; correction permits Sav
  * No physical-camera claim is made or possible: `capture` requests a preferred facing mode
  * (W3C html-media-capture) and Chromium under test has no camera.
  */
+/**
+ * The live marker's position **relative to a static track mark**.
+ *
+ * Absolute screen coordinates are the wrong oracle here: MapLibre renders continuously and the
+ * viewport is still settling, so a stationary marker's box moves — an earlier version of the
+ * pause test measured 132 px of "travel" for a marker that had not moved at all. `settleRender`
+ * does not help either; the map never stops changing, so it times out. The start mark is a DOM
+ * marker at a fixed coordinate, so any viewport motion moves both equally and the *difference*
+ * cancels it out.
+ */
+async function liveOffset(page: Page): Promise<{ x: number; y: number }> {
+  const live = await page.locator(".mapatlas-mark--live").boundingBox();
+  const anchor = await page.locator(".mapatlas-mark--start").boundingBox();
+  if (live === null) throw new Error("no live marker on the map");
+  if (anchor === null) throw new Error("no start mark to measure against");
+  return { x: live.x - anchor.x, y: live.y - anchor.y };
+}
+
+/** `liveOffset` once the projection has stopped moving under it. */
+async function settledOffset(page: Page): Promise<{ x: number; y: number }> {
+  let previous = await liveOffset(page);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await page.waitForTimeout(100);
+    const current = await liveOffset(page);
+    if (current.x === previous.x && current.y === previous.y) return current;
+    previous = current;
+  }
+  throw new Error("the map projection never settled");
+}
+
 const PHOTO = {
   name: "field-shot.jpg",
   mimeType: "image/jpeg",
@@ -271,4 +301,63 @@ test("a photo written by the composer is displayed by the review", async ({ page
   expect(bytes, "the displayed photo is not the photo that was captured").toEqual([
     ...PHOTO.buffer,
   ]);
+});
+
+/**
+ * T5.5 increment 3 — the marker moves on a real map.
+ *
+ * The unit lane asserts what was handed to the controller; it cannot say whether MapLibre drew
+ * anything. Here the oracle is the marker element's own position on screen, read before and
+ * after a scrub — which is only meaningful because MapLibre places live markers as DOM nodes
+ * transformed into position rather than as painted pixels.
+ */
+test("the replay marker moves on the map when the cursor is scrubbed", async ({ page }) => {
+  await serveMapFixtures(page);
+  await page.evaluate(() => {
+    window.composer.replay();
+  });
+
+  const scrub = page.locator(".mapatlas-trip-replay-scrub");
+  await expect(scrub).toBeVisible();
+  // Mounted paused at the first point (ADR-0030), so the cursor starts at the range minimum.
+  await expect(scrub).toHaveValue("0");
+
+  const before = await settledOffset(page);
+
+  await scrub.fill("1000");
+  await expect(scrub).toHaveValue("1000");
+  const after = await settledOffset(page);
+
+  expect(
+    Math.abs(after.y - before.y),
+    "the marker did not move on screen — the unit lane cannot see this",
+  ).toBeGreaterThan(1);
+});
+
+test("the replay marker holds still while the cursor crosses a pause", async ({ page }) => {
+  // The rule the whole increment exists for, observed where it is actually drawn: between the
+  // segments the track has no observation, so the marker must not slide across the gap even
+  // though the cursor keeps advancing.
+  await serveMapFixtures(page);
+  await page.evaluate(() => {
+    window.composer.replay();
+  });
+  const scrub = page.locator(".mapatlas-trip-replay-scrub");
+  await expect(scrub).toBeVisible();
+
+  await scrub.fill("2000");
+  const inPause = await settledOffset(page);
+  await scrub.fill("8000");
+  const laterInPause = await settledOffset(page);
+  expect(
+    { dx: Math.abs(laterInPause.x - inPause.x), dy: Math.abs(laterInPause.y - inPause.y) },
+    "the marker travelled through a pause the map draws as empty",
+  ).toEqual({ dx: 0, dy: 0 });
+
+  await scrub.fill("9500");
+  const afterPause = await settledOffset(page);
+  expect(
+    Math.abs(afterPause.y - inPause.y),
+    "the marker must resume once the next segment begins",
+  ).toBeGreaterThan(1);
 });

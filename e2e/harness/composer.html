@@ -8,6 +8,15 @@
       body {
         margin: 0;
       }
+      /* A map needs a sized container. `MapCanvas` renders at height:100%, so without this the
+         review's section has no height, the map container resizes as content loads, and the
+         projection never stops moving — which reads in a test as a stationary marker sliding
+         around. */
+      .mapatlas-trip-review {
+        display: block;
+        width: 800px;
+        height: 400px;
+      }
     </style>
   </head>
   <body>

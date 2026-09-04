@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createElement, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactElement } from "react";
+import type { ChangeEvent, ReactElement } from "react";
 
-import { computeStats } from "@mapatlas/core";
+import { computeStats, positionAt } from "@mapatlas/core";
 import type {
   ChannelDescriptor,
   Id,
@@ -14,6 +14,7 @@ import type {
   TerrainOptions,
   TileSource,
   Track,
+  TrackPoint,
   TrackStats,
 } from "@mapatlas/core";
 import type { EventPresentation, MapController, MapControllerOptions } from "@mapatlas/maplibre";
@@ -50,17 +51,18 @@ interface TripReviewProps {
  * re-solving SSR safety, mount ordering and StrictMode remounts that `MapCanvas` already
  * settled.
  *
- * **A finalized track, not a live one.** `livePoint` and `draft` belong to `MapCanvas`; this
- * component takes a `Track` that is already complete.
+ * **A finalized track, not a live one.** `draft` belongs to `MapCanvas`; this component takes a
+ * `Track` that is already complete. It does drive `MapCanvas`'s `livePoint`, but with the
+ * *replay cursor's* position rather than a live fix — the prop is "where to draw the moving
+ * marker", and a replay marker is exactly that.
  */
 export function TripReview(props: TripReviewProps): ReactElement {
-  return createElement(
-    "section",
-    { className: "mapatlas-trip-review" },
-    createElement(MapCanvas, mapProps(props)),
-    ...reviewBody(props),
-  );
+  return createElement(TripReviewInternal, { ...props, create: createNothing });
 }
+
+/** Sentinel meaning "the public entry point": `TripReviewInternal` renders `MapCanvas` rather
+ *  than `MapCanvasInternal` when it sees this, so the public path has no injected seam. */
+const createNothing = undefined as unknown as (options: MapControllerOptions) => MapController;
 
 /**
  * Exported for tests only — not re-exported from the package barrel.
@@ -76,13 +78,63 @@ export function TripReview(props: TripReviewProps): ReactElement {
  * every forwarded prop — which is the thing this component is almost entirely made of.
  */
 export function TripReviewInternal(
-  props: TripReviewProps & { create: (options: MapControllerOptions) => MapController },
+  props: TripReviewProps & {
+    create: (options: MapControllerOptions) => MapController;
+    clock?: ReplayClock;
+  },
 ): ReactElement {
+  const replay = useReplay(props.track, props.clock ?? systemReplayClock);
+  // `positionAt` and nothing else. A second computation of "where was the track at t" is the
+  // drift ADR-0032 put the projection in core to prevent.
+  const at = replay.cursor === undefined ? undefined : positionAt(props.track, replay.cursor);
+  const marker: TrackPoint | undefined =
+    at === undefined || replay.cursor === undefined
+      ? undefined
+      : { lat: at.lat, lng: at.lng, t: replay.cursor };
+
+  const canvas = { ...mapProps(props), ...(marker === undefined ? {} : { livePoint: marker }) };
   return createElement(
     "section",
     { className: "mapatlas-trip-review" },
-    createElement(MapCanvasInternal, { ...mapProps(props), create: props.create }),
-    ...reviewBody(props),
+    props.create === undefined
+      ? createElement(MapCanvas, canvas)
+      : createElement(MapCanvasInternal, { ...canvas, create: props.create }),
+    createElement(ReplayControls, { key: "replay", track: props.track, replay }),
+    ...reviewBody(props, replay.cursor),
+  );
+}
+
+function ReplayControls(props: {
+  track: Track;
+  replay: ReturnType<typeof useReplay>;
+}): ReactElement | null {
+  const { replay, track } = props;
+  const first = track.points[0];
+  const last = track.points[track.points.length - 1];
+  if (first === undefined || last === undefined || replay.cursor === undefined) return null;
+  return createElement(
+    "div",
+    { className: "mapatlas-trip-replay" },
+    createElement(
+      "button",
+      {
+        type: "button",
+        className: "mapatlas-trip-replay-toggle",
+        onClick: replay.playing ? replay.pause : replay.play,
+      },
+      replay.playing ? "Pause" : "Play",
+    ),
+    createElement("input", {
+      className: "mapatlas-trip-replay-scrub",
+      type: "range",
+      min: first.t,
+      max: last.t,
+      value: replay.cursor,
+      "aria-label": "Replay position",
+      onChange: (change: ChangeEvent<HTMLInputElement>) => {
+        replay.scrubTo(Number(change.target.value));
+      },
+    }),
   );
 }
 
@@ -107,8 +159,125 @@ function mapProps(props: TripReviewProps): MapCanvasProps {
   };
 }
 
+/**
+ * The clock, injected so replay is deterministic under test.
+ *
+ * Deliberately **not** a prop: a scheduler is implementation machinery, and putting it in the
+ * published contract would mean owning its shape indefinitely for the benefit of nobody who
+ * consumes the engine. Same reasoning as core's `Scheduler` for the polling sensor source.
+ */
+export interface ReplayClock {
+  now(): number;
+  schedule(callback: () => void): () => void;
+}
+
+const systemReplayClock: ReplayClock = {
+  now: () => Date.now(),
+  schedule: (callback) => {
+    const handle = requestAnimationFrame(() => {
+      callback();
+    });
+    return () => {
+      cancelAnimationFrame(handle);
+    };
+  },
+};
+
+/**
+ * The replay cursor and its controls.
+ *
+ * **Mounts paused at `first.t`** (ADR-0030). Opening a review must not start a time-dependent
+ * action on its own, and autoplay would be choosing a policy the contract did not. Nothing
+ * advances until an explicit Play.
+ *
+ * The cursor is one value. The map marker reads it through `positionAt`, and the chart cursor
+ * will read the same one, so the two cannot disagree about where the trip was.
+ */
+function useReplay(
+  track: Track,
+  clock: ReplayClock,
+): {
+  cursor: number | undefined;
+  playing: boolean;
+  play: () => void;
+  pause: () => void;
+  scrubTo: (t: number) => void;
+} {
+  const first = track.points[0];
+  const last = track.points[track.points.length - 1];
+  const from = first?.t;
+  const to = last?.t;
+
+  const [cursor, setCursor] = useState<number | undefined>(from);
+  const [playing, setPlaying] = useState(false);
+
+  // A replacement track must not leave the cursor outside the new range — it would ask
+  // `positionAt` for a time this track never covered, and get `undefined` forever.
+  const bounds = `${String(from)}:${String(to)}`;
+  const mounted = useRef(false);
+  useEffect(() => {
+    // Skips the mount run, deliberately. Without that this effect also set the initial cursor
+    // and paused state, making the `useState` initialisers above unfalsifiable — mutations of
+    // them survived, because the effect corrected them before anything could observe it. One
+    // rule, one home: the initialisers own the mount state, this owns replacement.
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    setPlaying(false);
+    setCursor(from);
+  }, [bounds, from]);
+
+  const anchor = useRef<{ wall: number; cursor: number } | undefined>(undefined);
+  useEffect(() => {
+    if (!playing || from === undefined || to === undefined) return undefined;
+    let cancel: (() => void) | undefined;
+    const tick = (): void => {
+      const start = anchor.current;
+      if (start === undefined) return;
+      const next = start.cursor + (clock.now() - start.wall);
+      if (next >= to) {
+        setCursor(to);
+        setPlaying(false);
+        return;
+      }
+      setCursor(next);
+      cancel = clock.schedule(tick);
+    };
+    cancel = clock.schedule(tick);
+    return () => {
+      cancel?.();
+    };
+  }, [playing, from, to, clock]);
+
+  const play = (): void => {
+    if (from === undefined || to === undefined || from === to) return;
+    // Restart from the beginning when the cursor is already at the end, rather than playing a
+    // zero-length stretch and stopping again.
+    const at = cursor === undefined || cursor >= to ? from : cursor;
+    anchor.current = { wall: clock.now(), cursor: at };
+    setCursor(at);
+    setPlaying(true);
+  };
+  const pause = (): void => {
+    setPlaying(false);
+  };
+  const scrubTo = (t: number): void => {
+    if (from === undefined || to === undefined) return;
+    // No clamp here, and its absence is deliberate. `scrubTo` is reached only from the range
+    // input, whose `min`/`max` come from the track's own endpoints, so the browser has already
+    // clamped `t` before this sees it — a second clamp was unfalsifiable and a mutation
+    // removing it survived. The range attributes are the falsifiable guard, and they are the
+    // ones the tests pin.
+    anchor.current = { wall: clock.now(), cursor: t };
+    setCursor(t);
+  };
+
+  return { cursor, playing, play, pause, scrubTo };
+}
+
 /** The non-map half: the stats panel, then one chart per chartable channel. */
-function reviewBody(props: TripReviewProps): ReactElement[] {
+function reviewBody(props: TripReviewProps, cursor: number | undefined): ReactElement[] {
   // `computeStats` and nothing else. A second implementation here would drift from the one the
   // recorder, the summary and the export all use, and the first thing it would get wrong is
   // `movingTimeMs`, which excludes pauses — a naive walk of the points sums straight through
@@ -125,7 +294,15 @@ function reviewBody(props: TripReviewProps): ReactElement[] {
     createElement(StatsPanel, { key: "stats", stats }),
     ...(charts.length === 0
       ? []
-      : [createElement(ChannelCharts, { key: "charts", track: props.track, charts, stats })]),
+      : [
+          createElement(ChannelCharts, {
+            key: "charts",
+            track: props.track,
+            charts,
+            stats,
+            cursor,
+          }),
+        ]),
   ];
 }
 
@@ -178,6 +355,7 @@ function ChannelCharts(props: {
   track: Track;
   charts: ChannelDescriptor[];
   stats: TrackStats;
+  cursor: number | undefined;
 }): ReactElement {
   return createElement(
     "div",
@@ -188,6 +366,7 @@ function ChannelCharts(props: {
         descriptor,
         track: props.track,
         stats: props.stats.channels?.[descriptor.key],
+        cursor: props.cursor,
       }),
     ),
   );
@@ -197,6 +376,7 @@ function ChannelChart(props: {
   descriptor: ChannelDescriptor;
   track: Track;
   stats: { min: number; max: number; avg: number } | undefined;
+  cursor: number | undefined;
 }): ReactElement {
   const { descriptor, track } = props;
   const samples = track.points
@@ -260,6 +440,19 @@ function ChannelChart(props: {
           points,
         }),
       ),
+      // **The same cursor value the map marker is drawn from.** Not a second time source: if
+      // the chart derived its own, the two surfaces could disagree about where the trip was,
+      // which is the whole reason there is one cursor. Absent when the cursor lies outside
+      // this channel's own samples — a channel that started late has nothing to point at.
+      props.cursor === undefined || props.cursor < t0 || props.cursor > t1
+        ? null
+        : createElement("line", {
+            className: "mapatlas-trip-chart-cursor",
+            x1: x(props.cursor).toFixed(2),
+            x2: x(props.cursor).toFixed(2),
+            y1: 0,
+            y2: CHART_H,
+          }),
     ),
   );
 }

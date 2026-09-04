@@ -300,8 +300,17 @@ and only the layer that received it knows which.
 **non-decreasing**, `points[i].t >= points[i - 1].t`, so only a strict decrease throws — equal
 milliseconds are degenerate but not corrupt, two fixes can share one, and imported files often
 round to the second. `computeStats` is then responsible for not deriving an instantaneous speed
-from a pair whose `dt` is zero. The check runs **within** each segment and never across a
-boundary, where a gap is the entire point of the segmentation. Segment ranges are validated too —
+from a pair whose `dt` is zero.
+
+> **Amended by ADR-0032.** The check originally ran **within** each segment and never across a
+> boundary, on the reasoning that a gap is the entire point of the segmentation. That conflated
+> two continuities. Timestamps remain non-decreasing, but the check is **global over the
+> canonical `points[]`, segment boundaries included**: a boundary breaks *geometry*, not
+> *chronology* — no distance, line or interpolation crosses it, while the next segment may not
+> begin earlier than the preceding one ended. The original rule admitted a track whose second
+> segment predated its first, for which `computeStats` returned a negative `durationMs`. The
+> layer table below is unchanged: `finalizeTrack` still owns canonical validation; only the
+> invariant it enforces has strengthened. Segment ranges are validated too —
 in bounds, not inverted, not overlapping — because a malformed range produces wrong geometry and
 wrong statistics just as silently. **All validation happens before any derivation**: finalization
 either returns a wholly valid track or throws having computed nothing.
@@ -893,3 +902,65 @@ introduces. Should a later requirement need interaction —
 brushing, tooltips, zoom — this decision is reopened rather than worked around, and criterion (3)
 is the one that will have changed. Criteria (1) and (2) hold regardless and would still bind the
 choice to a library that is tree-shakeable and import-safe.
+
+## ADR-0032 — Position-at-time is a core projection, not a replay detail
+**Context.** T5.5 needs the track's position at an arbitrary moment. The obvious home is the
+replay component, since ADR-0030 makes playback state internal to `TripReview`. But that ADR is
+about *playback behaviour and state*; it says nothing about where the geometry rule lives, and
+the rule in question is not replay's. "Do not invent travel through a pause" is already
+cross-surface: the rendered line refuses it (`render-differential.e2e.ts` pins "the pause holds
+no line"), the channel charts refuse it (ADR-0031, one polyline per segment), and replay must
+refuse it too. A third implementation inside React is precisely the drift a single shared
+`computeStats` exists to prevent, and a consumer building their own replay UI would have no way
+to match `TripReview`'s semantics.
+**Decision.** `positionAt(track: Pick<Track, "points" | "segments">, t): LatLng | undefined` is
+published from `@mapatlas/core`. It is a pure projection — no renderer, no clock, no playback
+state. React keeps the playback state machine and the controls.
+
+The semantics are pinned here rather than left accidental, because making the symbol public
+makes every one of them a promise:
+
+- `t` exactly on a recorded point returns that point's coordinates.
+- Within a segment, **linear interpolation of lat/lng between the two bracketing samples** — the
+  same piecewise geometry the track supplies. No geodesic path is introduced for animation; if
+  the antimeridian becomes a real requirement it changes here, once, rather than being patched
+  inside a component.
+- **Never across a segment boundary.** A `t` inside a pause returns the last point *before* it,
+  held until the next segment begins: `A` ends at 100, `B` begins at 200, so 150 and 199 both
+  return `A`'s last point and 200 returns `B`'s first.
+- Outside `[first.t, last.t]`: `undefined`, not clamped to an endpoint.
+- Adjacent samples sharing a timestamp resolve to the later sample in that segment — there is no
+  interval to interpolate across, and no division by zero.
+- No points: `undefined`. Non-finite `t`: `RangeError`, as elsewhere for meaningless numerics.
+
+**Prerequisite, and a live defect it exposes: the temporal invariant must be global.**
+`assertValidTrackGeometry` checked non-decreasing timestamps *within each segment only*, on the
+reasoning that "expecting continuity across a pause would be a category error". That conflated
+two different continuities. A boundary breaks **geometry** — nothing is drawn or interpolated
+from one segment into the next, and that stands — but it does not break **chronology**: the
+pause between two segments may not run backwards.
+
+The gap is not hypothetical. A track whose second segment predates its first passes validation
+today, and `computeStats` — which derives `durationMs` as `last.t - first.t` — returns **−200 ms**
+for it. `positionAt` would inherit worse: at a `t` covered by both segments there are two
+plausible answers, and ADR-0030's cursor range `[first.t, last.t]` is not a range at all.
+
+So the invariant is corrected rather than `positionAt` being given a special precondition:
+**timestamps are non-decreasing over the whole canonical `points[]`, segment boundaries
+included.** ADR-0020's temporal rule is amended accordingly, and the validator is updated
+alongside `positionAt` in increment 1. Non-decreasing rather than strictly increasing stays
+right: imported and rounded observations legitimately share a timestamp.
+
+That invariant is what makes the boundary-equality rule meaningful. At `t === B.start.t`, `B`
+wins — including when `A.end.t === B.start.t`, since at that instant `B` is the current
+observation and the rule generalises "held until the next segment begins". Without global order,
+"the later segment" would not be a statement about time.
+
+**Consequences.** Holding through a pause means a replay marker sits still for the duration of a
+stop, which is correct and will look like a stall to anyone expecting animation — that is the
+same complaint the map's empty gap invites, and the same answer: the engine has no evidence of
+movement there. Returning `undefined` rather than clamping pushes range handling to the caller;
+the replay cursor constrains itself to the trip's own range, so the `undefined` arm is reachable
+only through direct use of the projection, which is exactly the case that should not get a
+fabricated answer. Publishing the symbol means these seven rules are now contract, and a
+consumer's replay can agree with the engine's instead of approximating it.

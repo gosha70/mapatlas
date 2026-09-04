@@ -8,6 +8,7 @@ import type { Id, MapEvent, MediaRef, StorageAdapter, TileSource, Track } from "
 import type { EventPresentation, MapController, MapControllerOptions } from "@mapatlas/maplibre";
 
 import { renderComponent } from "./testing/render-hook.js";
+import type { ReplayClock } from "./trip-review.js";
 import { TripReviewInternal } from "./trip-review.js";
 
 /**
@@ -26,6 +27,7 @@ interface Recorded {
   tracks: (Track | null)[];
   events: MapEvent[][];
   terrains: unknown[];
+  live: ({ lat: number; lng: number; t: number } | null)[];
   clickListeners: ((id: Id) => void)[];
 }
 
@@ -41,6 +43,7 @@ function recordingController(): {
       tracks: [],
       events: [],
       terrains: [],
+      live: [],
       clickListeners: [],
     };
     seen.push(record);
@@ -58,7 +61,9 @@ function recordingController(): {
       renderEvents: (e: MapEvent[]) => {
         record.events.push(e);
       },
-      showLivePosition: () => undefined,
+      showLivePosition: (point: { lat: number; lng: number; t: number } | null) => {
+        record.live.push(point);
+      },
       renderDraft: () => undefined,
       onMapTap: () => () => undefined,
       onEventClick: (cb: (id: Id) => void) => {
@@ -280,6 +285,43 @@ async function flushMicrotasks(): Promise<void> {
     await Promise.resolve();
     await Promise.resolve();
   });
+}
+
+/** The one element matching `selector`, or a loud failure naming what is missing. */
+function find<T extends Element>(container: ParentNode, selector: string): T {
+  const element = container.querySelector<T>(selector);
+  if (element === null) throw new Error(`no element matches ${selector}`);
+  return element;
+}
+
+/**
+ * Activate a node, refusing if it has already left the document.
+ *
+ * React 18 delegates events at the root, so a detached node's `click()` reaches no handler at
+ * all — a silent no-op, not an error. The composer's suite learned this the hard way; the same
+ * convention applies here.
+ */
+function clickLive(node: HTMLElement, what: string): void {
+  if (!node.isConnected) {
+    throw new Error(`${what} is detached: clicking it would reach no handler and prove nothing`);
+  }
+  node.click();
+}
+
+/**
+ * Move a range input the way a user does, as far as React can tell.
+ *
+ * Assigning `.value` directly is not enough: React keeps a value tracker per input and treats
+ * an event whose value matches the tracker as "no change", so the handler never fires — the
+ * input visibly holds the new value while the component never hears about it. Going through
+ * the prototype's setter updates the element without updating the tracker, which is what makes
+ * the dispatched event look like a real edit.
+ */
+function setRange(input: HTMLInputElement, value: number): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (setter === undefined) throw new Error("no value setter on HTMLInputElement.prototype");
+  setter.call(input, String(value));
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 const chartRegion = (c: ParentNode): Element | null => c.querySelector(".mapatlas-trip-charts");
@@ -765,5 +807,286 @@ describe("TripReview — resolution identity is (store, blobKey)", () => {
     } finally {
       fake.restore();
     }
+  });
+});
+
+describe("TripReview — the replay cursor (T5.5 increment 2)", () => {
+  /**
+   * A clock the test drives. A real one makes "advanced by one second" a race, and
+   * `requestAnimationFrame` in happy-dom would make it a race against a fake too.
+   */
+  function testClock(): {
+    clock: ReplayClock;
+    advance: (ms: number) => Promise<void>;
+    scheduled: () => number;
+  } {
+    let now = 0;
+    let scheduled = 0;
+    let pending: (() => void) | undefined;
+    const clock: ReplayClock = {
+      now: () => now,
+      schedule: (callback) => {
+        scheduled += 1;
+        pending = callback;
+        return () => {
+          pending = undefined;
+        };
+      },
+    };
+    return {
+      clock,
+      scheduled: () => scheduled,
+      advance: async (ms) => {
+        now += ms;
+        await act(async () => {
+          pending?.();
+        });
+      },
+    };
+  }
+
+  const toggle = (c: ParentNode): HTMLButtonElement =>
+    find<HTMLButtonElement>(c, ".mapatlas-trip-replay-toggle");
+  const scrub = (c: ParentNode): HTMLInputElement =>
+    find<HTMLInputElement>(c, ".mapatlas-trip-replay-scrub");
+  /** The position handed to the map, which is the only thing the marker can be drawn from. */
+  const marker = (seen: Recorded[]): { lat: number; lng: number; t: number } | undefined =>
+    seen[0]?.live.at(-1) ?? undefined;
+
+  it("mounts paused at the first point's timestamp", async () => {
+    // ADR-0030: opening a review must not start a time-dependent action on its own.
+    const { clock } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    expect(toggle(container).textContent, "must not be playing").toBe("Play");
+    expect(scrub(container).value).toBe("0");
+    expect(marker(seen), "the marker starts on the first point").toMatchObject({
+      lat: 59.3,
+      lng: 18.0,
+      t: 0,
+    });
+  });
+
+  it("does not advance without an explicit Play", async () => {
+    const { clock, advance } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    await advance(5_000);
+    expect(scrub(container).value, "time passed but the cursor moved").toBe("0");
+    expect(marker(seen)?.t).toBe(0);
+  });
+
+  it("advances with the clock once played, and Pause freezes it where it stands", async () => {
+    const { clock, advance } = testClock();
+    const { container } = await mount({ track: UNEVEN, clock });
+    await act(async () => {
+      clickLive(toggle(container), "Play");
+    });
+    expect(toggle(container).textContent).toBe("Pause");
+
+    await advance(500);
+    expect(scrub(container).value).toBe("500");
+
+    await act(async () => {
+      clickLive(toggle(container), "Pause");
+    });
+    await advance(5_000);
+    expect(scrub(container).value, "a paused cursor kept moving").toBe("500");
+    expect(toggle(container).textContent).toBe("Play");
+  });
+
+  it("scrubs the same cursor the marker is drawn from", async () => {
+    // One cursor. The map marker and (next increment) the chart cursor cannot disagree.
+    const { clock } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    await act(async () => {
+      setRange(scrub(container), 500);
+    });
+    expect(scrub(container).value).toBe("500");
+    // Half of the first segment: halfway between (59.3,18.0) and (59.31,18.0).
+    expect(marker(seen)?.lat).toBeCloseTo(59.305, 5);
+  });
+
+  it("holds the marker still across a pause", async () => {
+    // The whole point of ADR-0032 reaching the marker: scrubbing into the stop must not slide.
+    const { clock } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    const at = async (t: number): Promise<void> => {
+      await act(async () => {
+        setRange(scrub(container), t);
+      });
+    };
+    await at(5_000);
+    const mid = marker(seen);
+    await at(8_999);
+    expect(marker(seen)?.lat, "the marker moved during a pause").toBe(mid?.lat);
+    await at(9_000);
+    expect(marker(seen)?.lat, "the next segment must take over when it begins").toBe(59.32);
+  });
+
+  it("stops at the end rather than running past it", async () => {
+    const { clock, advance } = testClock();
+    const { container } = await mount({ track: UNEVEN, clock });
+    await act(async () => {
+      clickLive(toggle(container), "Play");
+    });
+    await advance(99_000);
+    expect(scrub(container).value, "the cursor ran past the last point").toBe("10000");
+    expect(toggle(container).textContent, "playback must stop at the end").toBe("Play");
+  });
+
+  it("resets the cursor into range when the track is replaced", async () => {
+    // Internal replay state must not survive into a track that never covered that time —
+    // `positionAt` would answer `undefined` forever.
+    const { clock } = testClock();
+    const mounted = await mount({ track: UNEVEN, clock });
+    await act(async () => {
+      setRange(scrub(mounted.container), 9_000);
+    });
+    expect(scrub(mounted.container).value).toBe("9000");
+
+    await mounted.rerender({
+      track: TRACK,
+      events: EVENTS,
+      store: STORE,
+      sources: SOURCES,
+      create: mounted.create,
+      clock,
+    } as never);
+
+    // TRACK spans 1000..2000; 9000 is outside it entirely.
+    expect(scrub(mounted.container).value, "a stale cursor outlived its track").toBe("1000");
+  });
+
+  it("bounds the scrub to the track's own endpoints", async () => {
+    // The range attributes are what keep the cursor inside the trip: an out-of-range cursor
+    // asks `positionAt` for a time the track never covered, which answers `undefined` and
+    // leaves the marker nowhere. Asserted on the attributes *and* on the outcome, because the
+    // browser clamps before the handler sees the value — a second clamp inside the component
+    // would be unfalsifiable, and is not there.
+    const { clock } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    expect(scrub(container).getAttribute("min"), "bounded by the first point").toBe("0");
+    expect(scrub(container).getAttribute("max"), "bounded by the last point").toBe("10000");
+
+    setRange(scrub(container), -5_000);
+    await act(async () => undefined);
+    expect(scrub(container).value, "a cursor before the trip began").toBe("0");
+    expect(marker(seen)?.lat, "the marker must stay on the track").toBe(59.3);
+
+    setRange(scrub(container), 99_000);
+    await act(async () => undefined);
+    expect(scrub(container).value, "a cursor after the trip ended").toBe("10000");
+    expect(marker(seen)?.lat).toBe(59.33);
+  });
+
+  it("refuses to play a zero-duration track, and schedules nothing", async () => {
+    // One point: `first.t === last.t`, so there is no interval to advance across. Playing it
+    // would schedule a tick that can only resolve to the same instant — and, before the guard
+    // existed, would flip the control to Pause for a trip that cannot move.
+    const instant = {
+      ...TRACK,
+      points: [{ lat: 1, lng: 2, t: 500 }],
+      segments: [{ id: "s1", startIndex: 0, endIndex: 0, startedAt: 500, endedAt: 500 }],
+      startedAt: 500,
+      endedAt: 500,
+    } satisfies Track;
+    const { clock, advance, scheduled } = testClock();
+    const { container, seen } = await mount({ track: instant, clock });
+
+    expect(scrub(container).value).toBe("500");
+    expect(marker(seen), "a finite position, not NaN").toMatchObject({ lat: 1, lng: 2, t: 500 });
+
+    await act(async () => {
+      clickLive(toggle(container), "Play");
+    });
+    expect(toggle(container).textContent, "a zero-duration trip must not enter playback").toBe(
+      "Play",
+    );
+    expect(scheduled(), "nothing may be scheduled for a trip that cannot advance").toBe(0);
+
+    await advance(5_000);
+    expect(scrub(container).value).toBe("500");
+  });
+
+  it("stops playback when the track is replaced mid-play", async () => {
+    // The active-playback case, distinct from replacing while paused: the replacement resets
+    // the cursor *and* clears `playing`, so a scheduled tick from the previous trip cannot
+    // carry playback into the new one.
+    const { clock, advance } = testClock();
+    const mounted = await mount({ track: UNEVEN, clock });
+    await act(async () => {
+      clickLive(toggle(mounted.container), "Play");
+    });
+    await advance(500);
+    expect(scrub(mounted.container).value).toBe("500");
+    expect(toggle(mounted.container).textContent).toBe("Pause");
+
+    await mounted.rerender({
+      track: TRACK,
+      events: EVENTS,
+      store: STORE,
+      sources: SOURCES,
+      create: mounted.create,
+      clock,
+    } as never);
+
+    expect(scrub(mounted.container).value, "the cursor must land in the new track").toBe("1000");
+    expect(toggle(mounted.container).textContent, "playback carried into a different trip").toBe(
+      "Play",
+    );
+
+    await advance(5_000);
+    expect(scrub(mounted.container).value, "a disowned tick kept advancing the cursor").toBe(
+      "1000",
+    );
+  });
+
+  it("draws the chart cursor from the same value as the map marker", async () => {
+    // The bar from checkpoint 0. Two surfaces, one cursor: if the chart derived its own time
+    // the two could disagree about where the trip was, which is the reason there is one value.
+    // Asserted as a correspondence — the chart's x and the marker's position must both be the
+    // answer for the *same* t, so a chart reading a different time fails even if it looks
+    // plausible on its own.
+    const { clock } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    const cursorX = (): number =>
+      Number(find<Element>(container, ".mapatlas-trip-chart-cursor").getAttribute("x1"));
+
+    setRange(scrub(container), 500);
+    await act(async () => undefined);
+    // t=500 of a 10 000 ms span across 300 units: 15. And halfway along the first segment.
+    expect(cursorX(), "the chart cursor is not at the cursor's time").toBeCloseTo(15, 1);
+    expect(marker(seen)?.lat, "the marker is not at the cursor's time").toBeCloseTo(59.305, 5);
+
+    setRange(scrub(container), 9_500);
+    await act(async () => undefined);
+    expect(cursorX(), "the chart cursor did not follow").toBeCloseTo(285, 1);
+    expect(marker(seen)?.lat).toBeCloseTo(59.325, 5);
+  });
+
+  it("advances the chart cursor with time while the marker holds through a pause", async () => {
+    // Both surfaces refuse to interpolate across the stop, but they refuse *differently*: the
+    // chart's cursor keeps moving in x because time keeps passing, while the marker holds its
+    // position because the track has no observation there. Same value, different projections.
+    const { clock } = testClock();
+    const { container, seen } = await mount({ track: UNEVEN, clock });
+    const cursorX = (): number =>
+      Number(find<Element>(container, ".mapatlas-trip-chart-cursor").getAttribute("x1"));
+
+    setRange(scrub(container), 5_000);
+    await act(async () => undefined);
+    const held = marker(seen)?.lat;
+    expect(cursorX(), "time still passes during a pause").toBeCloseTo(150, 1);
+
+    setRange(scrub(container), 8_000);
+    await act(async () => undefined);
+    expect(cursorX(), "the chart cursor must advance with time").toBeCloseTo(240, 1);
+    expect(marker(seen)?.lat, "the marker must not move during the pause").toBe(held);
+  });
+
+  it("renders no controls for a track with no points", async () => {
+    const { clock } = testClock();
+    const empty = { ...TRACK, points: [], segments: [] } satisfies Track;
+    const { container } = await mount({ track: empty, clock });
+    expect(container.querySelector(".mapatlas-trip-replay")).toBeNull();
   });
 });

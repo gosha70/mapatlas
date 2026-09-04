@@ -128,6 +128,7 @@ describe("public surface", () => {
         "DEFAULT_STATS_POLICY",
         "computeStats",
         "finalizeTrack",
+        "positionAt",
         "resolveFinalizePolicy",
         "resolveStatsPolicy",
         "EventNotFoundError",

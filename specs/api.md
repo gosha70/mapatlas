@@ -284,9 +284,16 @@ the `channelKey`. It is raised whether or not a track is being resumed, which is
 `RecorderResumeError` is a *restored-state* fault and carries a `reason`. Where the underlying
 check lives in `core`, the original is preserved as `cause`: a `geometry` reason carries a
 `TrackSegmentRangeError`, `TrackCoverageError` or `TrackLapRangeError`, and a `temporal-order`
-reason carries a `TrackTemporalOrderError` when the regression fell inside a segment. The reason is
+reason carries a `TrackTemporalOrderError` wherever the regression fell. The reason is
 what a consumer should branch on — a backwards timestamp is one fault whether it falls inside a
-segment or across a pause, even though two different checks catch it.
+segment or across a pause.
+
+**Timestamps are non-decreasing over the whole canonical `points[]`, boundaries included**
+(ADR-0032). A segment boundary breaks *geometry*, not chronology: nothing is drawn or
+interpolated from one segment into the next, but the pause between them may not run backwards.
+The earlier rule checked only within each segment, which admitted a track whose second segment
+predated its first — and `computeStats`, which derives `durationMs` as `last.t - first.t`,
+returned a negative duration for it.
 
 An invalid `autosaveMs` is an ordinary `RangeError`: it is neither a configuration conflict nor a
 restored-state fault, just a number outside its documented domain.
@@ -496,6 +503,40 @@ export declare function computeStats(
   t: Pick<Track, "points" | "segments" | "channels">,
   policy?: Partial<StatsPolicy>,
 ): TrackStats;
+/**
+ * Where the track was at a moment — a pure projection over its own geometry (ADR-0032).
+ *
+ * In core rather than in the replay component because "does not invent travel through a pause"
+ * is already a cross-surface rule: the rendered line refuses it, the channel charts refuse it
+ * (ADR-0031), and replay must too. A third implementation in React is the drift `computeStats`
+ * exists to prevent. It has no renderer, no clock and no playback state, so a consumer building
+ * their own replay gets the same semantics `TripReview` does.
+ *
+ * - `t` exactly on a recorded point returns that point's coordinates.
+ * - Within a segment, interpolation is **linear in lat/lng between the two bracketing samples**
+ *   — the same piecewise geometry the track itself supplies. No geodesic path is introduced for
+ *   animation; if the antimeridian ever becomes a real requirement it changes here, once.
+ * - **Never between segments.** A `t` inside a pause returns the *last point before* it, held
+ *   until the next segment begins. Returning the next segment's first point would leak a future
+ *   observation backwards in time; holding says only "there is no evidence of movement after
+ *   this point", which is what the map says by drawing nothing.
+ * - Outside `[first.t, last.t]`: `undefined`, not clamped. A position at a time outside the trip
+ *   has no truthful answer, and the replay cursor constrains itself to that range anyway.
+ * - Adjacent samples sharing a timestamp: no division by zero — that instant resolves to the
+ *   later sample in the segment, there being no interval to interpolate across.
+ * - **At a boundary instant the later segment wins.** `A.end.t < t < B.start.t` gives `A`'s last
+ *   point; `t === B.start.t` gives `B`'s — including when `A.end.t === B.start.t`, since at that
+ *   instant `B` is the current observation. If `B` holds several points at that timestamp the
+ *   duplicate rule applies and the last of them wins. This rests on the global temporal
+ *   invariant above: without it `B` could begin before `A` ended and "later segment" would not
+ *   be a time ordering at all.
+ * - **Assumes canonical geometry has already been validated**, exactly as `computeStats` does.
+ *   It does not call `assertValidTrackGeometry` per cursor tick — validation ownership stays
+ *   singular and replay stays cheap.
+ * - No points: `undefined`. Non-finite `t`: `RangeError`.
+ */
+export declare function positionAt(track: Pick<Track, "points" | "segments">, t: number): LatLng | undefined;
+
 /** Ramer–Douglas–Peucker over one continuous run of points.
  *
  *  Generic by design: it knows nothing about segments or pauses. `finalizeTrack` maps it

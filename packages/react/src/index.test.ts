@@ -10,6 +10,7 @@ import type {
   JSONValue,
   LatLng,
   MapEvent,
+  MediaAnalyzer,
   OfflineRegion,
   OfflineRegionStore,
   SamplingPolicy,
@@ -110,6 +111,33 @@ type PublishedMapCanvas = (props: {
   onEventClick?(id: Id): void;
 }) => ReactElement;
 
+/**
+ * `api.md` §9, transcribed. `FieldSpec` is a *named* published interface — unlike
+ * `MapCanvasProps`, which §9 leaves inline — so its property types, its key set, and the
+ * nested `options: { value, label }` shape are all part of the contract.
+ */
+interface PublishedFieldSpec {
+  key: string;
+  label: string;
+  type: "text" | "number" | "boolean" | "select" | "date";
+  options?: { value: string; label: string }[];
+  unit?: string;
+  required?: boolean;
+  placeholder?: string;
+}
+
+type PublishedEventComposer = (props: {
+  at: LatLng;
+  store: StorageAdapter;
+  analyzer?: MediaAnalyzer;
+  mode?: "comment" | "photo";
+  fields?: PublishedFieldSpec[];
+  categories?: { value: string; label: string }[];
+  occurredAt?: number;
+  onSave(input: Omit<MapEvent, "id" | "position">): void;
+  onCancel(): void;
+}) => ReactElement;
+
 type PublishedUseTrackDraft = (opts?: { from?: Track; store?: StorageAdapter }) => {
   points: DraftTrackPoint[];
   canUndo: boolean;
@@ -192,10 +220,22 @@ const shapesMatch: [
   // The complete prop key set — the check that catches an extra optional prop, which mutual
   // assignability admits (the same hole ExactKeys exists for everywhere else).
   ExactKeys<Parameters<typeof barrel.MapCanvas>[0], Parameters<PublishedMapCanvas>[0]>,
-] = [true, true, true, true, true, true, true, true];
+  Exactly<Parameters<typeof barrel.EventComposer>, Parameters<PublishedEventComposer>>,
+  Exactly<ReturnType<typeof barrel.EventComposer>, ReturnType<PublishedEventComposer>>,
+  ExactKeys<Parameters<typeof barrel.EventComposer>[0], Parameters<PublishedEventComposer>[0]>,
+  // `FieldSpec` by value *and* by key set: mutual assignability alone would admit an extra
+  // optional property, which is the hole `ExactKeys` exists to close everywhere else here.
+  Exactly<barrel.FieldSpec, PublishedFieldSpec>,
+  ExactKeys<barrel.FieldSpec, PublishedFieldSpec>,
+  // The nested option shape, checked as its own contract rather than only through its parent:
+  // an option is `{ value, label }`, both strings, and nothing more.
+  Exactly<NonNullable<barrel.FieldSpec["options"]>[number], { value: string; label: string }>,
+  ExactKeys<NonNullable<barrel.FieldSpec["options"]>[number], { value: string; label: string }>,
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true];
 
 /** What the package exports today. Compared as a set, so an addition is as visible as a removal. */
 const EXPECTED_EXPORTS = [
+  "EventComposer",
   "MapCanvas",
   "PACKAGE_NAME",
   "useEventLog",
@@ -206,13 +246,17 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 /**
- * Published by `api.md` §9 and **not yet built**: the components, owned by T5.2 and T5.3.
+ * **`NOT_YET_BUILT` is gone, because nothing is.** With `EventComposer` on the barrel, every
+ * name `api.md` §9 publishes for this package is exported and covered by the exact checks
+ * above. The list is not kept empty: a loop over nothing is a test that cannot fail, which is
+ * the shape this file exists to avoid.
  *
- * The list is kept for the same reason it once held `useTrackList` and `useTrackDraft` — those
- * were asserted absent, the assertion failed the moment they reached the barrel, and that is
- * what forced them into the exact checks above instead of appearing with nothing verifying them.
+ * It earned its keep and should come back the same way if §9 ever publishes ahead of
+ * implementation again — declare the unbuilt name, assert it absent, and the assertion fails
+ * the moment it reaches the barrel, which is what forces it into the exact checks rather than
+ * letting it appear with nothing verifying it. `useTrackList`, `useTrackDraft` and
+ * `EventComposer` each arrived that way; `git log -S NOT_YET_BUILT` has the pattern.
  */
-const NOT_YET_BUILT = ["EventComposer"] as const;
 
 /** Internal to the package: seams and test infrastructure that must never reach a consumer. */
 const MUST_NOT_ESCAPE = [
@@ -251,19 +295,11 @@ describe("@mapatlas/react's public surface", () => {
     expect(barrel.PACKAGE_NAME).toBe("@mapatlas/react");
   });
 
-  it("exports the five published hooks, the map component, and nothing else", () => {
-    // A set comparison rather than three `toBeDefined` checks: those would pass while the barrel
-    // quietly grew an export nobody reviewed, and the barrel is the package's whole contract.
+  it("exports the five published hooks, both components, and nothing else", () => {
+    // A set comparison rather than a handful of `toBeDefined` checks: those would pass while
+    // the barrel quietly grew an export nobody reviewed, and the barrel is the package's whole
+    // contract. With T5.3 closed this set is api.md §9's React surface, complete.
     expect(Object.keys(barrel).sort()).toEqual([...EXPECTED_EXPORTS].sort());
-  });
-
-  it("still leaves T5.2's and T5.3's components unbuilt, and says so", () => {
-    // Not an idle assertion, and it has already earned its place once: it failed the moment
-    // `useTrackList` and `useTrackDraft` were exported, which is what forced them into the exact
-    // checks above rather than letting them appear unverified.
-    for (const name of NOT_YET_BUILT) {
-      expect(Object.keys(barrel), `${name} is not built yet`).not.toContain(name);
-    }
   });
 
   it("keeps its internal seams and test harness off the barrel", () => {
@@ -291,11 +327,14 @@ describe("@mapatlas/react's public surface", () => {
       barrel.useTrackList,
       barrel.useTrackDraft,
       barrel.MapCanvas,
+      barrel.EventComposer,
     ]) {
       expect(hook).toBeTypeOf("function");
     }
     expect(parametersMatch).toEqual([true, true, true, true, true, true]);
     expect(returnsMatch).toEqual([true, true, true, true, true, true]);
-    expect(shapesMatch).toEqual([true, true, true, true, true, true, true, true]);
+    // Fifteen: the eight that were here, plus EventComposer's parameters, return and key set,
+    // and FieldSpec by value and by key set with its nested option shape checked both ways.
+    expect(shapesMatch).toEqual(Array.from({ length: 15 }, () => true));
   });
 });

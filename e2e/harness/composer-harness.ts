@@ -16,8 +16,8 @@ import { StrictMode, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { MapEvent, StorageAdapter } from "@mapatlas/core";
-import type { FieldSpec } from "@mapatlas/react/event-composer";
-import { EventComposer } from "@mapatlas/react/event-composer";
+import type { FieldSpec } from "@mapatlas/react";
+import { EventComposer } from "@mapatlas/react";
 import { createIdbStorageAdapter } from "@mapatlas/storage-idb";
 
 type SaveInput = Parameters<Parameters<typeof EventComposer>[0]["onSave"]>[0];

@@ -96,9 +96,13 @@ const EVENTS: MapEvent[] = [
 
 const STORE = {} as StorageAdapter;
 
-async function mount(
-  overrides: Record<string, unknown> = {},
-): Promise<{ seen: Recorded[]; container: HTMLElement; unmount: () => Promise<void> }> {
+async function mount(overrides: Record<string, unknown> = {}): Promise<{
+  seen: Recorded[];
+  create: (options: MapControllerOptions) => MapController;
+  container: HTMLElement;
+  rerender: (props: never) => Promise<void>;
+  unmount: () => Promise<void>;
+}> {
   const { create, seen } = recordingController();
   const harness = await renderComponent(TripReviewInternal, {
     track: TRACK,
@@ -108,7 +112,13 @@ async function mount(
     create,
     ...overrides,
   } as never);
-  return { seen, container: harness.container, unmount: harness.unmount };
+  return {
+    seen,
+    create,
+    container: harness.container,
+    rerender: harness.rerender as (props: never) => Promise<void>,
+    unmount: harness.unmount,
+  };
 }
 
 describe("TripReview — composition and pass-through (T5.4 increment 1)", () => {
@@ -171,6 +181,49 @@ describe("TripReview — composition and pass-through (T5.4 increment 1)", () =>
     expect(listener, "no click listener was wired").toBeDefined();
     listener?.("e1");
     expect(clicked, "the click did not reach the consumer").toEqual(["e1"]);
+  });
+
+  it("forwards the sources, without which there is no map", async () => {
+    // The one prop whose absence leaves nothing to render, and the one this suite originally
+    // had no mutation for — it survived `sources: []` because every other assertion looked
+    // past it.
+    const { seen } = await mount();
+    expect(seen[0]?.options.sources, "sources did not reach the controller").toBe(SOURCES);
+  });
+
+  it("keeps forwarding after mount, not only at it", async () => {
+    // Everything above observes the *construction* options, so a component that captured its
+    // props once — `useMemo(() => mapProps(props), [])`, or a ref read on first render — would
+    // satisfy every one of them. What separates "forwards" from "forwarded at mount" is a
+    // change arriving after the controller exists, where the setters are the only route.
+    const first: EventPresentation = {
+      marker: () => ({ kind: "dot", color: "#111" }) as never,
+      finishMarker: () => null,
+    };
+    const second: EventPresentation = {
+      marker: () => ({ kind: "dot", color: "#222" }) as never,
+      finishMarker: () => ({ kind: "dot", color: "#333" }) as never,
+    };
+    const mounted = await mount({ presentation: first });
+    expect(mounted.seen[0]?.options.presentation).toBe(first);
+
+    await mounted.rerender({
+      track: TRACK,
+      events: EVENTS,
+      store: STORE,
+      sources: SOURCES,
+      presentation: second,
+      // The *same* seam: `create`'s identity is part of MapCanvas's recreation boundary, so a
+      // fresh function here would tear the controller down and rebuild it, and the assertion
+      // below would pass for that reason instead of the one under test.
+      create: mounted.create,
+    } as never);
+
+    expect(mounted.seen, "the controller was rebuilt rather than updated").toHaveLength(1);
+    expect(
+      mounted.seen[0]?.presentations.at(-1),
+      "a presentation changed after mount never reached the controller",
+    ).toBe(second);
   });
 
   it("renders its own region around the map", async () => {

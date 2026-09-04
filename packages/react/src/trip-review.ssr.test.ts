@@ -27,7 +27,7 @@ describe("TripReview — server-side rendering", () => {
 
     const html = renderToString(
       createElement(TripReview, {
-        track: { id: "t1", startedAt: 1_000, points: [] },
+        track: { id: "t1", startedAt: 1_000, endedAt: 1_000, points: [], segments: [] },
         events: [],
         store: {},
         sources: [

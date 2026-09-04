@@ -806,3 +806,53 @@ be API that §9 does not publish.
 `mode: "photo"` means the capture affordance is the initially active, accessible control, with
 the picker invoked through a user action — not an automatic camera launch, which user-activation
 rules do not permit anyway.
+
+## ADR-0028 — `TripReview` takes a `StorageAdapter`, because photos have no other route
+**Context.** `tasks.md` scoped T5.4 as "events/photos", but §9's `TripReview` had no store.
+`MediaRef` addresses media two ways: `blobKey` into a `StorageAdapter`, or `url` for
+already-hosted media. Without a store the component can render the second and not the first —
+so it could not display a photo `EventComposer` had just written, which is the ordinary case.
+The alternatives were to drop photos from the task (scope overstates) or to render `url`-backed
+media only and document the hole.
+**Decision.** Add `store: StorageAdapter` to `TripReview`, required rather than optional. A
+`MediaRef` with `url` renders from it directly and needs no lookup; one with `blobKey` is
+resolved through the store.
+**Consequences.** The review surface gains a persistence dependency that `MapCanvas` does not
+have, which is a real asymmetry and is the price of the composer and the review agreeing about
+one event. Required rather than optional because an optional store makes "the photo did not
+render" ambiguous between *not supplied* and *not found* — the consumer should fail to compile,
+not fail silently. Object URLs created for display are revoked on unmount, as in the composer.
+
+## ADR-0029 — "No channels" has five readings; `channels` defaults to the descriptors
+**Context.** T5.4's acceptance line says a track with no channels renders without an empty
+chart frame. That settles the *outcome* and not the *antecedent*: "no channels" can mean no
+descriptors on the track, descriptors with no samples in any point, samples whose key has no
+descriptor, a `channels?` prop naming nothing that matches, or a prop given as `[]`. The doc
+comment said `channels?` "defaults to all" without saying all of what — and descriptors and
+data can disagree in both directions.
+**Decision.** The default is **the descriptors in `track.channels`**. A descriptor is the
+consumer's statement that a channel exists and how to label it; data carrying a key with no
+descriptor has neither a label nor a unit and is not charted. A named or defaulted key with no
+samples charts nothing rather than an empty frame, and `channels: []` charts nothing. The chart
+region is absent entirely when nothing is chartable, not present and empty.
+**Consequences.** A consumer who records a channel and forgets its descriptor sees no chart,
+which is a silent omission — accepted, because inventing a label and unit for an unnamed key
+would be the engine learning what the number means, which ADR-0009 forbids. The five readings
+are each pinned by a test, since one implementation satisfying the AC's wording could fail any
+of the other four.
+
+## ADR-0030 — Replay is internal state, and holds across a pause
+**Context.** "Replay" appeared exactly once in the entire spec tree — the T5.4 scope line —
+with no criterion, no signature support and no ADR. The prevailing pattern elsewhere (Strava
+Flyby/Flyover, LeafletPlayback) is a video-player surface over a time cursor: play/pause, speed,
+scrub, and a marker interpolated between samples. LeafletPlayback additionally stops
+interpolating across a gap larger than a threshold rather than extrapolating through it.
+**Decision.** T5.5 owns replay. A time cursor over `[first.t, last.t]` drives the map marker
+and a cursor on each channel chart; play/pause and scrub are the controls. The marker
+interpolates between samples but **holds across a pause rather than sliding through it** — the
+same discontinuity the rendered line already honours, which `render-differential.e2e.ts` pins as
+"the pause holds no line". Playback state is internal, so §9 gains no props.
+**Consequences.** A consumer cannot drive or observe playback in v1; controlled playback is a
+later addition and a strictly additive one. Holding across a pause is deliberately not the
+smoothest animation — a marker that glides across a gap the map draws as empty tells the viewer
+the trip continued through it, which is the one thing the rendered line refuses to say.

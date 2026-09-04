@@ -1097,9 +1097,17 @@ export function EventComposer(props: {
 
 export function TripReview(props: {
   track: Track; events: MapEvent[];
+  /** Resolves `MediaRef.blobKey` for display. Required: without it the component cannot show
+   *  a photo the composer wrote, and "events/photos" would be unbuildable. A `MediaRef`
+   *  carrying `url` instead is rendered from that and needs no lookup. (ADR-0028) */
+  store: StorageAdapter;
   sources: TileSource[]; style?: string | JSONValue; terrain?: TerrainOptions | null;
   presentation?: EventPresentation;
-  /** Channel keys to chart under the map (e.g. ["heartRateBpm"]); defaults to all. */
+  /** Channel keys to chart under the map (e.g. ["heartRateBpm"]).
+   *  Defaults to **the descriptors in `track.channels`**, not to the keys found in the data —
+   *  a descriptor is the consumer's statement that a channel exists and how to label it, and
+   *  data with no descriptor has no label or unit to chart with. A named key with no samples
+   *  charts nothing rather than an empty frame. (ADR-0029) */
   channels?: string[];
   onEventClick?(id: Id): void;
 }): JSX.Element;

@@ -1007,10 +1007,27 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   resampled, and `""` is not reserved — a `select` or category option may carry it, so
   missing-ness is the placeholder being selected, never the empty string. `FieldSpec.key` is an
   identity and duplicates are rejected rather than resolved by order.
-- **T5.4 `<TripReview>`.** Map (sources/terrain/presentation) + replay + events/photos + stats
-  panel + per-channel charts. _AC:_ renders a finalized trip on a basemap with start/finish
-  marks; a track with a `heartRateBpm`-style channel charts it against time with the
-  descriptor's label and unit; a track with no channels renders without an empty chart frame.
+- **T5.4 `<TripReview>`.** Map (sources/terrain/presentation) + events/photos + stats panel +
+  per-channel charts. **Replay is T5.5**, split out because this task already carries five
+  surfaces and T5.3 showed what that costs. _AC:_ renders a finalized trip on a basemap with
+  start/finish marks; a track with a `heartRateBpm`-style channel charts it against time with
+  the descriptor's label and unit; a track with no channels renders without an empty chart
+  frame; an event whose `MediaRef` carries a `blobKey` renders its photo, resolved through the
+  `store` prop added to §9 for exactly this (ADR-0028).
+
+  *Settled here, because scope named what the signature could not do.* §9 had no
+  `StorageAdapter`, so "photos" was unbuildable as written — `store` is added rather than
+  photos dropped, since a review that cannot show what the composer just wrote is a seam with
+  a hole in it. And "no channels" has five readings, enumerated in ADR-0029: no descriptors, a
+  descriptor with no samples, data with no descriptor, the `channels?` prop filtering to none,
+  and what "defaults to all" means when descriptors and data disagree.
+
+- **T5.5 Replay.** A time cursor over the finalized track, with play/pause and scrub, driving
+  the map marker and a matching cursor on each channel chart. _AC:_ the marker interpolates
+  between samples; **it holds rather than sliding across a pause**, the same discontinuity
+  `render-differential.e2e.ts` already pins in the rendered line; scrubbing to a time moves
+  both the marker and the chart cursors; playback state is internal, so §9 gains no props
+  (ADR-0030).
 
 ## Phase 6 — Offline regions
 - **T6.1 PMTiles region store.** `@mapatlas/offline-pmtiles`: implement `OfflineRegionStore`

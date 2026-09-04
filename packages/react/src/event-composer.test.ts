@@ -1799,6 +1799,21 @@ describe("EventComposer — analyzer authorization and admission (ADR-0005, ADR-
     expect(remote.calls, "a disclosure outlived the photo it authorised sending").toEqual([]);
   });
 
+  it("lets the same photo be re-selected after Remove", async () => {
+    // Removing only the component's state leaves the input holding the file, and a browser
+    // fires no `change` when the same file is picked again — the photo would be unrecoverable
+    // without choosing a different one first.
+    const c = await mounted(counting().analyzer);
+    const input = find<HTMLInputElement>(c.container, ".mapatlas-composer-photo");
+    expect(input.value, "a file is selected").not.toBe("");
+
+    await act(async () => {
+      clickLive(find<HTMLButtonElement>(c.container, ".mapatlas-composer-photo-remove"), "Remove");
+    });
+
+    expect(input.value, "Remove left the control holding the file").toBe("");
+  });
+
   it("voids an outstanding disclosure the moment it is declined", async () => {
     // Same shape, same reason: the decline's re-render has not committed, so the Accept button
     // is still mounted and still live. Only the synchronous void refuses it.

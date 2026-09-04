@@ -339,11 +339,11 @@ describe("@mapatlas/react's public surface", () => {
     expect(barrel.PACKAGE_NAME).toBe("@mapatlas/react");
   });
 
-  it("exports the five published hooks, both built components, and nothing else", () => {
+  it("exports the five published hooks, all three components, and nothing else", () => {
     // A set comparison rather than a handful of `toBeDefined` checks: those would pass while
     // the barrel quietly grew an export nobody reviewed, and the barrel is the package's whole
-    // contract. With T5.3 closed this is §9's React surface minus `TripReview`, which T5.4
-    // owns and which the list above asserts absent.
+    // contract. With T5.4 closed this set *is* §9's React surface for this package, complete:
+    // five hooks and three components, with nothing else reaching a consumer.
     expect(Object.keys(barrel).sort()).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

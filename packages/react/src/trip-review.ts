@@ -300,9 +300,13 @@ type Resolution = Record<string, string | null>;
 
 function renderPhoto(event: MapEvent, media: MediaRef, resolved: Resolution): ReactElement {
   // Not decorative: this is the only visual record of the event, so `alt=""` would give a
-  // screen reader nothing at all. The consumer's own words when there are any; a neutral
-  // description otherwise, since the engine has no idea what the photo shows.
-  const alt = event.comment ?? "Photo attached to this event";
+  // screen reader nothing at all. The comment is offered as *context*, not as a description —
+  // presenting it as the alt text alone would assert that the consumer's words describe what
+  // is in the frame, which the engine cannot know and often would not be true.
+  const alt =
+    event.comment === undefined
+      ? "Photo attached to this event"
+      : `Photo attached to event: ${event.comment}`;
   // A hosted URL wins outright and needs no lookup — the store is for blobs.
   if (media.url !== undefined) {
     return createElement("img", { className: "mapatlas-trip-photo-image", src: media.url, alt });
@@ -338,6 +342,16 @@ function renderPhoto(event: MapEvent, media: MediaRef, resolved: Resolution): Re
 function useResolvedBlobs(refs: { media: MediaRef }[], store: StorageAdapter): Resolution {
   const [resolved, setResolved] = useState<Resolution>({});
   const urls = useRef(new Map<string, string>());
+  /**
+   * Which store the cache above belongs to.
+   *
+   * **Resolution identity is the pair `(store, blobKey)`, not the key.** Both caches were keyed
+   * by key alone, so a store swap under an unchanged key short-circuited on
+   * `urls.current.has(key)`: the replacement was never asked, and the previous store's object
+   * URL stayed on screen indefinitely. The `null` case was staler still — the old
+   * "unavailable" verdict was shown as though it were the new store's answer.
+   */
+  const cacheOwner = useRef<StorageAdapter | undefined>(undefined);
 
   const keys = useMemo(
     () =>
@@ -353,6 +367,14 @@ function useResolvedBlobs(refs: { media: MediaRef }[], store: StorageAdapter): R
   const keyId = keys.join("\u0000");
 
   useEffect(() => {
+    // A different store invalidates *every* store-backed resolution, even for identical keys:
+    // nothing the previous one said is evidence about this one.
+    if (cacheOwner.current !== store) {
+      for (const url of urls.current.values()) URL.revokeObjectURL(url);
+      urls.current.clear();
+      cacheOwner.current = store;
+      setResolved({});
+    }
     // Anything we hold that this render no longer asks for is released now, not at unmount.
     for (const [key, url] of [...urls.current]) {
       if (!keys.includes(key)) {

@@ -628,7 +628,7 @@ describe("TripReview — photos (T5.4 increment 3, ADR-0028)", () => {
       expect(
         img(container)?.getAttribute("alt"),
         "the only visual record of the event may not be marked decorative",
-      ).toBe("the heron on the far bank");
+      ).toBe("Photo attached to event: the heron on the far bank");
 
       const silent = [
         eventWith([{ id: "m2", mime: "image/jpeg", url: "https://x.invalid/b.jpg" }]),
@@ -646,6 +646,120 @@ describe("TripReview — photos (T5.4 increment 3, ADR-0028)", () => {
     try {
       const { container } = await mount({ store: fake.store });
       expect(container.querySelector(".mapatlas-trip-photos")).toBeNull();
+    } finally {
+      fake.restore();
+    }
+  });
+});
+
+describe("TripReview — resolution identity is (store, blobKey)", () => {
+  /** Two stores, one URL patch, so a store swap under an unchanged key is expressible. */
+  function twoStores(a: Record<string, Blob>, b: Record<string, Blob>) {
+    const lookups: string[] = [];
+    const revoked: string[] = [];
+    let next = 0;
+    const realCreate = URL.createObjectURL;
+    const realRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = (): string => {
+      next += 1;
+      return `blob:fake/${String(next)}`;
+    };
+    URL.revokeObjectURL = (url: string): void => {
+      revoked.push(url);
+    };
+    const make = (own: Record<string, Blob>, tag: string): StorageAdapter =>
+      ({
+        getBlob: (key: string): Promise<Blob | undefined> => {
+          lookups.push(`${tag}:${key}`);
+          return Promise.resolve(own[key]);
+        },
+      }) as unknown as StorageAdapter;
+    return {
+      A: make(a, "A"),
+      B: make(b, "B"),
+      lookups,
+      revoked,
+      restore: () => {
+        URL.createObjectURL = realCreate;
+        URL.revokeObjectURL = realRevoke;
+      },
+    };
+  }
+
+  const KEY = "photo";
+  const oneEvent: MapEvent[] = [
+    {
+      id: "e1",
+      position: { lat: 59.35, lng: 18.05 },
+      occurredAt: 1_500,
+      media: [{ id: "m1", mime: "image/jpeg", blobKey: KEY }],
+      tags: [],
+    } satisfies MapEvent,
+  ];
+
+  it("re-resolves the same key against a replacement store", async () => {
+    // Both caches were keyed by blobKey alone, so a store swap under an unchanged key hit
+    // `urls.current.has(key)` and short-circuited: B was never asked, and A's URL stayed on
+    // screen indefinitely. Identity is the pair, not the key.
+    const fake = twoStores(
+      { [KEY]: new Blob([new Uint8Array([1])], { type: "image/jpeg" }) },
+      { [KEY]: new Blob([new Uint8Array([2])], { type: "image/jpeg" }) },
+    );
+    try {
+      const mounted = await mount({ events: oneEvent, store: fake.A });
+      await flushMicrotasks();
+      const fromA = mounted.container
+        .querySelector(".mapatlas-trip-photo-image")
+        ?.getAttribute("src");
+      expect(fromA).toMatch(/^blob:fake\//);
+      expect(fake.lookups).toEqual([`A:${KEY}`]);
+
+      await mounted.rerender({
+        track: TRACK,
+        events: oneEvent,
+        store: fake.B,
+        sources: SOURCES,
+        create: mounted.create,
+      } as never);
+      await flushMicrotasks();
+
+      expect(fake.lookups, "the replacement store was never asked").toContain(`B:${KEY}`);
+      expect(fake.revoked, "the previous store's url was leaked").toContain(fromA);
+      const fromB = mounted.container
+        .querySelector(".mapatlas-trip-photo-image")
+        ?.getAttribute("src");
+      expect(fromB, "A's resolution was treated as B's").not.toBe(fromA);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("returns to Loading, not a stale Unavailable, when the store changes", async () => {
+    // The sharper leg: A said absent, B has it. The old `null` must not be shown as B's answer.
+    const fake = twoStores({}, { [KEY]: new Blob([new Uint8Array([2])], { type: "image/jpeg" }) });
+    try {
+      const mounted = await mount({ events: oneEvent, store: fake.A });
+      await flushMicrotasks();
+      expect(mounted.container.querySelector(".mapatlas-trip-photo-missing")).not.toBeNull();
+
+      await mounted.rerender({
+        track: TRACK,
+        events: oneEvent,
+        store: fake.B,
+        sources: SOURCES,
+        create: mounted.create,
+      } as never);
+
+      // The stale verdict must be gone. Whether the intervening frame reads "Loading" is not
+      // separately observable here — `act` flushes the effect's reset and B's resolution in one
+      // batch — so this asserts the checkable half: A's answer is never shown as B's.
+      expect(
+        mounted.container.querySelector(".mapatlas-trip-photo-missing"),
+        "A's verdict was still on screen as though it were B's",
+      ).toBeNull();
+
+      await flushMicrotasks();
+      expect(mounted.container.querySelector(".mapatlas-trip-photo-image")).not.toBeNull();
     } finally {
       fake.restore();
     }

@@ -557,12 +557,18 @@ export function EventComposer(props: {
     // with a live authorization on a settled composer would mean that coincidence had broken,
     // which is a fact worth announcing rather than a case worth quietly refusing.
     //
+    // `acceptsWork()` reads exactly two things — `outcome` and `writing` — and nothing else;
+    // adding a third input to that predicate is a change to the enumeration below, not just
+    // to the predicate.
+    //
     // The enumeration is of the *transitions*, not of `endAnalysis`'s callers — callers ⊆
     // transitions is trivially true and proves nothing. Every assignment that makes
     // `acceptsWork()` false:
     //   - `outcome = "saved"` on the photo-free path — `save` voids before branching;
     //   - `outcome = "saved"` after a write lands — `save` already voided, and no disclosure
-    //     can have opened since, because admission refuses while `writing` is true;
+    //     can have opened since, because admission refuses while `writing` is true (asserted,
+    //     not merely read off the code: "admits no analyzer work after handoff, or while a
+    //     Save is pending" checks that no panel opens, not only that no call is made);
     //   - `outcome = "cancelled"` in `cancel` — voids;
     //   - `writing = true` in `save` — voids before setting it.
     // The analyzer's own failure paths are not transitions: the catch touches neither

@@ -1959,6 +1959,13 @@ describe("EventComposer — analyzer authorization and admission (ADR-0005, ADR-
     // The write is parked: the composer is on its way to a handoff and takes no new work.
     await analyse(c.container);
     expect(remote.calls, "analysis started while a Save was in flight").toEqual([]);
+    // Not just "no call": no *authorization* either. The reachability argument for the
+    // post-handoff invariant chains through this — a disclosure opened while the write is in
+    // flight would arm an authorization that outlives the transition to "saved".
+    expect(
+      c.container.querySelector(".mapatlas-composer-disclosure"),
+      "a Save in flight still opened a disclosure",
+    ).toBeNull();
 
     c.store.puts[0]?.settle("blob-key");
     await flush();
@@ -1966,6 +1973,10 @@ describe("EventComposer — analyzer authorization and admission (ADR-0005, ADR-
 
     await analyse(c.container);
     expect(remote.calls, "analysis started after handoff").toEqual([]);
+    expect(
+      c.container.querySelector(".mapatlas-composer-disclosure"),
+      "a settled composer still opened a disclosure",
+    ).toBeNull();
   });
 
   it("settles the visible analysis state when the composition ends", async () => {

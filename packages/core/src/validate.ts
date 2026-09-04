@@ -62,21 +62,24 @@ export class TrackSegmentRangeError extends Error {
  * throws. `computeStats` is responsible for not deriving an instantaneous speed from a pair
  * whose `dt` is zero.
  *
- * Checked within each segment, never across a boundary: the gap between two segments is a
- * pause, and expecting continuity across it would be a category error.
+ * **Global over the canonical sequence, boundaries included** (ADR-0032, amending ADR-0020).
+ * This once checked within each segment only, on the reasoning that a gap between segments is a
+ * pause and expecting continuity across it would be a category error. That conflated two
+ * continuities: a boundary breaks *geometry* — no distance, line or interpolation crosses it,
+ * and none does — but it does not break *chronology*. The narrower rule admitted a track whose
+ * second segment predated its first, for which `computeStats` returned a negative `durationMs`,
+ * and for which "where was the track at time t" had two plausible answers.
+ *
+ * The gaps between segments are therefore checked too: `points` is one timeline whatever the
+ * segmentation says about movement.
  */
-function assertTemporalOrder(
-  points: readonly TrackPoint[],
-  segments: readonly TrackSegment[],
-): void {
-  for (const segment of segments) {
-    for (let i = segment.startIndex + 1; i <= segment.endIndex; i += 1) {
-      const previous = points[i - 1];
-      const current = points[i];
-      if (previous === undefined || current === undefined) continue;
-      if (current.t < previous.t) {
-        throw new TrackTemporalOrderError(i - 1, i, previous.t, current.t);
-      }
+function assertTemporalOrder(points: readonly TrackPoint[]): void {
+  for (let i = 1; i < points.length; i += 1) {
+    const previous = points[i - 1];
+    const current = points[i];
+    if (previous === undefined || current === undefined) continue;
+    if (current.t < previous.t) {
+      throw new TrackTemporalOrderError(i - 1, i, previous.t, current.t);
     }
   }
 }
@@ -235,6 +238,6 @@ export function assertValidTrackGeometry(
 ): void {
   assertSegmentRanges(track.points, track.segments);
   assertSegmentsCoverPoints(track.points, track.segments);
-  assertTemporalOrder(track.points, track.segments);
+  assertTemporalOrder(track.points);
   if (track.laps !== undefined) assertLapRanges(track.points, track.laps);
 }

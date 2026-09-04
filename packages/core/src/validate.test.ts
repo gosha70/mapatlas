@@ -59,11 +59,32 @@ describe("temporal order", () => {
     );
   });
 
-  it("does not fire across a segment boundary, where a gap is the whole point", () => {
-    // A pause. The second segment legitimately starts later; there is nothing to compare
-    // across the boundary, and expecting continuity there would be a category error.
+  it("accepts a forward gap across a segment boundary — that is what a pause is", () => {
     const points = pointsAt(0, 1000, 600_000, 601_000);
     const segments = [segment(0, 1), segment(2, 3, 600_000)];
+    expect(() => assertValidTrackGeometry({ points, segments })).not.toThrow();
+  });
+
+  it("rejects a segment that begins before the previous one ended", () => {
+    // Previously accepted, because the check ran within each segment and never across a
+    // boundary — on the reasoning that expecting continuity across a pause is a category
+    // error. That conflated two continuities. A boundary breaks *geometry*: no distance,
+    // line or interpolation crosses it, and none does. It does not break *chronology*.
+    //
+    // What the old rule admitted: this track validated, and `computeStats` derives
+    // `durationMs` as `last.t - first.t`, so it reported a **negative duration**. It also
+    // left "where was the track at t = 250" with two plausible answers, which is what
+    // `positionAt` cannot live with (ADR-0032, amending ADR-0020).
+    const points = pointsAt(100, 300, 200, 400);
+    const segments = [segment(0, 1), segment(2, 3, 200)];
+    expect(() => assertValidTrackGeometry({ points, segments })).toThrow(TrackTemporalOrderError);
+  });
+
+  it("accepts a boundary where the next segment begins as the previous one ended", () => {
+    // Non-decreasing, not strictly increasing: imported and rounded observations legitimately
+    // share a timestamp, and `positionAt` resolves that instant to the later segment.
+    const points = pointsAt(0, 1000, 1000, 2000);
+    const segments = [segment(0, 1), segment(2, 3, 1000)];
     expect(() => assertValidTrackGeometry({ points, segments })).not.toThrow();
   });
 

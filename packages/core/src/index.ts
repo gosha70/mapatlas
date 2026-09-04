@@ -78,6 +78,7 @@ export type {
 } from "./recorder.js";
 export { simplify } from "./simplify.js";
 export type { StatsPolicy } from "./stats.js";
+export { positionAt } from "./position-at.js";
 export {
   DEFAULT_ELEVATION_HYSTERESIS_M,
   DEFAULT_STATS_POLICY,

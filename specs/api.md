@@ -734,6 +734,9 @@ export interface TileSource {
   minZoom?: number; maxZoom?: number;
   tileSize?: number;
   encoding?: "mapbox" | "terrarium";   // raster-dem only
+  /** Terms permit **bulk download for offline use**. **Absent means refuse** — only
+   *  `OfflineRegionStore` reads it, and it says nothing about rendering (ADR-0033). */
+  offlineLicensed?: boolean;
   /** For "vector"/"raster-dem": renderer style layers applied to this source, verbatim.
    *  Opaque to `core`; this is how contours, hillshade, and bathymetry styling are expressed. */
   styleLayers?: JSONValue[];
@@ -774,8 +777,18 @@ export interface MapAssetStore {
   clear(): Promise<void>;
 }
 
-/** Default implementation, shipped as `@mapatlas/offline-pmtiles`. */
+/** `download()` and `estimateSize()` both refuse a source without `offlineLicensed: true`,
+ *  throwing `OfflineLicenseError` — absence is refusal, not permission (ADR-0033,
+ *  `architecture.md` §8). A UI must not be able to quote a size for a region the store will
+ *  then refuse to fetch, so the same check guards both entry points.
+ *
+ *  Default implementation, shipped as `@mapatlas/offline-pmtiles`. */
 export declare function createPMTilesRegionStore(o: { sources: TileSource[]; assets: MapAssetStore }): OfflineRegionStore;
+
+/** Thrown when a region names a source that is not marked `offlineLicensed` (ADR-0033). */
+export declare class OfflineLicenseError extends Error {
+  readonly sourceId: string;
+}
 ```
 
 **Contract (`TileSource`):** `kind` describes content, `transport` describes how the source is

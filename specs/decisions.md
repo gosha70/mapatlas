@@ -964,3 +964,35 @@ the replay cursor constrains itself to the trip's own range, so the `undefined` 
 only through direct use of the projection, which is exactly the case that should not get a
 fabricated answer. Publishing the symbol means these seven rules are now contract, and a
 consumer's replay can agree with the engine's instead of approximating it.
+
+## ADR-0033 — `offlineLicensed` gates region download, and its absence refuses
+**Context.** `architecture.md` §8 requires `OfflineRegionStore.download()` to run only against a
+self-hosted or **explicitly** offline-licensed source, and binds the demo and tests as well as
+production — the OpenStreetMap Foundation's tile policy prohibits bulk prefetching from
+`tile.openstreetmap.org`, and other providers differ per named product. `TileSource` carried no
+way to express that, so the rule existed only in prose.
+**Decision.** `TileSource.offlineLicensed?: boolean`. `download()` and `estimateSize()` both
+refuse a region naming a source without `offlineLicensed: true`, throwing `OfflineLicenseError`
+— one check function reached from two callers, not two checks, because a UI that can quote a
+size for a region the store will then refuse has already misled its user.
+
+**Absence means refuse.** The alternative — permissive by default, refuse only when explicitly
+marked prohibited — was rejected. §8 says *explicitly* licensed, and a permissive default makes
+every un-annotated source silently bulk-downloadable, including a community host pasted into a
+demo. That failure mode is a policy violation against a third party rather than a bug that can
+be fixed afterwards, and it fails silently and in the wrong direction. Refusing by default costs
+one annotation per legitimate source and makes it a deliberate act.
+
+**A three-state enum was rejected**, and the reason is recorded so it is not re-proposed:
+`"self-hosted" | "licensed" | "prohibited"` is more expressive, but the store's behaviour turns
+on one bit — may these bytes be bulk-fetched — and whether a permitted source is self-hosted or
+third-party-licensed is the consumer's record-keeping. A third state invites a fourth, and every
+additional state is another branch the refusal path must be tested against.
+
+**Consequences.** The flag says nothing about *rendering*: interactive browsing of a public host
+is a courtesy question while bulk prefetching is a policy one, so a source may legitimately
+render without being downloadable. Eight files construct `TileSource` literals today and an
+optional field breaks none of them, but every one that is later handed to a region download must
+be annotated — including the demo's own archives, where the annotation is true by construction
+since they are self-built. A consumer who forgets gets a named error at download time rather
+than a silent violation.

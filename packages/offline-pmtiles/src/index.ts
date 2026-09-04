@@ -5,3 +5,4 @@
  */
 
 export const PACKAGE_NAME = "@mapatlas/offline-pmtiles";
+export { OfflineLicenseError, assertOfflineLicensed } from "./offline-license.js";

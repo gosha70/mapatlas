@@ -8,31 +8,49 @@ specific failure modes are cheap to avoid once named.
 
 ## Where the work is
 
-T4.6 (vertical acceptance fixture). Read `specs/plans/t4-6-vertical-fixture.md` — it opens with
-a four-level status table. **Read that table before making any progress claim.**
+**T6.1 — `OfflineRegionStore` in `@mapatlas/offline-pmtiles`.** Read
+`specs/plans/t6-1-region-store.md`, then this file.
 
-The four levels exist because a series of individually-true "done" reports produced a false
-impression of overall progress. Keep them separate:
+Phases 0–5 are complete and merged: core, persistence, the web recorder, the MapLibre renderer,
+and the whole React surface `api.md` §9 publishes (`MapCanvas`, `EventComposer`, `TripReview`,
+plus replay). `NOT_YET_BUILT` in `packages/react/src/index.test.ts` is retired — it went red four
+times, each time a component reached the barrel unverified, which is what forced it into the
+exact §9 checks.
 
-1. component implemented and unit-tested
-2. wired into `build.mjs`
-3. discharged end-to-end (run against real data)
-4. remaining scope
+### Why T6.1 runs ahead of T4.6's items 7–9
 
-**The terrain half is at level 3.** `npm run fixture:build` cuts the terrain archive from the
-real release — 8 tiles, 1,493,696 bytes, reproducible byte for byte — and the suite drives that
-same committed entry point against a synthetic source with no network. Every terrain row in the
-plan's status table reads *yes*.
+T4.6's fixture track, simulated GPS and `/lab` route are **built** (`apps/demo/src/lab/`), and
+so is the zero-egress scenario's infrastructure — `render-differential.e2e.ts` already fails
+egress rather than counting it. What is outstanding in T4.6 is rendered-state evidence, the
+three-capture differential over the pause, and the frame-time/memory baseline.
 
-**Contours are at level 3 too.** The same command writes a second archive (MVT, gzipped,
-183,182 bytes, 8 tiles) alongside terrain, per ADR-0025. Levels are derived from the declared
-region's samples — 23 of them, 2,600 to 4,800 — while interpolation and tiling still read the
-wider envelope.
+So the *only* T4.6 item that overlaps T6.1 is the shared offline scenario — and that makes the
+ordering clearer, not weaker. T6.1's acceptance criterion is *"a downloaded region renders
+offline (network disabled)"*; T4.6's is a rendered trip over locally-held archives. **One
+scenario, not two.** `OfflineRegionStore` *is* "archive persisted locally", and the T4.6
+archives — `build/fixture/terrain.pmtiles` (raster-DEM) and `contours.pmtiles` (vector MVT), cut
+by `npm run fixture:build` — are exactly the DEM/vector stack T6.1's bar demands.
 
-**What remains are the acceptance criteria proper**, untouched: the fixture track, `/lab`,
-simulated GPS, the offline Playwright scenario and the frame-time baseline.
+Building T6.1 first means one scenario discharges both exits, over infrastructure that already
+exists. Building it second means writing that scenario against the archives directly and then
+rewriting it against the region store.
 
----
+### The bar that will be got wrong
+
+*"Proving bytes were copied locally, not range-requested"* is the middle claim of T6.1's AC, and
+**zero network requests is not evidence for it.** A service worker, an HTTP cache hit, or a
+`blob:` URL minted earlier all produce zero requests while proving nothing about the store. The
+claim is about *provenance* — which code path supplied the bytes — and it is split across the
+seam where each half is observable:
+
+- **Unit, at the protocol seam:** the store-backed handler MapLibre calls returns exactly the
+  bytes `put()` stored, keyed by what `download()` wrote. Byte identity is asserted here.
+- **Browser:** `page.route("**", abort)` installed *after* the app and archives have loaded,
+  region present → tiles render; region deleted, same abort → render fails. That second half is
+  the positive control, and without it the first proves only that something rendered.
+
+Install the abort route **after** load, or the app never boots and the failure looks like the
+test working.
 
 ## The five mistakes to not repeat
 
@@ -150,10 +168,15 @@ working from bypassed, and assert *that* — not the absence of an alarm.
 5. ~~**Produce an actual archive**~~ **Done.** `npm run fixture:build` cuts the terrain
    archive from the real release: 8 tiles, 1,493,696 bytes, reproducible byte for byte.
 6. ~~Measure archive size~~ **Done.** 1,493,696 bytes, measured (ADR-0024 criterion 6).
-7. The fixture track: ≥5k points, two-segment pause, two event marks.
-8. `/lab` route in `apps/demo`, plus simulated GPS.
-9. The offline Playwright scenario and the frame-time/memory baseline — these are the actual
-   acceptance criteria, and none has been touched.
+7. ~~The fixture track: ≥5k points, two-segment pause, two event marks.~~ **Done.**
+   `apps/demo/src/lab/fixture-track.ts`.
+8. ~~`/lab` route in `apps/demo`, plus simulated GPS.~~ **Done.** `apps/demo/src/lab/lab.ts` and
+   `simulated-geolocation.ts`; the route is driven by `render-differential.e2e.ts` and
+   `performance-baseline.e2e.ts`.
+9. **Outstanding, and these are the actual acceptance criteria:** rendered-state evidence, the
+   three-capture differential over the pause, and the frame-time/memory baseline. The offline
+   scenario's *infrastructure* is built — egress is failed rather than counted — and the
+   scenario itself is the one T6.1 shares, which is why T6.1 runs first.
 
 One qualification that a summary will round away if you let it: Bar 2 is discharged **on
 topology**. The synthetic run's ≤0.8% area agreement does *not* hold universally on real data —

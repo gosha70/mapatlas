@@ -65,6 +65,20 @@ export interface TileSource {
   tileSize?: number;
   /** `raster-dem` only. */
   encoding?: "mapbox" | "terrarium";
+  /**
+   * Whether this source's terms permit **bulk download for offline use** (ADR-0033).
+   *
+   * **Absence means refuse.** `architecture.md` §8 requires region download to run only against
+   * a self-hosted or *explicitly* offline-licensed source, and binds the demo and tests as well
+   * as production. A permissive default would make every un-annotated source — including a
+   * community host pasted into a demo — silently bulk-downloadable, and that failure is a policy
+   * violation against a third party rather than a bug that can be fixed afterwards. Refusing by
+   * default makes the annotation the deliberate act it should be.
+   *
+   * It says nothing about *rendering*: interactive browsing of a public host is a courtesy
+   * question, while bulk prefetching is a policy one. Only `OfflineRegionStore` reads this.
+   */
+  offlineLicensed?: boolean;
   /** Renderer style layers applied to this source, verbatim. Opaque to `core`. */
   styleLayers?: JSONValue[];
 }

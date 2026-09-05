@@ -157,6 +157,25 @@ test("the root control is laid out, not left to browser defaults", async ({ page
   expect(outline, "the focused button has no visible outline").not.toMatch(/none|0px/);
 });
 
+test("the installation guidance is on the root route, and offers nothing to click", async ({
+  page,
+}) => {
+  // Static text reaching a real page. The unit lane asserts what it claims; this asserts that a
+  // reader actually gets it, and that it stayed static — a button here would mean somebody
+  // reached for `beforeinstallprompt`, which is Chromium-only and absent on iOS.
+  await page.goto(DEMO, { waitUntil: "load" });
+
+  const guidance = page.locator("#install-guidance");
+  await expect(guidance).toBeVisible();
+  await expect(guidance.locator("ol > li")).toHaveCount(3);
+  await expect(guidance.locator("button")).toHaveCount(0);
+
+  // The order, at the page rather than in the data: install first, download last.
+  const steps = await guidance.locator("ol > li").allInnerTexts();
+  expect(steps[0]).toMatch(/install first/i);
+  expect(steps[steps.length - 1]).toMatch(/installed app/i);
+});
+
 test("the fixture route is untouched by the control", async ({ page }) => {
   // T6.1's evidence runs through `/lab`, and the control has nothing to do with it. The full
   // scenarios still guard that; this is the cheap direct check that the control did not leak
@@ -167,6 +186,7 @@ test("the fixture route is untouched by the control", async ({ page }) => {
   });
 
   await expect(page.locator("#persistence")).toHaveCount(0);
+  await expect(page.locator("#install-guidance")).toHaveCount(0);
   expect(await persistCalls(page), "/lab requested persistence").toBe(0);
 
   // And the root route's stylesheet cannot reach here: every rule it adds is scoped under this

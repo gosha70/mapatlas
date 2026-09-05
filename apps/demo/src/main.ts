@@ -30,6 +30,7 @@ import {
   readLabSources,
 } from "./lab/lab.js";
 import { readLabOffline, runLabOffline } from "./lab/offline-region.js";
+import { mountInstallGuidance } from "./install-guidance.js";
 import { mountPersistenceControl } from "./persistence.js";
 
 setWorkerUrl(maplibreWorkerUrl);
@@ -106,4 +107,7 @@ if (window.location.pathname === "/lab") {
   intro.innerHTML = 'MAP-ATLAS demo. Open <a href="/lab">/lab</a>.';
   app.append(intro);
   mountPersistenceControl(app);
+  // After the control, because the control is what a reader can act on now and the guidance is
+  // what they do next. Static text either way — nothing here detects or offers installation.
+  mountInstallGuidance(app);
 }

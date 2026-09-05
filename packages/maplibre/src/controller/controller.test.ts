@@ -135,7 +135,10 @@ interface Harness {
 function harness(preinstalled: PreinstalledStyleState = {}): Harness {
   let map: FakeMap | undefined;
   const addProtocol = vi.fn();
-  const createProtocol = vi.fn(() => ({ tile: () => undefined }));
+  // `add` as well as `tile`: the seam carries both since the protocol instance is retained and
+  // handed to offline archive registration (ADR-0036). A fake without it would let the offline
+  // path typecheck against something the real `Protocol` does differently.
+  const createProtocol = vi.fn(() => ({ tile: () => undefined, add: () => undefined }));
   const markers: FakeMarker[] = [];
   let releaseListeners: (() => void)[] = [];
   const environment: MapEnvironment = {

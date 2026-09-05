@@ -200,6 +200,10 @@ export function labTileSources(sources: LabSources): TileSource[] {
       kind: "raster-dem",
       transport: "pmtiles",
       url: sources.terrainUrl,
+      // True by construction: this archive is cut locally by `npm run fixture:build` from
+      // a source whose terms permit redistribution, so it is self-hosted in the sense §8
+      // means (ADR-0033). Absence would refuse it.
+      offlineLicensed: true,
       // Rendered verbatim, and required: the archive is a derived work of Copernicus DEM
       // GLO-30 Public, whose licence the build already checks into every archive.
       attribution:
@@ -243,6 +247,10 @@ export function labTileSources(sources: LabSources): TileSource[] {
       kind: "vector",
       transport: "pmtiles",
       url: sources.contourUrl,
+      // True by construction: this archive is cut locally by `npm run fixture:build` from
+      // a source whose terms permit redistribution, so it is self-hosted in the sense §8
+      // means (ADR-0033). Absence would refuse it.
+      offlineLicensed: true,
       attribution:
         "Contains modified Copernicus DEM GLO-30 Public data © DLR e.V. and Airbus DS GmbH",
       styleLayers: [

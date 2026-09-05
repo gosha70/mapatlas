@@ -964,3 +964,193 @@ the replay cursor constrains itself to the trip's own range, so the `undefined` 
 only through direct use of the projection, which is exactly the case that should not get a
 fabricated answer. Publishing the symbol means these seven rules are now contract, and a
 consumer's replay can agree with the engine's instead of approximating it.
+
+## ADR-0033 — `offlineLicensed` gates region download, and its absence refuses
+**Context.** `architecture.md` §8 requires `OfflineRegionStore.download()` to run only against a
+self-hosted or **explicitly** offline-licensed source, and binds the demo and tests as well as
+production — the OpenStreetMap Foundation's tile policy prohibits bulk prefetching from
+`tile.openstreetmap.org`, and other providers differ per named product. `TileSource` carried no
+way to express that, so the rule existed only in prose.
+**Decision.** `TileSource.offlineLicensed?: boolean`. `download()` and `estimateSize()` both
+refuse a region naming a source without `offlineLicensed: true`, throwing `OfflineLicenseError`
+— one check function reached from two callers, not two checks, because a UI that can quote a
+size for a region the store will then refuse has already misled its user.
+
+**Absence means refuse.** The alternative — permissive by default, refuse only when explicitly
+marked prohibited — was rejected. §8 says *explicitly* licensed, and a permissive default makes
+every un-annotated source silently bulk-downloadable, including a community host pasted into a
+demo. That failure mode is a policy violation against a third party rather than a bug that can
+be fixed afterwards, and it fails silently and in the wrong direction. Refusing by default costs
+one annotation per legitimate source and makes it a deliberate act.
+
+**A three-state enum was rejected**, and the reason is recorded so it is not re-proposed:
+`"self-hosted" | "licensed" | "prohibited"` is more expressive, but the store's behaviour turns
+on one bit — may these bytes be bulk-fetched — and whether a permitted source is self-hosted or
+third-party-licensed is the consumer's record-keeping. A third state invites a fourth, and every
+additional state is another branch the refusal path must be tested against.
+
+**Consequences.** The flag says nothing about *rendering*: interactive browsing of a public host
+is a courtesy question while bulk prefetching is a policy one, so a source may legitimately
+render without being downloadable. Eight files construct `TileSource` literals today and an
+optional field breaks none of them, but every one that is later handed to a region download must
+be annotated — including the demo's own archives, where the annotation is true by construction
+since they are self-built. A consumer who forgets gets a named error at download time rather
+than a silent violation.
+
+## ADR-0034 — For PMTiles, the archive is the unit a region downloads
+**Context.** `tasks.md` describes `download()` as "download bbox×zoom per `sourceIds`", and the
+§7 signature takes `bbox`/`minZoom`/`maxZoom`, which together invite reading it as *select the
+tiles covering this box and fetch those*. That reading is not the architecture's. §5 says a region
+is "a single file per region, read via HTTP range requests online and **cached whole** for
+offline"; ADR-0004 chose PMTiles as "single-file, range-request"; and ADR-0017 already warns that
+a region still needing a range request "can look downloaded and fail in the field".
+
+This ADR therefore **records an existing decision rather than making a new one** — the framing
+matters, because presenting it as a fresh choice would make it look reversible on cost grounds
+when in fact the range-selecting alternative is the deviation.
+
+**Decision.**
+1. **For `transport: "pmtiles"`, the archive is the unit.** `download()` fetches the whole
+   archive and copies it into `MapAssetStore`. `bbox`, `minZoom` and `maxZoom` are **descriptive**
+   of the region the archive represents, not a selector over it — the archive already bounds
+   itself, and the fixtures are cut to their region at build time.
+2. **`estimateSize()` returns the archive's byte size**, not a sub-region figure. That is the
+   cost of (1) and is stated rather than left to be discovered: asking for a corner of an existing
+   archive quotes the whole archive. It needs one network request; so does `download()`, so
+   nothing new is asked of the caller.
+3. **Non-`pmtiles` transports are refused with a named error, not skipped.** The package is
+   `@mapatlas/offline-pmtiles` and §5 scopes regions to PMTiles; enumerating a template, WMS or
+   TileJSON source is a different task with its own failure modes. Refusing rather than skipping
+   is the same shape as ADR-0033's absence-means-refuse, for the same reason — a silently omitted
+   source produces a region that *looks* downloaded and is not, which is precisely ADR-0017's
+   failure in the field.
+4. **The store owns a reserved key namespace** in `MapAssetStore` for region manifests, since that
+   seam offers only blob get/put/delete/list and a region's metadata has to live somewhere.
+   `MapAssetStore.clear()` therefore wipes manifests along with archives — correct under ADR-0016's
+   lifecycle isolation, where map bytes are replaceable and are meant to go together, and recorded
+   here so nobody "fixes" it into leaving orphaned manifests behind.
+
+**Consequences.** `sourceIds` defaults to "all base+overlay", which excludes the `terrain` and
+`hillshade` roles — so a region taking the default omits the DEM. In `apps/demo/src/lab/lab.ts`
+the terrain archive carries `role: "hillshade"` and the contour archive takes the default
+`"overlay"`, meaning a defaulted region there would carry contours and omit terrain: the exact
+thing T6.1's acceptance criterion is about. The default is left alone — changing it is a contract
+change with no criterion driving it — and callers that need terrain name their `sourceIds`
+explicitly. Recorded so Phase 7's demo does not rediscover it offline in the field.
+
+## ADR-0035 — A downloaded archive is served under its own url, not a local one
+**Context.** MapLibre reaches a PMTiles archive through the `pmtiles://` protocol handler
+(ADR-0004, `protocols/pmtiles.ts`), which resolves `pmtiles://<url>` by looking `<url>` up in a
+registry of `PMTiles` instances. Once T6.1 stores archive bytes locally, something has to make
+the renderer read those bytes instead of the network. Two shapes were available: rewrite the
+style's urls to point at local storage when a region exists, or leave the urls alone and change
+what the protocol resolves them *to*.
+
+**Decision.** Leave the urls alone. `@mapatlas/offline-pmtiles` exports
+`createStoredArchiveSource`, a PMTiles `Source` whose `getBytes` slices the stored `Blob` and
+whose `getKey()` returns the `TileSource.url` **unchanged**, and `installOfflineArchives`, which
+registers one such source per downloaded archive with the protocol.
+
+1. **The style is connectivity-independent.** The same `TileSource` list, the same style layers,
+   the same layer ids online and offline. Rewriting urls would give every style two forms, and
+   every filter, expression and `setSources` call built on those ids would have to keep both in
+   step — a class of bug that only appears offline, which is where it is hardest to see.
+2. **The archive key has one definition.** `installOfflineArchives` reads back through the same
+   `archiveKey(regionId, sourceId)` that `download()` wrote with. Two derivations would agree
+   until the day one of them moved.
+3. **A missing archive raises `MissingArchiveError` rather than returning zero bytes.** Map
+   assets are evictable (ADR-0016), so a manifest can outlive its bytes; empty bytes decode as
+   "this archive contains nothing here" and render as a blank map, which is ADR-0017's failure
+   wearing a success's clothes.
+4. **When two regions cover one source, the most recently downloaded registration wins.** The
+   protocol registry is keyed by url and the last registration replaces earlier ones, so
+   *something* decides; "whichever `list()` yielded last" is not a rule anyone can reason about
+   when one of the two copies turns out to be stale.
+
+**Consequences.** Byte provenance becomes assertable in the unit lane: the source's output is
+compared against what `MapAssetStore.put()` holds, with the stored blob deliberately overwritten
+so a reader that re-fetched its url would be caught. This matters because the browser lane cannot
+prove it — **zero network requests is not evidence of local bytes**, since a service worker, a
+warm HTTP cache or a `blob:` url minted earlier all produce zero requests. The browser scenario
+proves the *other* half, that a downloaded region renders with the network cut and a deleted one
+does not (T6.1 increment 4); neither half is the claim alone.
+
+**What "the network cut" means there, exactly.** The archive host, not everything: the demo's
+own origin still serves the application. The narrowing is forced by the control rather than
+chosen for convenience. The positive control needs a *fresh realm* — this ADR's own decision that
+registration is realm-scoped with no unregister means a re-mount in the same realm keeps the
+previous registration and its `PMTiles` promise cache, which can answer for bytes that have been
+deleted — and a fresh realm needs a navigation, which a blanket abort would kill along with the
+document. So the claim is stated as **map data offline**: no byte of either archive over the
+network, asserted per archive and split by request kind, since a range read is the renderer
+reading an archive and a plain GET is `download()` copying one, and only the latter is evidence
+of a copy. App-shell offline is T7.1's criterion.
+
+`installOfflineArchives` is called by the consumer, not by the store. That keeps
+`@mapatlas/offline-pmtiles` free of any dependency on the renderer package — it depends on
+`pmtiles` alone, which `architecture.md` §2 already permits — and `ArchiveRegistrar` is
+satisfied structurally by `pmtiles`'s own `Protocol`, which both packages can name because both
+depend on that package.
+
+**The registrar it needs is not reachable yet.** As of this ADR the renderer constructs the
+`Protocol` inside its environment (`controller/browser.ts`, `createProtocol()`), and
+`ensurePmtilesProtocol` (`protocols/pmtiles.ts`) passes only `protocol.tile` to `addProtocol`
+and retains no reference to the instance; nothing protocol-shaped leaves the `@mapatlas/maplibre`
+barrel. So the seam is complete and tested, and its only caller today is a test's fake. Making it
+reachable is **T6.1 increment 3b**: `ensurePmtilesProtocol` retains the instance, and the
+renderer's browser entry exports one function returning it. That is a public-interface change to
+the renderer, so it is its own increment with its own ADR rather than being smuggled in here.
+
+A consequence of the same code path constrains the calling order. Registration is **lazy** — the
+controller constructs a `Protocol` only when a source stack first needs one — so "before creating
+the map" names an instant at which no `Protocol` exists. The order that is true is: obtain the
+registrar from the renderer (which registers eagerly, 3b), then `installOfflineArchives`, then
+add the first `pmtiles` source. Archives registered after MapLibre has already requested a tile
+from that url do not retroactively serve it.
+
+## ADR-0036 — The renderer publishes its PMTiles protocol instance
+**Context.** ADR-0035 put a store-backed PMTiles `Source` behind the archive's own url and left
+`installOfflineArchives` taking a registrar — an object with `add(archive)`. Nothing could supply
+one. `@mapatlas/maplibre` constructed a `Protocol` inside its environment's `createProtocol()`,
+`ensurePmtilesProtocol` passed only `protocol.tile` to `addProtocol` and dropped the instance,
+and the barrel exported nothing protocol-shaped. Both packages' tests passed; the pair did not
+connect. The seam's only caller was a test's fake.
+
+**Decision.**
+1. **`ensurePmtilesProtocol` retains the protocol and returns it.** The retained instance *is*
+   the "already registered" state — the boolean beside it is gone. One fact with two homes is
+   free to disagree the first time either is written without the other, and this one had to
+   become an instance regardless.
+2. **`@mapatlas/maplibre`'s browser entry exports `pmtilesArchiveRegistrar()`**, which registers
+   **eagerly** against the real runtime and returns that instance. Eagerly, because the
+   controller's registration is lazy — it constructs a `Protocol` only when a source stack first
+   needs one — and an offline consumer calls this *before* adding any `pmtiles` source, at which
+   point a lazy path would have nothing to hand back.
+3. **Neither package depends on the other.** The return type is declared here as
+   `PmtilesArchiveRegistrar`, structurally identical to `@mapatlas/offline-pmtiles`'s
+   `ArchiveRegistrar`; both packages already depend on `pmtiles`, which is where the `PMTiles`
+   they exchange is defined. The type is **not** moved into `core` to "share" it — `core` must
+   not know `pmtiles` exists (`architecture.md` §9).
+
+**Why the instance, rather than `MapControllerOptions` taking archives.** A `MapController` is
+per map; the protocol is per **realm**. `addProtocol` installs on the MapLibre module instance,
+which is why registration is realm-scoped and why `destroy()` leaves it alone (a controller
+tearing it down would break every other map in the realm). Downloaded archives are realm-scoped
+for the same reason: two controllers over one archive must resolve the same bytes. A
+controller-scoped option would register them once per map, or tie the second map's archives to
+the first map's lifetime. Publishing the realm-scoped object keeps the ownership where the
+lifetime already is.
+
+**Consequences.** This widens `@mapatlas/maplibre`'s public surface by one function and one
+type; `index.test.ts` asserts that surface exactly, so the addition is deliberate and reviewed
+rather than incidental. `ensurePmtilesProtocol` itself stays unexported — registering a global
+handler remains a capability the controller owns, and what a consumer receives is the result,
+not the ability to register.
+
+The `ProtocolRegistrar` seam now requires `add` alongside `tile`, so a fake must supply both.
+That is the point: a fake that could not accept archives would let the offline path typecheck
+against something the real protocol does differently. Single-instancing the browser registrar is
+**readability only** — `ensurePmtilesProtocol` keys off its own retained instance, so a fresh
+literal per call registers exactly once too; recorded because a mutation of it survives, and a
+surviving mutation with no defect behind it should be documented rather than defended with a
+test that asserts an implementation detail.

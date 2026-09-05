@@ -1,0 +1,325 @@
+// SPDX-License-Identifier: Apache-2.0
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { createMemoryMapAssetStore } from "@mapatlas/core/testing";
+import type { MapAssetStore, TileSource } from "@mapatlas/core";
+
+import { OfflineLicenseError } from "./offline-license.js";
+import {
+  UnknownArchiveSizeError,
+  UnsupportedTransportError,
+  createPMTilesRegionStore,
+} from "./region-store.js";
+import type { RegionFetch } from "./region-store.js";
+
+const archive = (id: string, over: Partial<TileSource> = {}): TileSource =>
+  ({
+    id,
+    kind: "raster-dem",
+    transport: "pmtiles",
+    url: `https://self-hosted.invalid/${id}.pmtiles`,
+    attribution: "fixture",
+    offlineLicensed: true,
+    ...over,
+  }) satisfies TileSource;
+
+/** Records what was fetched, and answers with identifiable bytes per url. */
+function fetcher(): RegionFetch & { fetched: string[]; sized: string[] } {
+  const fetched: string[] = [];
+  const sized: string[] = [];
+  return {
+    fetched,
+    sized,
+    bytes: (url) => {
+      fetched.push(url);
+      return Promise.resolve(new Blob([`bytes-of:${url}`]));
+    },
+    size: (url) => {
+      sized.push(url);
+      return Promise.resolve(url.length);
+    },
+  };
+}
+
+const REGION = {
+  name: "test region",
+  bbox: [10, 50, 11, 51] as [number, number, number, number],
+  minZoom: 8,
+  maxZoom: 12,
+};
+
+const build = (
+  sources: TileSource[],
+): {
+  store: ReturnType<typeof createPMTilesRegionStore>;
+  assets: MapAssetStore;
+  net: ReturnType<typeof fetcher>;
+} => {
+  const assets = createMemoryMapAssetStore();
+  const net = fetcher();
+  return { store: createPMTilesRegionStore({ sources, assets, fetcher: net }), assets, net };
+};
+
+describe("createPMTilesRegionStore (ADR-0034)", () => {
+  it("copies the whole archive into the asset store", async () => {
+    // §5's "cached whole for offline": the archive is the unit, and bbox/zoom describe the
+    // region rather than selecting within it. A range-served region can look downloaded and
+    // fail in the field (ADR-0017), which is what copying the bytes avoids.
+    const { store, assets, net } = build([archive("terrain")]);
+    const region = await store.download({ ...REGION, sourceIds: ["terrain"] });
+
+    expect(net.fetched, "the archive itself, once").toEqual([
+      "https://self-hosted.invalid/terrain.pmtiles",
+    ]);
+    const keys = await assets.list();
+    const stored = keys.filter((key) => key.includes("/archive/"));
+    expect(stored, "one archive blob, keyed by region and source").toHaveLength(1);
+    expect(stored[0]).toContain(region.id);
+    expect(stored[0]).toContain("terrain");
+  });
+
+  it("returns a region carrying its own id, size and timestamp", async () => {
+    const { store } = build([archive("terrain")]);
+    const before = Date.now();
+    const region = await store.download({ ...REGION, sourceIds: ["terrain"] });
+    expect(region.id, "minted, not the caller's").toEqual(expect.any(String));
+    expect(region.sizeBytes, "the bytes actually stored").toBeGreaterThan(0);
+    expect(region.downloadedAt ?? 0).toBeGreaterThanOrEqual(before);
+    expect(region.name).toBe(REGION.name);
+  });
+
+  it("lists what it downloaded, and forgets it on delete", async () => {
+    const { store, assets } = build([archive("a"), archive("b")]);
+    const one = await store.download({ ...REGION, sourceIds: ["a"] });
+    await store.download({ ...REGION, sourceIds: ["b"] });
+    expect(await store.list()).toHaveLength(2);
+
+    await store.delete(one.id);
+    const left = await store.list();
+    expect(left, "the other region survives").toHaveLength(1);
+    expect(left[0]?.id).not.toBe(one.id);
+    const orphans = (await assets.list()).filter((key) => key.includes(one.id));
+    expect(orphans, "delete must take the region's archives with it").toEqual([]);
+  });
+
+  it("keeps the region reachable when a delete fails part-way", async () => {
+    // Which order `delete` uses is only observable on a partial failure, and this is that case.
+    // Archives first means a failure leaves the manifest: the region is still in `list()`, the
+    // caller still has the id, and `delete(id)` can simply be called again. Manifest first
+    // strands the archives under a name nothing holds — invisible to `list()`, unreachable by
+    // `delete`, reclaimable only by `clear()`. Mutation: swap the two lines and this goes red.
+    const assets = createMemoryMapAssetStore();
+    const store = createPMTilesRegionStore({
+      sources: [archive("a")],
+      assets,
+      fetcher: fetcher(),
+    });
+    const region = await store.download({ ...REGION, sourceIds: ["a"] });
+
+    const remove = assets.delete.bind(assets);
+    assets.delete = (key) => {
+      if (key.includes("/archive/")) throw new Error("delete failed");
+      return remove(key);
+    };
+    await expect(store.delete(region.id)).rejects.toThrow("delete failed");
+    assets.delete = remove;
+
+    const left = await store.list();
+    expect(
+      left.map((each) => each.id),
+      "the region survives, so it can be deleted again",
+    ).toEqual([region.id]);
+    await store.delete(region.id);
+    expect(await assets.list(), "and the retry completes").toEqual([]);
+  });
+
+  it("estimates from the archive's size, and says so by asking for it", async () => {
+    const { store, net } = build([archive("terrain")]);
+    const size = await store.estimateSize({ ...REGION, sourceIds: ["terrain"] });
+    expect(net.sized).toEqual(["https://self-hosted.invalid/terrain.pmtiles"]);
+    expect(size).toBeGreaterThan(0);
+    expect(net.fetched, "estimating must not download").toEqual([]);
+  });
+
+  it("refuses an unlicensed source from download AND from estimateSize", async () => {
+    // One check, two callers (ADR-0033): a UI able to quote a size for a region the store will
+    // then refuse has already misled its user.
+    const { store, net } = build([archive("unlicensed", { offlineLicensed: false })]);
+    await expect(store.download({ ...REGION, sourceIds: ["unlicensed"] })).rejects.toThrow(
+      OfflineLicenseError,
+    );
+    await expect(store.estimateSize({ ...REGION, sourceIds: ["unlicensed"] })).rejects.toThrow(
+      OfflineLicenseError,
+    );
+    expect(net.fetched, "nothing may be fetched from a refused source").toEqual([]);
+    expect(net.sized).toEqual([]);
+  });
+
+  it("refuses a non-pmtiles transport rather than skipping it", async () => {
+    // Skipping would produce a region that looks downloaded and is not — ADR-0017's failure.
+    const { store, net } = build([
+      archive("ok"),
+      archive("raster", { transport: "template", url: "https://x.invalid/{z}/{x}/{y}.png" }),
+    ]);
+    await expect(store.download({ ...REGION, sourceIds: ["ok", "raster"] })).rejects.toThrow(
+      UnsupportedTransportError,
+    );
+    expect(net.fetched, "the refusal must precede any fetching").toEqual([]);
+    await expect(store.estimateSize({ ...REGION, sourceIds: ["ok", "raster"] })).rejects.toThrow(
+      UnsupportedTransportError,
+    );
+  });
+
+  it("defaults sourceIds to base and overlay only, which omits terrain", async () => {
+    // Recorded rather than fixed (ADR-0034): the default has no criterion driving a change, but
+    // a defaulted region omits the DEM — the exact thing T6.1's acceptance criterion is about.
+    const { store, net } = build([
+      archive("contours", { role: "overlay" }),
+      archive("terrain", { role: "hillshade" }),
+    ]);
+    await store.download(REGION);
+    expect(net.fetched.map((url) => url.split("/").pop())).toEqual(["contours.pmtiles"]);
+  });
+
+  it("reports progress once per source, ending at one", async () => {
+    const seen: number[] = [];
+    const { store } = build([archive("a"), archive("b")]);
+    await store.download({ ...REGION, sourceIds: ["a", "b"] }, (fraction) => {
+      seen.push(fraction);
+    });
+    expect(seen).toEqual([0.5, 1]);
+  });
+
+  it("keeps its manifests under its own prefix, which clear() takes with it", async () => {
+    const { store, assets } = build([archive("a")]);
+    await store.download({ ...REGION, sourceIds: ["a"] });
+    expect((await assets.list()).every((key) => key.startsWith("mapatlas/"))).toBe(true);
+
+    await assets.clear();
+    expect(await store.list(), "clear() wipes map bytes together (ADR-0016)").toEqual([]);
+  });
+
+  it("leaves nothing behind when a download fails part-way", async () => {
+    // The caller never received an id, so nothing short of `clear()` could reclaim what a
+    // half-finished attempt wrote — quota consumed invisibly, on a device in the field.
+    // Mutation: drop the rollback and the orphan below survives.
+    const assets = createMemoryMapAssetStore();
+    const net = fetcher();
+    const bytes = net.bytes.bind(net);
+    // What the store held at the moment the second source failed. Without this the test cannot
+    // tell "the rollback removed the orphan" from "there was never an orphan to remove".
+    let heldAtFailure: string[] = [];
+    net.bytes = async (url) => {
+      if (!url.endsWith("b.pmtiles")) return bytes(url);
+      heldAtFailure = await assets.list();
+      throw new Error("connection lost");
+    };
+    const store = createPMTilesRegionStore({
+      sources: [archive("a"), archive("b")],
+      assets,
+      fetcher: net,
+    });
+
+    await expect(store.download({ ...REGION, sourceIds: ["a", "b"] })).rejects.toThrow(
+      "connection lost",
+    );
+    expect(heldAtFailure, "the first source really had been stored").toHaveLength(1);
+    expect(await assets.list(), "and the failure took it back").toEqual([]);
+  });
+
+  it("leaves nothing behind when the manifest write is what fails", async () => {
+    // The archives are all on disk by this point, so this is the most expensive failure in the
+    // method: without the rollback they are named by nothing — invisible to `list()`,
+    // unreachable by `delete()` because the caller never received the id, and reclaimable only
+    // by `clear()`. Mutation: move the manifest write back outside the try and this goes red.
+    const assets = createMemoryMapAssetStore();
+    const put = assets.put.bind(assets);
+    assets.put = (key, data) => {
+      if (key.includes("/region/")) throw new Error("quota exceeded");
+      return put(key, data);
+    };
+    const store = createPMTilesRegionStore({
+      sources: [archive("a"), archive("b")],
+      assets,
+      fetcher: fetcher(),
+    });
+
+    await expect(store.download({ ...REGION, sourceIds: ["a", "b"] })).rejects.toThrow(
+      "quota exceeded",
+    );
+    assets.put = put;
+    expect(await assets.list(), "both archives go back, not just the last one").toEqual([]);
+  });
+
+  it("records the resolved sourceIds, not the caller's absent ones", async () => {
+    // A manifest that says `undefined` cannot say what bytes it holds, and starts
+    // misrepresenting them the moment `sources` or the default changes.
+    const { store } = build([archive("contours"), archive("terrain", { role: "hillshade" })]);
+    const region = await store.download(REGION);
+    expect(region.sourceIds, "what was downloaded, named").toEqual(["contours"]);
+    expect((await store.list())[0]?.sourceIds, "and persisted that way").toEqual(["contours"]);
+  });
+
+  it("refuses a sourceId it was never given, from both entry points", async () => {
+    // This refusal is what keeps `resolve`'s undefined-source branch unreachable: the licence
+    // check and the lookup search the same array, so a resolved id is always found. The branch
+    // throws rather than skipping so that loosening this refusal surfaces as a crash instead of
+    // as the silent omission ADR-0034 item 3 refuses — and this test is what goes red first.
+    const { store } = build([archive("known")]);
+    await expect(store.download({ ...REGION, sourceIds: ["absent"] })).rejects.toThrow(
+      OfflineLicenseError,
+    );
+    await expect(store.estimateSize({ ...REGION, sourceIds: ["absent"] })).rejects.toThrow(
+      OfflineLicenseError,
+    );
+  });
+});
+
+describe("the default fetcher (no `fetcher` injected)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const stubFetch = (impl: (url: string, init?: { method?: string }) => Response): void => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: { method?: string }) => Promise.resolve(impl(url, init))),
+    );
+  };
+
+  const store = (): ReturnType<typeof createPMTilesRegionStore> =>
+    createPMTilesRegionStore({
+      sources: [archive("terrain")],
+      assets: createMemoryMapAssetStore(),
+    });
+
+  it("downloads through the platform fetch when none is injected", async () => {
+    stubFetch(() => new Response("archive-bytes"));
+    const region = await store().download({ ...REGION, sourceIds: ["terrain"] });
+    expect(region.sizeBytes).toBe("archive-bytes".length);
+  });
+
+  it("refuses to quote a size the server did not report", async () => {
+    // A HEAD with no Content-Length — routine behind a CDN, and on a compressed response.
+    // Quoting 0 would tell the user a 1.5 MB download is free. Mutation: return 0 for a null
+    // header and this test goes red.
+    stubFetch(() => new Response(null, { headers: {} }));
+    await expect(store().estimateSize({ ...REGION, sourceIds: ["terrain"] })).rejects.toThrow(
+      UnknownArchiveSizeError,
+    );
+  });
+
+  it("quotes the size the server did report", async () => {
+    stubFetch(() => new Response(null, { headers: { "content-length": "1500000" } }));
+    expect(await store().estimateSize({ ...REGION, sourceIds: ["terrain"] })).toBe(1500000);
+  });
+
+  it("fails loudly on a non-ok response, rather than storing the error page", async () => {
+    stubFetch(() => new Response("<html>404</html>", { status: 404 }));
+    await expect(store().download({ ...REGION, sourceIds: ["terrain"] })).rejects.toThrow("404");
+    await expect(store().estimateSize({ ...REGION, sourceIds: ["terrain"] })).rejects.toThrow(
+      "404",
+    );
+  });
+});

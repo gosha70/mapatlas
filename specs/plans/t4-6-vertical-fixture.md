@@ -23,9 +23,12 @@ ADR-0025 requires: terrain (PNG, uncompressed, 1,493,696 bytes) and contours (MV
 region's own samples — 23 of them, 2,600 to 4,800 — while the wider envelope is still what the
 interpolation and tiling read.
 
-**What remains are the acceptance criteria proper**, and none has been touched: the fixture track
-(≥5k points, two-segment pause, two event marks), the `/lab` route, simulated GPS, the offline
-Playwright scenario, and the frame-time and memory baseline.
+**What remains are the acceptance criteria proper.** This paragraph once said none of them had
+been touched, which stopped being true and then stayed on the page — it contradicted the status
+table below, which had it right. The fixture track (≥5k points, two-segment pause, two event
+marks), simulated GPS and the `/lab` route are **built**, and the zero-egress scenario's
+infrastructure with them. Outstanding: **rendered-state evidence**, the three-capture
+differential over the pause, and the frame-time and memory baseline.
 
 | | unit-tested | wired into `build.mjs` | discharged end-to-end | notes |
 | --- | --- | --- | --- | --- |

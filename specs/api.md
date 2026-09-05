@@ -837,9 +837,11 @@ export declare function createStoredArchiveSource(o: {
   assets: MapAssetStore; key: string; url: string;
 }): Source;
 
-/** Thrown when the manifest still names an archive whose bytes are gone — evicted (ADR-0016) or
- *  deleted. Raised rather than answered with zero bytes: empty bytes decode as "nothing here"
- *  and render as a blank map, which is a failure wearing a success's clothes. */
+/** Thrown when the manifest still names an archive whose bytes are gone — a partial `delete()`,
+ *  corruption, or storage changed from outside the store. **Not browser eviction**, which takes
+ *  an origin's data together and would remove the manifest too (ADR-0016). Raised rather than
+ *  answered with zero bytes: empty bytes decode as "nothing here" and render as a blank map,
+ *  which is a failure wearing a success's clothes. */
 export declare class MissingArchiveError extends Error {
   readonly key: string;
 }

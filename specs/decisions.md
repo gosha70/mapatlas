@@ -195,10 +195,19 @@ photos that cannot be re-fetched from anywhere.
 instead of a `StorageAdapter`. `@mapatlas/storage-idb` ships `createIdbMapAssetStore()` backed by
 a **separate IndexedDB database**. `StorageAdapter.clearAll()` must not touch map assets, and
 `MapAssetStore.clear()` must not touch tracks or events.
-**Consequences.** Signing out no longer forces a multi-hundred-megabyte re-download. Map assets
-can be evicted first under pressure, which is the correct priority — they are re-downloadable and
-trips are not. Browsers still evict per origin, so this separates *intent and blast radius*, not
-physical quota; consumers must still drive `navigator.storage.persist()`.
+**Consequences.** Signing out no longer forces a multi-hundred-megabyte re-download, and a
+consumer freeing space can wipe the replaceable half **deliberately** — `MapAssetStore.clear()`
+takes the basemaps and leaves the trips.
+
+*Corrected 2026-09-05:* this paragraph previously said map assets "can be evicted first under
+pressure, which is the correct priority", one sentence before saying browsers evict per origin.
+Both cannot be true, and the second is the true one. **Automatic eviction takes an origin's data
+together** — IndexedDB, Cache API, all of it — so the browser will not spare a user's trips by
+taking the basemaps first, and cannot leave a region manifest behind while removing its archive.
+Separating the stores buys *intent and blast radius*, never physical quota. The priority this
+ADR encodes is one a **consumer** can act on; it is not one the browser observes. Consumers must
+still drive `navigator.storage.persist()`, which is the only thing that excludes an origin from
+automatic eviction.
 
 ## ADR-0017 — Offline means local bytes, and not every source may be downloaded
 **Context.** Two failure modes sat one step apart in the plan. First, "PMTiles offline regions"
@@ -1058,10 +1067,12 @@ registers one such source per downloaded archive with the protocol.
 2. **The archive key has one definition.** `installOfflineArchives` reads back through the same
    `archiveKey(regionId, sourceId)` that `download()` wrote with. Two derivations would agree
    until the day one of them moved.
-3. **A missing archive raises `MissingArchiveError` rather than returning zero bytes.** Map
-   assets are evictable (ADR-0016), so a manifest can outlive its bytes; empty bytes decode as
-   "this archive contains nothing here" and render as a blank map, which is ADR-0017's failure
-   wearing a success's clothes.
+3. **A missing archive raises `MissingArchiveError` rather than returning zero bytes.** A
+   manifest can outlive its bytes — through a partial `delete()`, corruption, a consumer deleting
+   a known archive key, or storage manipulated from outside the store. *Not through browser eviction:*
+   that takes the origin's data together and would remove the manifest too (ADR-0016, corrected).
+   Empty bytes decode as "this archive contains nothing here" and render as a blank map, which is
+   ADR-0017's failure wearing a success's clothes.
 4. **When two regions cover one source, the most recently downloaded registration wins.** The
    protocol registry is keyed by url and the last registration replaces earlier ones, so
    *something* decides; "whichever `list()` yielded last" is not a rule anyone can reason about

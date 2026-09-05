@@ -124,7 +124,9 @@ describe("createStoredArchiveSource", () => {
   });
 
   it("fails loudly when the archive is gone, rather than answering with no bytes", async () => {
-    // Reachable: map assets are evictable (ADR-0016), so a manifest can outlive its bytes.
+    // Reachable: a part-way `delete()`, corruption, or a consumer deleting a known archive key
+    // all leave a manifest outliving its bytes. Not browser eviction — that takes the origin's
+    // data together and would remove the manifest too (ADR-0016, corrected).
     // Empty bytes would decode as "the archive has nothing here" and render as blank map.
     const assets = createMemoryMapAssetStore();
     const source = createStoredArchiveSource({
@@ -133,6 +135,35 @@ describe("createStoredArchiveSource", () => {
       url: "https://self-hosted.invalid/terrain.pmtiles",
     });
     await expect(source.getBytes(0, 16)).rejects.toThrow(MissingArchiveError);
+  });
+
+  it("names a reachable cause and excludes browser eviction", async () => {
+    // The message is runtime behaviour a consumer reads, and half of it was wrong: it said the
+    // bytes had been "evicted or deleted". Deletion is real. Eviction is not — automatic eviction
+    // removes an origin's data *together*, so it would have taken the manifest too and this error
+    // would never have been reached. One of its two causes could not produce the state it was
+    // explaining (ADR-0016, corrected).
+    //
+    // Pinned by a test because a corrected string with nothing asserting it is a string the next
+    // session restores in good faith.
+    const assets = createMemoryMapAssetStore();
+    const source = createStoredArchiveSource({
+      assets,
+      key: "mapatlas/archive/r1/terrain",
+      url: "https://self-hosted.invalid/terrain.pmtiles",
+    });
+
+    const error = await source.getBytes(0, 16).then(
+      () => expect.unreachable("a missing archive did not throw"),
+      (thrown: unknown) => thrown as Error,
+    );
+
+    expect(error.message, "the key is what a consumer needs to act").toContain(
+      "mapatlas/archive/r1/terrain",
+    );
+    expect(error.message, "a reachable cause").toMatch(/deleted|corrupted/);
+    expect(error.message, "and the remedy").toContain("re-download");
+    expect(error.message, "eviction is not a cause of this state").not.toMatch(/evict/i);
   });
 });
 

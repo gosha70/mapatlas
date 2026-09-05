@@ -181,10 +181,18 @@ The control takes a **narrow internal dependency** for its storage calls — the
 uses, `persisted()` and `persist()` — defaulting to `navigator.storage`. Internal to the demo,
 **not** a published engine interface.
 
-This is what makes the five branches deterministic. A real browser produces exactly one outcome
-per run and never the unsupported or error branches at all, so without a seam four of the five
-would be unexercised code rendering whatever it happens to render. Stubbing `navigator.storage`
-globally would work too, and is worse: it mutates a global the rest of the page shares.
+This is what makes the branches deterministic. Any one run reaches one outcome, and the profile
+the browser lane runs on supports the API and does not reject — so `unsupported` and `error` are
+never exercised naturally *here*. They are real states that real browsers produce; the point is
+that nothing in this repo's lanes produces them on demand, so without a seam they would be
+unexercised code rendering whatever it happens to render. Stubbing `navigator.storage` globally
+would work too, and is worse: it mutates a global the rest of the page shares.
+
+**The seam's "absent" value is `null`, not `undefined`.** A default parameter is applied when a
+caller passes `undefined` explicitly, so injecting `undefined` injects nothing — it falls
+through to the ambient `navigator` and the test then passes or fails on whatever the environment
+happens to support, which is not a test of this code at all. The unsupported test proves the
+difference by putting a *working* API on `navigator` and still asserting `unsupported`.
 
 ## Increment 2 — installation guidance
 

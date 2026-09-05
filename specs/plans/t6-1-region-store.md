@@ -5,14 +5,18 @@
 > double, and `packages/offline-pmtiles` a 17-line stub. One thing the contract could not
 > express: whether a source's terms permit bulk download at all.
 
-## Why this runs ahead of T4.6's remainder
+## What this reuses from T4.6 — infrastructure, not an exit
 
-T4.6's fixture track, simulated GPS and `/lab` route are built, and so is the zero-egress
-scenario's infrastructure. What is left there is rendered-state evidence, the three-capture
-differential over the pause, and the frame-time/memory baseline — plus the offline scenario,
-which is **the same scenario T6.1 needs**. `OfflineRegionStore` *is* "archive persisted
-locally", and the T4.6 archives are exactly the DEM/vector stack T6.1's bar demands. One
-scenario discharges both exits; the other order writes it twice.
+> **Corrected 2026-09-05.** This section claimed T4.6 had outstanding acceptance criteria and
+> that T6.1's offline scenario would discharge one of them. Both were wrong: `tasks.md` marks
+> T4.6 **Done** (2026-09-01, PR #9 and #10) and names what discharges each criterion. The
+> ordering rationale below survives the correction; the double-exit claim does not.
+
+T4.6 left behind the `/lab` route, the fixture track and simulated GPS, the egress-failing
+browser harness, and two archives cut by `npm run fixture:build` — `terrain.pmtiles` (raster-DEM)
+and `contours.pmtiles` (vector MVT), which are exactly the DEM/vector stack T6.1's bar demands.
+Building T6.1 over that costs one scenario instead of a scenario plus a fixture pipeline.
+**Increment 4 closes T6.1 only.**
 
 ## Settled calls
 
@@ -34,12 +38,21 @@ and it splits across the seam where each half is observable:
   bytes `put()` stored, keyed by what `download()` wrote. Byte identity is asserted here, against
   `createMemoryMapAssetStore`. Byte identity cannot be observed inside the browser without
   reaching into MapLibre's internals, and trying is where a week goes.
-- **Browser.** `page.route("**", abort)` installed *after* the app and archives have loaded:
-  region present → tiles render; region deleted, same abort → render fails. The second half is
-  the positive control, and without it the first proves only that something rendered.
+- **Browser.** The **archive host** cut, *after* the app and the archives have loaded: region
+  present → tiles render; region deleted, same cut → render fails. The second half is the
+  positive control, and without it the first proves only that something rendered.
 
-Neither half alone is the claim. **Install the abort route after load**, or the app never boots
-and the failure looks like the test working.
+Neither half alone is the claim. **Cut the network after load**, or the app never boots and the
+failure looks like the test working.
+
+> **Narrowed during increment 4, and recorded rather than quietly done.** This said
+> `page.route("**", abort)`. A blanket abort cannot coexist with the positive control: that
+> control needs a *fresh realm* — the protocol is realm-scoped with no unregister and a
+> `PMTiles` instance carries its own promise cache, so a re-mount in the same realm answers from
+> the old registration — and a fresh realm needs a navigation, which a blanket abort kills along
+> with the document. So the claim is **map data offline**: no byte of either archive over the
+> network, asserted per archive and split by request kind, with the app's own origin still
+> served. App-shell offline is T7.1's. See ADR-0035 and T6.1 in `tasks.md`.
 
 ## Scope fence
 
@@ -54,7 +67,7 @@ render. **Eviction, quota, resume and `persist()` are T6.2 / Phase 7** and do no
 2. **The store.** `createPMTilesRegionStore` over `MapAssetStore`: the four methods, keys derived
    from region and source, the refusal wired to both entry points.
 3. **The protocol seam.** The handler MapLibre reads through, with the byte-identity assertion.
-4. **Offline render.** The browser scenario and its positive control, discharging both exits.
+4. **Offline render.** The browser scenario and its positive control, discharging T6.1's exit.
 
 ## Required mutations
 
@@ -65,5 +78,9 @@ render. **Eviction, quota, resume and `persist()` are T6.2 / Phase 7** and do no
   fails;
 - `delete` leaves the assets behind → the positive control stops failing, which is itself the
   tell that the control has stopped controlling;
-- the abort route installed before load → the scenario passes for the wrong reason and must be
-  caught by the control rendering, not by the abort.
+- the network cut before load → the scenario passes for the wrong reason, and must be caught by
+  `/lab` reporting a failed step rather than by a wait timing out;
+- `download()` range-requesting the archive instead of copying it whole → the "copied locally,
+  not range-requested" bar fails. Requests are therefore counted **per archive and split by
+  request kind**: a range read is the renderer reading an archive, a plain GET is `download()`
+  copying one, and only the second is evidence of a copy.

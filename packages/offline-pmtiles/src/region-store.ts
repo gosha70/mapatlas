@@ -162,6 +162,7 @@ export function createPMTilesRegionStore(options: {
       const resolved = resolve(region.sourceIds);
       const id = newId();
       let sizeBytes = 0;
+      let stored: OfflineRegion;
       try {
         for (const [index, source] of resolved.entries()) {
           // The whole archive, not a tile selection: §5's "cached whole for offline" (ADR-0034).
@@ -170,6 +171,25 @@ export function createPMTilesRegionStore(options: {
           sizeBytes += blob.size;
           onProgress?.((index + 1) / resolved.length);
         }
+        stored = {
+          ...region,
+          id,
+          // The **resolved** ids, not the caller's. Persisting `undefined` when the default was
+          // taken leaves a manifest that cannot say what it holds, and misrepresents the bytes
+          // outright if `sources` or the default later changes.
+          sourceIds: resolved.map((source) => source.id),
+          sizeBytes,
+          downloadedAt: Date.now(),
+        };
+        // Inside the rollback, not after it. The manifest write is the last thing that can fail
+        // and the most expensive one to get wrong: every archive is already on disk, and if this
+        // throws they are named by nothing. `list()` cannot see them, `delete()` needs an id the
+        // caller never received, and the bytes sit there until `clear()` — which is the whole
+        // download's worth of quota, not one source's.
+        await assets.put(
+          manifestKey(id),
+          new Blob([JSON.stringify(stored)], { type: "application/json" }),
+        );
       } catch (failure) {
         // Everything this attempt wrote goes back. Without this a second source failing on a
         // flaky connection strands the first under an id the caller never received, so nothing
@@ -178,20 +198,6 @@ export function createPMTilesRegionStore(options: {
         await removeArchives(id);
         throw failure;
       }
-      const stored: OfflineRegion = {
-        ...region,
-        id,
-        // The **resolved** ids, not the caller's. Persisting `undefined` when the default was
-        // taken leaves a manifest that cannot say what it holds, and misrepresents the bytes
-        // outright if `sources` or the default later changes.
-        sourceIds: resolved.map((source) => source.id),
-        sizeBytes,
-        downloadedAt: Date.now(),
-      };
-      await assets.put(
-        manifestKey(id),
-        new Blob([JSON.stringify(stored)], { type: "application/json" }),
-      );
       return stored;
     },
 
@@ -206,8 +212,16 @@ export function createPMTilesRegionStore(options: {
     },
 
     async delete(id) {
-      // Archives first, then the manifest — a failure part-way leaves a region whose manifest
-      // still names assets that exist, rather than a manifest pointing at nothing.
+      // Archives first, then the manifest, and the earlier comment here had the consequence
+      // backwards: a failure part-way through leaves a manifest naming archives that are
+      // **already gone**, not one whose assets still exist.
+      //
+      // That is the recoverable half of the choice, which is why the order is this way round.
+      // A surviving manifest is visible to `list()`, `delete(id)` can be called again with the
+      // id the caller already has, and a read of a missing archive fails loudly with
+      // `MissingArchiveError` rather than rendering blank (ADR-0035). The other order strands
+      // archives no manifest names: invisible to `list()`, unreachable by `delete`, and
+      // reclaimable only by `clear()`.
       await removeArchives(id);
       await assets.delete(manifestKey(id));
     },

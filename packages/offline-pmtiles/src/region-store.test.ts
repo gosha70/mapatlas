@@ -103,6 +103,37 @@ describe("createPMTilesRegionStore (ADR-0034)", () => {
     expect(orphans, "delete must take the region's archives with it").toEqual([]);
   });
 
+  it("keeps the region reachable when a delete fails part-way", async () => {
+    // Which order `delete` uses is only observable on a partial failure, and this is that case.
+    // Archives first means a failure leaves the manifest: the region is still in `list()`, the
+    // caller still has the id, and `delete(id)` can simply be called again. Manifest first
+    // strands the archives under a name nothing holds — invisible to `list()`, unreachable by
+    // `delete`, reclaimable only by `clear()`. Mutation: swap the two lines and this goes red.
+    const assets = createMemoryMapAssetStore();
+    const store = createPMTilesRegionStore({
+      sources: [archive("a")],
+      assets,
+      fetcher: fetcher(),
+    });
+    const region = await store.download({ ...REGION, sourceIds: ["a"] });
+
+    const remove = assets.delete.bind(assets);
+    assets.delete = (key) => {
+      if (key.includes("/archive/")) throw new Error("delete failed");
+      return remove(key);
+    };
+    await expect(store.delete(region.id)).rejects.toThrow("delete failed");
+    assets.delete = remove;
+
+    const left = await store.list();
+    expect(
+      left.map((each) => each.id),
+      "the region survives, so it can be deleted again",
+    ).toEqual([region.id]);
+    await store.delete(region.id);
+    expect(await assets.list(), "and the retry completes").toEqual([]);
+  });
+
   it("estimates from the archive's size, and says so by asking for it", async () => {
     const { store, net } = build([archive("terrain")]);
     const size = await store.estimateSize({ ...REGION, sourceIds: ["terrain"] });
@@ -195,6 +226,30 @@ describe("createPMTilesRegionStore (ADR-0034)", () => {
     );
     expect(heldAtFailure, "the first source really had been stored").toHaveLength(1);
     expect(await assets.list(), "and the failure took it back").toEqual([]);
+  });
+
+  it("leaves nothing behind when the manifest write is what fails", async () => {
+    // The archives are all on disk by this point, so this is the most expensive failure in the
+    // method: without the rollback they are named by nothing — invisible to `list()`,
+    // unreachable by `delete()` because the caller never received the id, and reclaimable only
+    // by `clear()`. Mutation: move the manifest write back outside the try and this goes red.
+    const assets = createMemoryMapAssetStore();
+    const put = assets.put.bind(assets);
+    assets.put = (key, data) => {
+      if (key.includes("/region/")) throw new Error("quota exceeded");
+      return put(key, data);
+    };
+    const store = createPMTilesRegionStore({
+      sources: [archive("a"), archive("b")],
+      assets,
+      fetcher: fetcher(),
+    });
+
+    await expect(store.download({ ...REGION, sourceIds: ["a", "b"] })).rejects.toThrow(
+      "quota exceeded",
+    );
+    assets.put = put;
+    expect(await assets.list(), "both archives go back, not just the last one").toEqual([]);
   });
 
   it("records the resolved sourceIds, not the caller's absent ones", async () => {

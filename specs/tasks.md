@@ -1052,6 +1052,21 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   vector/DEM source in the stack — proving bytes were **copied locally**, not range-requested;
   `download()` refuses a source flagged as not offline-licensed, and no test or demo fixture
   points `download()` at a community tile service (`architecture.md §8`).
+
+  **"Offline" here means *map data* offline, and the scope is deliberate.** The browser scenario
+  cuts the archive host — one server, both archives — and leaves the application's own origin
+  reachable, so the page still loads its HTML, JavaScript and stylesheet. Two reasons, and the
+  second is the load-bearing one.
+  A blanket abort cannot survive the reload the positive control needs — the document would be
+  aborted too, the app would never boot, and the failure would look exactly like the test
+  working. And the PMTiles protocol is realm-scoped with no unregister (ADR-0036), while a
+  `PMTiles` instance carries its own promise cache, so re-mounting a map in the *same* realm
+  after deleting the region would leave the first render's registration standing with a warm
+  cache able to answer — a control that passes while proving nothing.
+
+  So what T6.1 discharges is: **no byte of either archive may come over the network**, asserted
+  per archive and per request kind. Serving the app shell itself offline is **T7.1's**, whose
+  acceptance criterion already says the full loop works offline and survives reload.
 - **T6.2 Persistence UX.** `navigator.storage.persist()` + install prompt guidance in the demo.
 
 ## Phase 7 — Demo + docs

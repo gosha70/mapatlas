@@ -11,7 +11,11 @@ export {
   installOfflineArchives,
 } from "./archive-source.js";
 export type { ArchiveRegistrar } from "./archive-source.js";
-export { OfflineLicenseError, assertOfflineLicensed } from "./offline-license.js";
+// `assertOfflineLicensed` is deliberately **not** published. It is the store's internal guard,
+// `api.md` never declared it, and a consumer calling it directly would be checking a licence
+// the store checks again anyway — while making the check's signature a compatibility promise.
+// `OfflineLicenseError` is published because a caller has to be able to catch it.
+export { OfflineLicenseError } from "./offline-license.js";
 export {
   createPMTilesRegionStore,
   UnknownArchiveSizeError,

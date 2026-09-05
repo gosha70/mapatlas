@@ -22,7 +22,14 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { setWorkerUrl } from "maplibre-gl";
 
-import { mountLab, readLabFocus, readLabSegments, readLabSources } from "./lab/lab.js";
+import {
+  labTileSources,
+  mountLab,
+  readLabFocus,
+  readLabSegments,
+  readLabSources,
+} from "./lab/lab.js";
+import { readLabOffline, runLabOffline } from "./lab/offline-region.js";
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -38,7 +45,30 @@ if (window.location.pathname === "/lab") {
   app.append(status, map);
 
   const here = new URL(window.location.href);
-  mountLab(map, readLabSources(here), readLabSegments(here), readLabFocus(here))
+  const labSources = readLabSources(here);
+
+  // **The offline step runs to completion before the map is mounted**, and that ordering is the
+  // contract, not a convenience: `installOfflineArchives` has to reach the protocol before
+  // anything adds a `pmtiles` source, or MapLibre resolves the url over the network first and
+  // the later registration serves nothing (ADR-0036).
+  //
+  // `data-offline` is published *before* `data-assembled`, so a scenario can assert what the
+  // region step produced without having to infer it from what the map then drew — which is the
+  // precondition a render assertion cannot make for itself.
+  runLabOffline(readLabOffline(here), labTileSources(labSources))
+    .then((report) => {
+      // The **step**, not a count: always present, so a scenario can wait on it as "the offline
+      // step is finished" without that marker also having to carry a number the step may not
+      // know. `data-regions` is published separately, and only when the store was consulted.
+      status.dataset["offline"] = report.mode;
+      if (report.regions !== undefined) status.dataset["regions"] = String(report.regions);
+      if (report.regionId !== undefined) status.dataset["regionId"] = report.regionId;
+      if (report.sizeBytes !== undefined) status.dataset["regionBytes"] = String(report.sizeBytes);
+      if (report.sourceIds !== undefined)
+        status.dataset["regionSources"] = report.sourceIds.join(",");
+      status.dataset["served"] = report.served.join(",");
+      return mountLab(map, labSources, readLabSegments(here), readLabFocus(here));
+    })
     .then((lab) => {
       // **Not "ready".** This resolves when the recording is finished and the controller has
       // been told what to draw; MapLibre installs sources and layers later, when its style

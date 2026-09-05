@@ -63,7 +63,10 @@ The heart, with no browser or renderer.
 ## Phase 6 — Offline map regions (`@mapatlas/offline-pmtiles`)
 - PMTiles-backed `OfflineRegionStore` (download bbox×zoom per source, list, delete, size
   estimate); `persist()` + install guidance surfaced in the demo.
-- **Exit:** a downloaded region renders with the network disabled.
+- **Exit:** a downloaded region renders with **the archive host** unreachable — map data
+  offline. The application shell is still served from its own origin; serving that offline is
+  Phase 7's exit, not this one. See T6.1 in `tasks.md` for why the narrower cut is the honest
+  one: a blanket abort cannot coexist with the fresh realm the positive control requires.
 
 ## Phase 7 — Demo app + docs
 - `apps/demo`: a generic field logger (no real domain) wiring the whole engine — record and

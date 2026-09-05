@@ -17,23 +17,22 @@ plus replay). `NOT_YET_BUILT` in `packages/react/src/index.test.ts` is retired �
 times, each time a component reached the barrel unverified, which is what forced it into the
 exact §9 checks.
 
-### Why T6.1 runs ahead of what is left in T4.6
+### T4.6 is closed. T6.1 does not reopen it
 
-T4.6's fixture track, simulated GPS and `/lab` route are **built** (`apps/demo/src/lab/`), and
-so is the zero-egress scenario's infrastructure — `render-differential.e2e.ts` already fails
-egress rather than counting it. What is outstanding in T4.6 is rendered-state evidence, the
-three-capture differential over the pause, and the frame-time/memory baseline.
+**This section used to say the opposite, and it was stale.** It claimed T4.6's rendered-state
+evidence, pause differential and performance baseline were outstanding, and that one offline
+scenario would discharge a T4.6 exit alongside T6.1's. `tasks.md` is authoritative and marks
+T4.6 **Done** (2026-09-01, PR #9 and #10), naming what discharges each criterion: `lab.e2e.ts`
+for egress on both seams, `render-differential.e2e.ts` for the pause as a set relation,
+`performance-baseline.e2e.ts` for the baseline. Nothing in T6.1 is needed for any of them.
 
-So the *only* T4.6 item that overlaps T6.1 is the shared offline scenario — and that makes the
-ordering clearer, not weaker. T6.1's acceptance criterion is *"a downloaded region renders
-offline (network disabled)"*; T4.6's is a rendered trip over locally-held archives. **One
-scenario, not two.** `OfflineRegionStore` *is* "archive persisted locally", and the T4.6
-archives — `build/fixture/terrain.pmtiles` (raster-DEM) and `contours.pmtiles` (vector MVT), cut
-by `npm run fixture:build` — are exactly the DEM/vector stack T6.1's bar demands.
+What T6.1 inherits from T4.6 is **infrastructure, not an exit**: the `/lab` route, the fixture
+track and simulated GPS in `apps/demo/src/lab/`, and the two archives `npm run fixture:build`
+cuts — `terrain.pmtiles` (raster-DEM) and `contours.pmtiles` (vector MVT) — which happen to be
+exactly the DEM/vector stack T6.1's own bar demands. Reusing them is why T6.1's offline scenario
+was cheap to write. It closes **T6.1 only**.
 
-Building T6.1 first means one scenario discharges both exits, over infrastructure that already
-exists. Building it second means writing that scenario against the archives directly and then
-rewriting it against the region store.
+Read a claim that increment 4 also closes something in T4.6 as a mistake, wherever it appears.
 
 ### The bar that will be got wrong
 
@@ -152,7 +151,11 @@ working from bypassed, and assert *that* — not the absence of an alarm.
 
 ---
 
-## What remains in T4.6, in dependency order
+## T4.6's items, for the record — all of them closed
+
+> **Nothing here is outstanding.** `tasks.md` marks T4.6 Done (2026-09-01, PR #9 and #10). This
+> list is kept as history, because item 9 stood as "outstanding" here long after the work that
+> discharged it had merged, and a struck-through record is harder to misread than a deleted one.
 
 1. ~~Adopt the contour toolchain as dependencies.~~ **Done.** `d3-contour` 4.0.2, `geojson-vt`
    4.0.3 and `vt-pbf` 3.1.3 are pinned dependencies, and `scripts/fixture/contour.mjs` traces
@@ -173,10 +176,12 @@ working from bypassed, and assert *that* — not the absence of an alarm.
 8. ~~`/lab` route in `apps/demo`, plus simulated GPS.~~ **Done.** `apps/demo/src/lab/lab.ts` and
    `simulated-geolocation.ts`; the route is driven by `render-differential.e2e.ts` and
    `performance-baseline.e2e.ts`.
-9. **Outstanding, and these are the actual acceptance criteria:** rendered-state evidence, the
-   three-capture differential over the pause, and the frame-time/memory baseline. The offline
-   scenario's *infrastructure* is built — egress is failed rather than counted — and the
-   scenario itself is the one T6.1 shares, which is why T6.1 runs first.
+9. ~~Rendered-state evidence, the three-capture differential over the pause, and the
+   frame-time/memory baseline.~~ **Done.** `lab.e2e.ts` settles the render and compares each
+   source against the stack missing it; `render-differential.e2e.ts` proves the pause as a set
+   relation, 0 added and 0 lost against a bridged control contributing 827 corridor pixels;
+   `performance-baseline.e2e.ts` records frame time and memory with no thresholds. See
+   `tasks.md` for the authoritative statement of what discharges each.
 
 One qualification that a summary will round away if you let it: Bar 2 is discharged **on
 topology**. The synthetic run's ≤0.8% area agreement does *not* hold universally on real data —

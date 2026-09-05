@@ -1075,6 +1075,17 @@ warm HTTP cache or a `blob:` url minted earlier all produce zero requests. The b
 proves the *other* half, that a downloaded region renders with the network cut and a deleted one
 does not (T6.1 increment 4); neither half is the claim alone.
 
+**What "the network cut" means there, exactly.** The archive host, not everything: the demo's
+own origin still serves the application. The narrowing is forced by the control rather than
+chosen for convenience. The positive control needs a *fresh realm* — this ADR's own decision that
+registration is realm-scoped with no unregister means a re-mount in the same realm keeps the
+previous registration and its `PMTiles` promise cache, which can answer for bytes that have been
+deleted — and a fresh realm needs a navigation, which a blanket abort would kill along with the
+document. So the claim is stated as **map data offline**: no byte of either archive over the
+network, asserted per archive and split by request kind, since a range read is the renderer
+reading an archive and a plain GET is `download()` copying one, and only the latter is evidence
+of a copy. App-shell offline is T7.1's criterion.
+
 `installOfflineArchives` is called by the consumer, not by the store. That keeps
 `@mapatlas/offline-pmtiles` free of any dependency on the renderer package — it depends on
 `pmtiles` alone, which `architecture.md` §2 already permits — and `ArchiveRegistrar` is

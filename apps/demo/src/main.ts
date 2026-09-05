@@ -30,6 +30,8 @@ import {
   readLabSources,
 } from "./lab/lab.js";
 import { readLabOffline, runLabOffline } from "./lab/offline-region.js";
+import { mountInstallGuidance } from "./install-guidance.js";
+import { mountPersistenceControl } from "./persistence.js";
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -89,6 +91,23 @@ if (window.location.pathname === "/lab") {
       status.textContent = `Lab failed: ${error instanceof Error ? error.message : String(error)}`;
     });
 } else {
-  app.innerHTML =
-    '<p style="font:14px system-ui">MAP-ATLAS demo. Open <a href="/lab">/lab</a>.</p>';
+  // The root route: a pointer to `/lab`, and the persistence control (T6.2).
+  //
+  // **Only this branch changes.** `/lab` is T4.6's fixture and the subject of four merged
+  // browser scenarios, and T6.1's offline evidence runs through it; a persistence control has
+  // nothing to do with any of them and is not worth putting them at risk for.
+  // **The stylesheet hook, and the reason it is on `body` rather than in the CSS itself.**
+  // `index.html` is shared by both routes, so a rule that keyed off `#persistence` alone could
+  // still not reach the page padding and reading width, which live on `body` and `#app` — and
+  // those are exactly what `/lab` needs left alone, since it draws a full-bleed map. Marking the
+  // route makes the scope a fact of the DOM rather than a promise about selectors.
+  document.body.dataset["route"] = "root";
+
+  const intro = document.createElement("p");
+  intro.innerHTML = 'MAP-ATLAS demo. Open <a href="/lab">/lab</a>.';
+  app.append(intro);
+  mountPersistenceControl(app);
+  // After the control, because the control is what a reader can act on now and the guidance is
+  // what they do next. Static text either way — nothing here detects or offers installation.
+  mountInstallGuidance(app);
 }

@@ -166,3 +166,6 @@ build/fixture/
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+# Written by the Playwright CLI when it is driven directly rather than through
+# `npm run test:browser`; `prettier --check .` trips on the yml it leaves behind.
+/.playwright-cli/

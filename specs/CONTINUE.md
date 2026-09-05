@@ -8,29 +8,40 @@ specific failure modes are cheap to avoid once named.
 
 ## Where the work is
 
-**T6.2 — persistence UX, and it needs a survey before it needs a plan.** `tasks.md` scopes it to
-`navigator.storage.persist()` plus install-prompt guidance in the demo, and **that is the scope
-until a survey says otherwise.** Do not widen it on the way in.
+**T7.1 — the demo app.** `tasks.md` has its scope and acceptance criteria, and `roadmap.md` has
+Phase 7's exit. **Survey both before planning anything**; nothing here pre-plans it, deliberately,
+because the survey is the next session's and it should meet the task on its own terms.
 
-Three questions the survey has to answer first, recorded here as questions rather than as
-accepted scope — T6.1 fenced all three out into T6.2 / Phase 7, and inheriting a fence as a
-commitment is how scope grows without anyone deciding it:
+Two things it will inherit and should know before it starts, neither of them scope:
 
-1. **Eviction.** `architecture.md` §4 says `OfflineRegionStore` "supports eviction-aware
-   re-download". Nothing implements that. Is it T6.2's, T7.1's, or a separate task? It is not in
-   T6.2's line in `tasks.md`.
-2. **Quota.** `MapAssetStore.estimateBytes()` already exists and is already tested. Does T6.2
-   surface it, and if so where — the engine has no UI, so "surfacing" can only mean the demo.
-3. **Resume.** A `download()` interrupted part-way now rolls back completely (`c21349e`'s
-   carry-in). Resuming instead is a different contract, not a refinement of this one.
+- **"Offline" is narrowed to *map data* offline** (ADR-0035, and Phase 6's exit in `roadmap.md`).
+  The app shell is still served from its own origin, and **T7.1's own criterion is the one that
+  says the full loop works offline and survives reload** — so app-shell offline is work T7.1 has
+  to do, not work Phase 6 already did. A plan that assumes otherwise is assuming something no
+  gate has ever checked.
+- **Eviction-aware re-download, quota UI and download resume remain unbuilt and unowned.** T6.1
+  fenced them out, T6.2's survey answered them as questions rather than scope, and
+  `architecture.md`'s claim that the store "supports eviction-aware re-download" was removed
+  because nothing implements it. If T7.1 needs any of them, that is a decision to take, not a
+  commitment to inherit.
 
-Answer those against the repo before writing `specs/plans/t6-2-*.md`.
-
-Phases 0–5 are complete and merged: core, persistence, the web recorder, the MapLibre renderer,
+Phases 0–6 are complete and merged: core, persistence, the web recorder, the MapLibre renderer,
 and the whole React surface `api.md` §9 publishes (`MapCanvas`, `EventComposer`, `TripReview`,
 plus replay). `NOT_YET_BUILT` in `packages/react/src/index.test.ts` is retired — it went red four
 times, each time a component reached the barrel unverified, which is what forced it into the
 exact §9 checks.
+
+### T6.2 is merged (PR #23, 2026-09-05)
+
+Persistence UX ships: the root route reports whether the origin is persistent, requests it from a
+real button a person activated, reports all five answers distinguishably, and carries static
+install-first guidance. Demo-only — nothing published changed. `tasks.md` carries the
+authoritative Done record; `specs/plans/t6-2-persistence-ux.md` is history now, not a work plan.
+
+Its increment 0 also corrected the record: **automatic eviction takes an origin's data together**,
+so the browser cannot spare a user's trips by taking basemaps first and cannot leave a region
+manifest naming an archive it removed. ADR-0016 had said both, one sentence apart. Do not
+reintroduce the selective-eviction story anywhere.
 
 ### T6.1 is merged (PR #20, 2026-09-05)
 
@@ -41,12 +52,12 @@ each criterion; `specs/plans/t6-1-region-store.md` is history now, not a work pl
 
 **What is worth carrying forward from it**, because both cost a review round each:
 
-- The two sections below — the provenance bar, and the five mistakes — are *not* T6.1-specific.
-  They are why that task landed with falsifiable evidence, and they apply to T6.2 unchanged.
+- The two sections below — the provenance bar, and the mistakes list — are *not* T6.1-specific.
+  They are why that task landed with falsifiable evidence, and T6.2 applied them unchanged.
 - **"Offline" was narrowed to *map data* offline**, deliberately and on the record (ADR-0035,
   T6.1 in `tasks.md`, the Phase 6 exit in `roadmap.md`). The app shell is still served from its
-  own origin; making *that* work offline is T7.1's criterion. A T6.2 plan that assumes Phase 6
-  already delivered app-shell offline is assuming something no gate has ever checked.
+  own origin; making *that* work offline is T7.1's criterion — restated at the top of this file,
+  because it is the assumption Phase 7 is most likely to inherit without checking.
 
 ### T4.6 is closed. T6.1 does not reopen it
 
@@ -93,7 +104,7 @@ Two things had to be corrected in the building, and both are the general lesson:
   copy, a range read is the renderer reading. The vacuous version passed a mutation the real one
   kills.
 
-## The five mistakes to not repeat
+## The mistakes to not repeat
 
 ### 1. Do not confuse "the check exists" with "the obligation is discharged"
 
@@ -167,6 +178,38 @@ Several checks passed for the wrong reason:
 
 For any check that guards something that matters, name the observation that distinguishes
 working from bypassed, and assert *that* — not the absence of an alarm.
+
+### 6. A test that a stylesheet arrived says nothing about whether the result is readable
+
+The root route's layout tests asserted the things a test can see: the font family was
+`system-ui`, and the control's box was neither flush against the viewport nor spanning it. Both
+held. **Every assertion passed while the headings were invisible** — the stylesheet fixed a text
+colour and declared no background, so under a dark canvas the intro, the status headline, the
+guidance heading and all three step titles rendered near-black on near-black.
+
+Neither lane could have caught it. The unit lane has no canvas; the browser lane asserted exactly
+what it was told to. It was found by **opening the page**, which is the check neither lane makes,
+and it is the only finding on that branch that came from looking rather than reading.
+
+The remedy is one CSS rule and one assertion — the body's computed `backgroundColor` is not
+transparent, which is what separates "declared a background" from "inherited whatever the canvas
+is". The lesson is larger than the rule: when a change is visual, look at it.
+
+### 7. A test that asks the platform to agree with you is testing the platform
+
+A test that calls `navigator.storage.persist()` and expects `true` asserts Chromium's engagement
+heuristics about a test page. It passes or fails for reasons unrelated to the code, and when it
+passes it reads as evidence that persistence works. Three engines decide by heuristic and one
+asks a human; none of them owes a test an answer.
+
+What is assertable is the code's own behaviour around the call: **when** it happens (never on
+load), **how many times** (exactly one per activation, none while the status check is in flight),
+and that **each answer is reported as the thing it is**. The browser lane counts the native call
+by wrapping and forwarding it, so the platform still decides and a control that hard-coded an
+outcome is caught.
+
+Same shape as "zero network requests is not evidence" (T6.1) — and **T7.1 is storage-adjacent
+throughout**, so it will meet this again on its first offline round-trip test.
 
 ---
 

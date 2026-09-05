@@ -106,6 +106,57 @@ test("the control is on the root route, and requests only when a person asks", a
   console.log(`persistence outcome on this profile: ${await control.getAttribute("data-state")}`);
 });
 
+test("the root control is laid out, not left to browser defaults", async ({ page }) => {
+  // **Presentation, asserted at the two places it actually went wrong.** Not a screenshot
+  // golden and not a design system: this checks that a stylesheet reached the control at all,
+  // because before this commit nothing did and no test could have noticed. A golden would fail
+  // on every deliberate change and tell nobody why.
+  await page.goto(DEMO, { waitUntil: "load" });
+
+  const control = page.locator("#persistence");
+  await expect(control).toBeVisible();
+
+  const box = await control.boundingBox();
+  if (box === null) throw new Error("the control has no layout box");
+  const viewport = page.viewportSize();
+  if (viewport === null) throw new Error("no viewport to compare against");
+
+  // Not flush-left and not full-bleed: the page has padding and the column has a bounded
+  // measure, which is what an unstyled document lacks.
+  expect(box.x, "the control is flush against the viewport edge").toBeGreaterThan(8);
+  expect(box.width, "the control spans the whole viewport").toBeLessThan(viewport.width - 16);
+
+  // Not the document's serif default. Asserted on `system-ui` rather than against a list of
+  // serif names, since "sans-serif" contains "serif" and a negative match on it is a trap.
+  const font = await control.evaluate((element) => getComputedStyle(element).fontFamily);
+  expect(font, `the control inherited a default font: ${font}`).toMatch(/system-ui/);
+
+  // The button is a real target with visible focus — the background above removes the browser's
+  // own outline, so a replacement is not decoration.
+  //
+  // **Not behind an `if`.** A conditional guard passes silently on any profile where the button
+  // happens to be absent, and nothing in the report says whether it ran — the same shape as
+  // inferring a precondition instead of asserting it. So the state is waited out first, the one
+  // legitimate reason for no button is skipped *visibly*, and everything else asserts.
+  await expect(control).not.toHaveAttribute("data-state", "checking");
+  if ((await control.getAttribute("data-state")) === "already-persistent") {
+    test.skip(
+      true,
+      "this profile is already persistent, so the control correctly offers no button",
+    );
+    return;
+  }
+
+  const request = page.locator("#persistence-request");
+  await expect(request).toBeVisible();
+  const outline = await request.evaluate((element) => {
+    element.focus();
+    const style = getComputedStyle(element);
+    return `${style.outlineStyle} ${style.outlineWidth}`;
+  });
+  expect(outline, "the focused button has no visible outline").not.toMatch(/none|0px/);
+});
+
 test("the fixture route is untouched by the control", async ({ page }) => {
   // T6.1's evidence runs through `/lab`, and the control has nothing to do with it. The full
   // scenarios still guard that; this is the cheap direct check that the control did not leak
@@ -117,4 +168,8 @@ test("the fixture route is untouched by the control", async ({ page }) => {
 
   await expect(page.locator("#persistence")).toHaveCount(0);
   expect(await persistCalls(page), "/lab requested persistence").toBe(0);
+
+  // And the root route's stylesheet cannot reach here: every rule it adds is scoped under this
+  // attribute, so its absence is the structural guarantee rather than a promise about selectors.
+  await expect(page.locator("body")).not.toHaveAttribute("data-route", "root");
 });

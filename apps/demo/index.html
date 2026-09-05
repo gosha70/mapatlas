@@ -18,6 +18,62 @@
         position: absolute;
         inset: 0;
       }
+      /* The root route only. Every selector below is under `body[data-route="root"]`, which
+         `/lab` never sets, so the map route keeps its full-bleed layout untouched. */
+      body[data-route="root"] {
+        font:
+          16px/1.5 system-ui,
+          sans-serif;
+        color: #1f2328;
+        padding: 2rem 1.5rem;
+        box-sizing: border-box;
+        height: auto;
+      }
+      body[data-route="root"] #app {
+        /* A bounded measure: prose set to the full width of a desktop window is hard to read,
+           and this control is mostly prose. */
+        max-width: 42rem;
+        margin: 0 auto;
+        height: auto;
+      }
+      body[data-route="root"] #persistence {
+        display: grid;
+        gap: 0.5rem;
+        justify-items: start;
+        margin-top: 1.5rem;
+        padding: 1rem 1.25rem;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+      }
+      body[data-route="root"] #persistence p {
+        margin: 0;
+      }
+      body[data-route="root"] .persistence-headline {
+        font-weight: 600;
+      }
+      body[data-route="root"] .persistence-detail {
+        color: #57606a;
+      }
+      body[data-route="root"] #persistence-request {
+        font: inherit;
+        padding: 0.45rem 0.9rem;
+        border: 1px solid #0969da;
+        border-radius: 6px;
+        background: #0969da;
+        color: #fff;
+        cursor: pointer;
+      }
+      /* `:focus-visible`, so the ring appears for keyboard users without following every mouse
+         click. The engine's accessibility guardrail asks for visible focus, and the browser
+         default outline is removed by the background above — restoring it is not optional. */
+      body[data-route="root"] #persistence-request:focus-visible {
+        outline: 2px solid #0969da;
+        outline-offset: 2px;
+      }
+      body[data-route="root"] #persistence-request[disabled] {
+        opacity: 0.6;
+        cursor: default;
+      }
       #status {
         position: absolute;
         z-index: 1;

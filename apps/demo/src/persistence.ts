@@ -85,7 +85,7 @@ export function readPersistenceApi(from: Navigator = navigator): PersistenceApi 
 const HEADLINE: Readonly<Record<PersistenceState, string>> = Object.freeze({
   checking: "Checking whether storage is persistent.",
   "already-persistent": "Storage is already persistent.",
-  unpersisted: "Storage is best-effort.",
+  unpersisted: "Saved data may be removed automatically.",
   granted: "Storage is now persistent.",
   denied: "The browser did not grant persistent storage.",
   unsupported: "This browser does not offer persistent storage.",
@@ -119,12 +119,13 @@ const DETAIL: Readonly<Record<PersistenceState, string>> = Object.freeze({
     "Everything this site stores in this browser — recorded trips, events, photos and " +
     "downloaded map regions together — is now excluded from automatic eviction. You can still " +
     "clear it yourself, and writes can still fail once the quota is reached.",
+  // Browser-neutral by ruling, and it is also the more accurate sentence: naming the browsers
+  // that decide silently while omitting the one that asks is right about the ones it names and
+  // misleading by omission about the other.
   denied:
-    "This is a normal answer, not an error: Chrome and Safari decide without asking, based on " +
-    "how much you have used the site. Storage stays best-effort and the request can be made " +
-    "again later.",
-  unsupported:
-    "Storage stays best-effort: the browser may evict this site's data to reclaim space.",
+    "This is a normal answer, not an error: some browsers decide automatically; others may ask. " +
+    "Saved data can still be removed automatically, and the request can be made again later.",
+  unsupported: "Saved data can still be removed automatically to reclaim space.",
   error:
     "The call failed rather than being refused, so persistence is unchanged and unknown. " +
     "Trying again is reasonable.",

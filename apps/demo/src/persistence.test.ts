@@ -210,6 +210,12 @@ describe("every answer a browser can give is reported as the thing it is", () =>
 
     expect(stateOf(root)).toBe("denied");
     expect(textOf(root)).toMatch(/normal answer/i);
+    // Browser-neutral: naming the engines that decide silently while omitting the one that asks
+    // is right about the named ones and misleading by omission about the other. A list also
+    // dates — the grant models are the browsers' to change, not ours to enumerate.
+    expect(textOf(root), "the denial copy names specific browsers").not.toMatch(
+      /chrome|safari|firefox|edge/i,
+    );
   });
 
   it("reports an unsupported browser without offering a request", async () => {
@@ -281,7 +287,11 @@ describe("every answer a browser can give is reported as the thing it is", () =>
     // browser's storage is. Each phrase below is a settled state's own claim: `unpersisted`'s
     // headline, `unpersisted`'s detail, and the claim `already-persistent` and `granted` share.
     // Borrowing any of them announces the browser's answer before the browser has given it.
-    for (const claim of [/best-effort/i, /may evict/i, /excluded from automatic eviction/i]) {
+    for (const claim of [
+      /removed automatically/i,
+      /may evict/i,
+      /excluded from automatic eviction/i,
+    ]) {
       expect(
         rendered.get("checking") ?? "",
         `checking states a position it does not have: ${String(claim)}`,
@@ -329,7 +339,9 @@ describe("the asynchronous result is announced, not just displayed", () => {
 
     const region = root.querySelector('[role="status"]');
     expect(region, "no live region: the result is displayed but never announced").not.toBeNull();
-    expect(region?.textContent ?? "", "the region carries no status text").toMatch(/best-effort/i);
+    expect(region?.textContent ?? "", "the region carries no status text").toMatch(
+      /removed automatically/i,
+    );
     expect(region?.querySelector("button"), "the button is inside the live region").toBeNull();
 
     // And the region is what changes, so the announcement carries the new state rather than a

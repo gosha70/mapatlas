@@ -1067,6 +1067,43 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   So what T6.1 discharges is: **no byte of either archive may come over the network**, asserted
   per archive and per request kind. Serving the app shell itself offline is **T7.1's**, whose
   acceptance criterion already says the full loop works offline and survives reload.
+
+  **Done** (2026-09-05, PR #20). Five commits: `b87c90a` the licence flag, `d72282d` the store,
+  `4a8e936` the protocol seam, `82a513e` the renderer's registrar entry, `c21349e` the offline
+  render. Each criterion, and what discharges it:
+
+  - *A downloaded region renders offline, with a vector/DEM source in the stack.*
+    `e2e/offline-region.e2e.ts` walks one sequence: copy both fixture archives with the network
+    up, cut the archive host, then reload into a **fresh realm** that installs the region. The
+    oracle is rendered state — the offline render differs from the render after the region is
+    deleted, and that deleted render is *byte-identical* to a load that never held one. Both
+    halves are needed: the first alone would hold if two renders merely differed, the second
+    alone if nothing ever rendered. The stack is `terrain.pmtiles` (raster-DEM, driving terrain
+    and hillshade) and `contours.pmtiles` (vector MVT), named by explicit `sourceIds` — the
+    published default excludes the `hillshade` role and would have omitted the DEM (ADR-0034).
+  - *Bytes were **copied locally**, not range-requested.* Split across the seam where each half
+    is observable, because **zero network requests is not evidence** — a service worker, a warm
+    HTTP cache or an earlier `blob:` url all produce zero. In the unit lane,
+    `packages/offline-pmtiles/src/archive-source.test.ts` asserts byte identity against
+    `createMemoryMapAssetStore`, with the stored blob deliberately overwritten after download so
+    a reader that re-fetched its url is caught rather than flattered. In the browser lane,
+    archive traffic is counted **per archive and split by request kind**: a plain GET is
+    `download()` copying an archive, a range read is the renderer reading one, and only the
+    first is evidence of a copy. A `download()` mutated to send a `Range` header passes a
+    total-count assertion and fails this one.
+  - *`download()` refuses a source not marked offline-licensed.* `offline-license.test.ts` and
+    `region-store.test.ts`: absence refuses rather than permits (ADR-0033), an unknown
+    `sourceId` refuses for the same reason, the error names the offending source, and **one
+    check guards both `download()` and `estimateSize()`** — a UI able to quote a size for a
+    region the store will then refuse has already misled its user.
+  - *No test or demo fixture points `download()` at a community tile service.* The only archives
+    any of this touches are cut locally by `npm run fixture:build` and served from the lane's own
+    server; both carry `offlineLicensed: true` by construction, and the browser lane fails rather
+    than counts a request to any other origin.
+
+  Not claimed, and deliberately so: this discharges **T6.1 only**. T4.6 was already closed on
+  2026-09-01 and none of its criteria depend on this work — see the correction in `CONTINUE.md`,
+  which said otherwise for several sessions.
 - **T6.2 Persistence UX.** `navigator.storage.persist()` + install prompt guidance in the demo.
 
 ## Phase 7 — Demo + docs

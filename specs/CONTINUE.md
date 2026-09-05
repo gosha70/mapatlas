@@ -8,14 +8,45 @@ specific failure modes are cheap to avoid once named.
 
 ## Where the work is
 
-**T6.1 — `OfflineRegionStore` in `@mapatlas/offline-pmtiles`.** Read
-`specs/plans/t6-1-region-store.md`, then this file.
+**T6.2 — persistence UX, and it needs a survey before it needs a plan.** `tasks.md` scopes it to
+`navigator.storage.persist()` plus install-prompt guidance in the demo, and **that is the scope
+until a survey says otherwise.** Do not widen it on the way in.
+
+Three questions the survey has to answer first, recorded here as questions rather than as
+accepted scope — T6.1 fenced all three out into T6.2 / Phase 7, and inheriting a fence as a
+commitment is how scope grows without anyone deciding it:
+
+1. **Eviction.** `architecture.md` §4 says `OfflineRegionStore` "supports eviction-aware
+   re-download". Nothing implements that. Is it T6.2's, T7.1's, or a separate task? It is not in
+   T6.2's line in `tasks.md`.
+2. **Quota.** `MapAssetStore.estimateBytes()` already exists and is already tested. Does T6.2
+   surface it, and if so where — the engine has no UI, so "surfacing" can only mean the demo.
+3. **Resume.** A `download()` interrupted part-way now rolls back completely (`c21349e`'s
+   carry-in). Resuming instead is a different contract, not a refinement of this one.
+
+Answer those against the repo before writing `specs/plans/t6-2-*.md`.
 
 Phases 0–5 are complete and merged: core, persistence, the web recorder, the MapLibre renderer,
 and the whole React surface `api.md` §9 publishes (`MapCanvas`, `EventComposer`, `TripReview`,
 plus replay). `NOT_YET_BUILT` in `packages/react/src/index.test.ts` is retired — it went red four
 times, each time a component reached the barrel unverified, which is what forced it into the
 exact §9 checks.
+
+### T6.1 is merged (PR #20, 2026-09-05)
+
+`OfflineRegionStore` ships: the licence flag, the store over `MapAssetStore`, the archive
+protocol seam, the renderer's `pmtilesArchiveRegistrar()`, and the offline render with its
+positive control. `tasks.md` carries the authoritative Done record and names what discharges
+each criterion; `specs/plans/t6-1-region-store.md` is history now, not a work plan.
+
+**What is worth carrying forward from it**, because both cost a review round each:
+
+- The two sections below — the provenance bar, and the five mistakes — are *not* T6.1-specific.
+  They are why that task landed with falsifiable evidence, and they apply to T6.2 unchanged.
+- **"Offline" was narrowed to *map data* offline**, deliberately and on the record (ADR-0035,
+  T6.1 in `tasks.md`, the Phase 6 exit in `roadmap.md`). The app shell is still served from its
+  own origin; making *that* work offline is T7.1's criterion. A T6.2 plan that assumes Phase 6
+  already delivered app-shell offline is assuming something no gate has ever checked.
 
 ### T4.6 is closed. T6.1 does not reopen it
 
@@ -34,22 +65,33 @@ was cheap to write. It closes **T6.1 only**.
 
 Read a claim that increment 4 also closes something in T4.6 as a mistake, wherever it appears.
 
-### The bar that will be got wrong
+### The bar that was got wrong, and how it was met
 
-*"Proving bytes were copied locally, not range-requested"* is the middle claim of T6.1's AC, and
+Kept because the shape generalises, not because T6.1 still needs it.
+
+*"Proving bytes were copied locally, not range-requested"* was the middle claim of T6.1's AC, and
 **zero network requests is not evidence for it.** A service worker, an HTTP cache hit, or a
 `blob:` URL minted earlier all produce zero requests while proving nothing about the store. The
-claim is about *provenance* — which code path supplied the bytes — and it is split across the
-seam where each half is observable:
+claim is about *provenance* — which code path supplied the bytes — and it split across the seam
+where each half is observable:
 
 - **Unit, at the protocol seam:** the store-backed handler MapLibre calls returns exactly the
-  bytes `put()` stored, keyed by what `download()` wrote. Byte identity is asserted here.
-- **Browser:** `page.route("**", abort)` installed *after* the app and archives have loaded,
-  region present → tiles render; region deleted, same abort → render fails. That second half is
-  the positive control, and without it the first proves only that something rendered.
+  bytes `put()` stored, keyed by what `download()` wrote. Byte identity is asserted there, with
+  the stored blob overwritten afterwards so a reader that re-fetched its url is caught.
+- **Browser:** the archive host cut *after* the app and archives have loaded, region present →
+  tiles render; region deleted, same cut → render fails. That second half is the positive
+  control, and without it the first proves only that something rendered.
 
-Install the abort route **after** load, or the app never boots and the failure looks like the
-test working.
+Two things had to be corrected in the building, and both are the general lesson:
+
+- **Cut the network after load, not before** — otherwise the app never boots and the failure
+  looks like the test working. Make that failure *legible*: `/lab` publishes a failed-step
+  marker, and the waits watch for it, so the mistake surfaces in seconds instead of as a timeout.
+- **A request count is not a copy.** The first version counted every archive request across the
+  download *and* the render that followed, so the render's range reads could vouch for a copy
+  that never happened. Requests are now counted per archive and split by kind: a plain GET is a
+  copy, a range read is the renderer reading. The vacuous version passed a mutation the real one
+  kills.
 
 ## The five mistakes to not repeat
 

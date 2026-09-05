@@ -131,6 +131,16 @@ test("the root control is laid out, not left to browser defaults", async ({ page
   const font = await control.evaluate((element) => getComputedStyle(element).fontFamily);
   expect(font, `the control inherited a default font: ${font}`).toMatch(/system-ui/);
 
+  // **The page declares its own background.** This route fixes a near-black text colour, and a
+  // foreground without a background is only half a declaration: under forced-dark or a user
+  // stylesheet the agent paints its own canvas and the text lands on it — measured as
+  // dark-on-dark, with every heading and step title effectively invisible. A transparent body
+  // is precisely the state that lets that happen, so it is what this refuses.
+  const background = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  expect(background, "the page declares no background of its own").not.toMatch(
+    /^(transparent|rgba\(0, 0, 0, 0\))$/,
+  );
+
   // The button is a real target with visible focus — the background above removes the browser's
   // own outline, so a replacement is not decoration.
   //

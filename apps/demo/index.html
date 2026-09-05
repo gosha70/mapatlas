@@ -24,6 +24,14 @@
         font:
           16px/1.5 system-ui,
           sans-serif;
+        /* A foreground colour without a background is only half a declaration. The page never
+           claimed a colour scheme, so under forced-dark, a user stylesheet, or Chromium's auto
+           dark, this fixed near-black landed on whatever canvas the agent painted — measured as
+           dark-on-dark, with the headings and step titles effectively invisible. `color-scheme`
+           tells the agent this page is light so it stops substituting; `background` is what
+           makes that true rather than a request. */
+        color-scheme: light;
+        background: #fff;
         color: #1f2328;
         padding: 2rem 1.5rem;
         box-sizing: border-box;

@@ -30,6 +30,7 @@ import {
   readLabSources,
 } from "./lab/lab.js";
 import { readLabOffline, runLabOffline } from "./lab/offline-region.js";
+import { mountPersistenceControl } from "./persistence.js";
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -89,6 +90,14 @@ if (window.location.pathname === "/lab") {
       status.textContent = `Lab failed: ${error instanceof Error ? error.message : String(error)}`;
     });
 } else {
-  app.innerHTML =
-    '<p style="font:14px system-ui">MAP-ATLAS demo. Open <a href="/lab">/lab</a>.</p>';
+  // The root route: a pointer to `/lab`, and the persistence control (T6.2).
+  //
+  // **Only this branch changes.** `/lab` is T4.6's fixture and the subject of four merged
+  // browser scenarios, and T6.1's offline evidence runs through it; a persistence control has
+  // nothing to do with any of them and is not worth putting them at risk for.
+  const intro = document.createElement("p");
+  intro.style.font = "14px system-ui";
+  intro.innerHTML = 'MAP-ATLAS demo. Open <a href="/lab">/lab</a>.';
+  app.append(intro);
+  mountPersistenceControl(app);
 }

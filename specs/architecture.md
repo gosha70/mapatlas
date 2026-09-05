@@ -133,7 +133,7 @@ and never learns what they measure.
   consumer can name it for a screen reader. `MarkerStyle.html` is inserted verbatim and is
   therefore consumer-trusted markup (see `SECURITY.md`).
 - **`OfflineRegionStore`** — download/list/delete a map region (a bounding box × zoom range)
-  as a PMTiles archive for offline use; reports size; supports eviction-aware re-download.
+  as a PMTiles archive for offline use; reports size.
 
 ## 5. Offline model
 

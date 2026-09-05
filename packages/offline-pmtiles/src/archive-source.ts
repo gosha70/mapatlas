@@ -10,11 +10,18 @@ import { archiveKey } from "./region-store.js";
 /**
  * A region's manifest names a source whose archive blob is no longer in the asset store.
  *
- * Reachable, and not a programming error: `MapAssetStore` holds evictable bytes (ADR-0016), so
- * a browser reclaiming quota can take an archive while its manifest survives — and any consumer
- * with a key can `delete()` one. Raised rather than answered with empty bytes, because empty
- * bytes decode as "this archive contains nothing here", which renders as an ocean where the map
- * should be. A blank map is the failure ADR-0017 is about; an error is at least legible.
+ * Reachable, and not a programming error: a `delete()` that failed part-way leaves exactly this
+ * state, and so do corruption and a consumer deleting a known archive key — the store's own keys
+ * are not private to it, and `MapAssetStore.delete` takes any of them.
+ *
+ * **Not browser eviction**, which an earlier version of this comment blamed. Automatic eviction
+ * removes an origin's data *together*, so it would take the manifest along with the archive and
+ * this class would never be reached. Two IndexedDB databases do not change that; ADR-0016's split
+ * is lifecycle and blast radius, never physical quota.
+ *
+ * Raised rather than answered with empty bytes, because empty bytes decode as "this archive
+ * contains nothing here", which renders as an ocean where the map should be. A blank map is the
+ * failure ADR-0017 is about; an error is at least legible.
  */
 export class MissingArchiveError extends Error {
   readonly key: string;
@@ -22,7 +29,7 @@ export class MissingArchiveError extends Error {
   constructor(key: string) {
     super(
       `no archive is stored under ${JSON.stringify(key)}. The region's manifest still names it, ` +
-        `so the bytes were evicted or deleted after download; re-download the region.`,
+        `so the bytes were deleted or corrupted after download; re-download the region.`,
     );
     this.name = "MissingArchiveError";
     this.key = key;

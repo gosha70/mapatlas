@@ -1106,6 +1106,59 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   which said otherwise for several sessions.
 - **T6.2 Persistence UX.** `navigator.storage.persist()` + install prompt guidance in the demo.
 
+  **Done** (2026-09-05, PR #23, merged as `8618662`). Five commits: `29adfa0` the control,
+  `e9b11cc` a `.gitignore` line for the Playwright CLI's scratch directory, `035e87e` plain-word
+  copy and the root route's layout, `93d27a4` the installation guidance, `89a9b89` the page
+  background its text colour assumed. Increment 0 — the eviction-language correction the plan
+  made a prerequisite — landed earlier in PR #22 as `9a8c53c`.
+
+  **Demo-only; no published interface changed**, so `api.md` needed nothing. `packages/` and
+  `apps/demo/src/lab/` are untouched across the whole branch, asserted rather than asserted-of:
+  a browser test drives `/lab` and fails if the control or the guidance reaches it.
+
+  - *`navigator.storage.persist()` in the demo.* The root route reads `persisted()` on mount and
+    offers a request only if the origin lacks it. The request is reachable **only from a real
+    `<button>` a person activated** — never on load, because Firefox prompts and a bootstrap
+    request interrupts someone who asked for nothing. A non-requestable `checking` state covers
+    the interval before `persisted()` answers: without it a fast activation could request
+    persistence for an origin that already had it, and the late status would overwrite the
+    request's own result. Hidden **and** disabled, because a hidden button still runs its handler
+    when something calls it.
+  - *Every answer reported as the thing it is.* Five outcomes render distinguishably — already
+    persistent, granted, denied, unsupported, error. Denied is the *common* Chromium answer for a
+    site with no engagement history, so it reads as an answer rather than a failure; an error is
+    never shown as a denial, because one says the browser refused and the other says it never
+    replied. The copy states the grant's scope (the whole origin in this storage context — trips,
+    events, media and map assets together) and its limits (the user can still clear the data, and
+    a later write can still fail on quota).
+  - *Install prompt guidance.* Static text, an ordered list, install-first as the headline: on
+    iPhone and iPad an installed app's store is separate and installation copies cookies only, so
+    a region downloaded in the tab beforehand is not there afterwards. **That reason is scoped to
+    where it holds** — on Chromium an installed app shares the profile's origin storage — while
+    the order stays universal, being essential where the stores differ and harmless where they do
+    not. The benefit is stated truthfully (seven-day inactivity clean-up exemption, better grant
+    odds) and so is the non-benefit: installing does not give more space. Browser-neutral, with a
+    test refusing any engine or version name.
+  - *What is deliberately absent.* No `beforeinstallprompt`, manifest, icons or service worker —
+    app-shell installability is T7.1's. No eviction detection, quota UI or download resume: the
+    plan fenced all three out with the ruling recorded, and complete rollback on a failed
+    `download()` is preserved.
+
+  **The bar, and what it cost.** *No test asserts that a browser grants persistence.* Three
+  engines decide by heuristic and one asks a human, so a test expecting `true` would assert
+  Chromium's engagement heuristics about a test page and read, when it passed, as evidence that
+  persistence works. What is asserted instead is *when* the native call happens and *how many
+  times* — zero before the gesture, exactly one after, none while the status check is in flight —
+  with the browser lane counting it by wrapping and forwarding the real method, so a control that
+  hard-coded an outcome is caught rather than believed. Branches are driven through a
+  demo-internal seam whose absent value is `null`, not `undefined`: a default parameter is
+  applied when a caller passes `undefined` explicitly, so injecting `undefined` injects nothing.
+
+  One defect reached the merge queue and was found by **opening the page**, not by a test: the
+  root route fixed a text colour and declared no background, so under a dark canvas the headings
+  and step titles were invisible while every layout assertion passed. Fixed in `89a9b89`, with
+  the observation that separates the two now asserted. Recorded in `CONTINUE.md`'s mistakes list.
+
 ## Phase 7 — Demo + docs
 - **T7.1 Demo app.** Generic field logger wiring recorder+map+event+storage+offline, analyzer
   slot defaulting to `noopAnalyzer`, a topographic source stack, a custom `EventPresentation`

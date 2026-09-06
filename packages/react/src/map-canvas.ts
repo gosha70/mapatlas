@@ -45,6 +45,23 @@ export interface MapCanvasProps {
   style?: string | JSONValue;
   terrain?: TerrainOptions | null;
   presentation?: EventPresentation;
+  /**
+   * Where the map opens — **read once, at construction, and never tracked** (ADR-0037).
+   *
+   * The one thing every other prop on this component has and this one does not is a controller
+   * mutator to reconcile through: `recenter` moves the camera, but a component that called it
+   * whenever this prop changed would also call it whenever a parent re-rendered with a fresh
+   * object literal, dragging the map out from under a user mid-pan. So it is deliberately
+   * construction-only, and named for that: later changes to it do nothing.
+   *
+   * Absent leaves the controller's own default standing — neither key is passed at all, rather
+   * than passed as `undefined`.
+   *
+   * A `style` change recreates the controller and therefore re-reads this, re-opening at it.
+   * That is a widening of what already happened: before this prop existed, a style change
+   * dropped the camera to MapLibre's world view.
+   */
+  initialCamera?: { center?: LatLng; zoom?: number };
   track?: Track;
   events?: MapEvent[];
   livePoint?: TrackPoint;
@@ -126,12 +143,18 @@ export function MapCanvasInternal(
     if (container === null) return undefined;
 
     const current = latest.current;
+    const camera = current.initialCamera;
     const controller = create({
       container,
       sources: current.sources,
       ...(current.style === undefined ? {} : { style: current.style }),
       ...(current.terrain === undefined ? {} : { terrain: current.terrain }),
       ...(current.presentation === undefined ? {} : { presentation: current.presentation }),
+      // Each key on its own, and omitted rather than passed as `undefined`: a caller who names
+      // only a zoom keeps the controller's default centre, and `exactOptionalPropertyTypes`
+      // makes the difference between an absent key and an explicit `undefined` a real one.
+      ...(camera?.center === undefined ? {} : { center: camera.center }),
+      ...(camera?.zoom === undefined ? {} : { zoom: camera.zoom }),
     });
     const session: Session = {
       controller,

@@ -82,6 +82,27 @@
         opacity: 0.6;
         cursor: default;
       }
+      body[data-route="root"] .app-title {
+        margin: 0 0 0.5rem;
+        font-size: 1.25rem;
+      }
+      body[data-route="root"] .app-status {
+        margin: 0 0 1rem;
+        color: #57606a;
+      }
+      /* The map needs a sized container: `MapCanvas` renders at height 100%, so without a height
+         here the element collapses and the projection never settles — which reads in a test as a
+         map that drew nothing. The same rule `/lab`'s harness needed. */
+      body[data-route="root"] .app-map {
+        height: 22rem;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      body[data-route="root"] .app-lab {
+        margin-top: 1.5rem;
+        color: #57606a;
+      }
       body[data-route="root"] #install-guidance {
         margin-top: 1.5rem;
         padding: 1rem 1.25rem;

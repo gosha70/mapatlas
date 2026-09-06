@@ -7,6 +7,9 @@
     "noEmit": true,
     "types": ["node"],
     "lib": ["ES2022", "DOM"],
+    // The demo app is React and its tests are `.tsx`; without this they are included by the
+    // glob below and then fail to compile, which is a worse failure than not being checked.
+    "jsx": "react-jsx",
     // Harness-only renderer probes that are deliberately absent from
     // `@mapatlas/maplibre`'s public export map. These mirror the aliases in
     // `e2e/harness/vite.config.ts` and must move with them: vite resolves them to `dist`,
@@ -21,5 +24,5 @@
       "@mapatlas/maplibre/protocols": ["./packages/maplibre/src/protocols/pmtiles.ts"]
     }
   },
-  "include": ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts", "e2e/**/*.ts"]
+  "include": ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts", "apps/*/src/**/*.tsx", "e2e/**/*.ts"]
 }

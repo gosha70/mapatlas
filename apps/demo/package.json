@@ -12,6 +12,8 @@
     "@mapatlas/react": "0.0.0",
     "@mapatlas/recorder-web": "0.0.0",
     "@mapatlas/storage-idb": "0.0.0",
-    "maplibre-gl": "6.6.0"
+    "maplibre-gl": "6.6.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   }
 }

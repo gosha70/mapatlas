@@ -217,3 +217,11 @@ at the seam and no file under `packages/core` differs. `git` is the oracle for t
 - attribution is dropped from the rendered map → the licence check fails, as it does for the DEM;
 - the analyzer is called from inside `core` rather than through the seam → the zero-core-changes
   claim fails as a diff, not as a test.
+
+## Backlog — found while building, deliberately not fixed here
+
+- `e2e/fixtures/serve-lab-archives.mjs` exits on `GET /` with an unhandled `EISDIR`: it streams
+  the requested path without checking it is a file, and the directory read throws where nothing
+  is listening for it. Only a request for the server's root reaches it, which no scenario makes
+  and a human opening the host does — so it costs a reviewer a crashed archive server and costs
+  the suite nothing. Its own fix, not this increment's.

@@ -7,6 +7,9 @@
  * pointer to it rather than a blank page.
  */
 
+import { StrictMode, createElement } from "react";
+import { createRoot } from "react-dom/client";
+
 import "maplibre-gl/dist/maplibre-gl.css";
 
 // MapLibre 6 resolves its worker relative to the *importing* chunk, so under a bundler that
@@ -30,8 +33,7 @@ import {
   readLabSources,
 } from "./lab/lab.js";
 import { readLabOffline, runLabOffline } from "./lab/offline-region.js";
-import { mountInstallGuidance } from "./install-guidance.js";
-import { mountPersistenceControl } from "./persistence.js";
+import { createApp } from "./app/app.js";
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -91,23 +93,22 @@ if (window.location.pathname === "/lab") {
       status.textContent = `Lab failed: ${error instanceof Error ? error.message : String(error)}`;
     });
 } else {
-  // The root route: a pointer to `/lab`, and the persistence control (T6.2).
+  // **The app** (T7.1 increment 1). It takes the root route and absorbs T6.2's persistence
+  // control and installation guidance, which are its own settings.
   //
-  // **Only this branch changes.** `/lab` is T4.6's fixture and the subject of four merged
-  // browser scenarios, and T6.1's offline evidence runs through it; a persistence control has
-  // nothing to do with any of them and is not worth putting them at risk for.
-  // **The stylesheet hook, and the reason it is on `body` rather than in the CSS itself.**
-  // `index.html` is shared by both routes, so a rule that keyed off `#persistence` alone could
-  // still not reach the page padding and reading width, which live on `body` and `#app` — and
-  // those are exactly what `/lab` needs left alone, since it draws a full-bleed map. Marking the
-  // route makes the scope a fact of the DOM rather than a promise about selectors.
+  // **Only this branch changes.** `/lab` above is T4.6's fixture and the subject of five merged
+  // browser scenarios, and T6.1's offline evidence runs through it. The app is a different thing
+  // on the same origin, and a browser test asserts it never reaches that route.
+  //
+  // The stylesheet hook stays on `body`: `index.html` is shared by both routes, and the page
+  // padding and reading width live on `body` and `#app` — exactly what `/lab` needs left alone,
+  // since it draws a full-bleed map. Marking the route makes the scope a fact of the DOM rather
+  // than a promise about selectors.
   document.body.dataset["route"] = "root";
 
-  const intro = document.createElement("p");
-  intro.innerHTML = 'MAP-ATLAS demo. Open <a href="/lab">/lab</a>.';
-  app.append(intro);
-  mountPersistenceControl(app);
-  // After the control, because the control is what a reader can act on now and the guidance is
-  // what they do next. Static text either way — nothing here detects or offers installation.
-  mountInstallGuidance(app);
+  // `StrictMode` deliberately: React 19 double-invokes effects in development, and every React
+  // lifecycle bug this repo has hit — the composer's re-armed `live` ref, a panel appending
+  // twice — is one that only a second mount reveals. A demo that hid them would teach the wrong
+  // thing.
+  createRoot(app).render(createElement(StrictMode, null, createApp(new URL(window.location.href))));
 }

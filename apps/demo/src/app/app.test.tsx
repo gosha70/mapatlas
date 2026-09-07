@@ -15,13 +15,13 @@ import type { DemoStorage } from "./storage.js";
 /**
  * The shell, rendered.
  *
- * **`MapCanvas` is mocked here, and that is not a shortcut.** It constructs a real MapLibre map,
- * which needs a WebGL context this lane does not have; whether it draws is the browser lane's
- * question and is asserted there. What this lane can see is what the shell *hands* it — the
- * source stack, the terrain option — and that the shell reports its own state honestly.
+ * **`Loop` is doubled here, and that is not a shortcut.** It builds a real MapLibre map and a
+ * real recorder, neither of which exists in this lane; whether the loop works is `loop.test.tsx`'s
+ * question and the browser lane's. What this lane can see is the boundary the *shell* owns — the
+ * stack it resolves from the URL and hands down, and whether it reports its own state honestly.
  */
-vi.mock("@mapatlas/react", () => ({
-  MapCanvas: (props: Record<string, unknown>) =>
+vi.mock("./loop.js", () => ({
+  Loop: (props: Record<string, unknown>) =>
     createElement("div", {
       "data-testid": "map",
       "data-sources": String((props["sources"] as unknown[]).length),
@@ -111,7 +111,7 @@ describe("the shell reports what it can actually claim", () => {
     expect(app.textContent ?? "").toContain("no idb");
   });
 
-  it("hands MapCanvas the stack the URL asked for", async () => {
+  it("hands the loop the stack the URL asked for", async () => {
     const app = await render(
       url("?terrain=https://a.invalid/t.pmtiles&contours=https://a.invalid/c.pmtiles"),
       storage(),

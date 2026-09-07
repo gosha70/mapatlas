@@ -23,9 +23,11 @@ import { settleRender } from "./fixtures/rendered.js";
  * separate "the archives reached the canvas" from "a control mentioned them", so the claim below
  * rests on range reads past each archive's header, which nothing but the archive can produce.
  *
- * **What this increment does not claim.** No recording, no event, no photo, no review, no export
- * — those are increments 2 and 3, and a shell test that implied otherwise would be the "the map
- * rendered, therefore the loop works" trap the plan names by name.
+ * **What this file does not claim.** No recording, no event, no photo, no review, no export. The
+ * loop is `app-loop.e2e.ts`'s and export is not built yet (increment 3); a shell test that
+ * implied otherwise would be the "the map rendered, therefore the loop works" trap the plan names
+ * by name. The split is deliberate: this file must still fail for a shell reason alone, so that a
+ * broken loop and a broken shell are two different red tests rather than one.
  */
 
 test.use({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });

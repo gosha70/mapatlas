@@ -3,6 +3,7 @@
 import { assertCoverage, assertSnapshotFresh, loadCoverageSnapshot } from "./coverage.mjs";
 import {
   LICENCE_ENTRY_PATH,
+  declaredText,
   assertArchiveCarriesAttribution,
   assertNotForDistribution,
   assertArchiveCarriesLicence,
@@ -135,20 +136,48 @@ async function at(stage, work) {
  */
 export async function runBuild(paths, deps, options = {}) {
   const distributable = options.distributable ?? true;
-  let licenceText = "";
-  let attribution = {};
-  let roles = [];
-  if (distributable) {
-    licenceText = await at("licence", () => deps.readText(paths.licencePath));
-    attribution = await at("licence", () => deps.readJson(paths.attributionPath));
-    roles = await at("licence", () =>
+
+  /**
+   * Load one product's licence bundle: its documents, its declaration, its roles.
+   *
+   * **Per product, because obligations are per product** (ADR-0038). Copernicus declares four
+   * roles against one document; the basemap declares three against three, and none of
+   * Copernicus's four applies to it because ODbL has no words for them. A single shared pair of
+   * paths could only ever express one of the two.
+   */
+  const loadBundle = async (spec) => {
+    const documents = [];
+    for (const doc of spec.documents) {
+      documents.push({
+        id: doc.id,
+        entryPath: doc.entryPath,
+        text: await at("licence", () => deps.readText(doc.path)),
+      });
+    }
+    const declared = await at("licence", () => deps.readJson(spec.attributionPath));
+    const texts = Object.fromEntries(documents.map((d) => [d.id, d.text]));
+    const roles = await at("licence", () =>
       assertStringsBackedByLicence(
-        /** @type {Record<string, string>} */ (attribution),
-        licenceText,
-        paths.licencePath,
+        /** @type {Record<string, unknown>} */ (declared),
+        // One document keeps the single-text form, so its error messages still name the file
+        // rather than an id the reader has never seen.
+        documents.length === 1 ? documents[0].text : texts,
+        documents.length === 1 ? documents[0].id : spec.name,
+        spec.requiredRoles === undefined ? {} : { requiredRoles: spec.requiredRoles },
       ),
     );
-  }
+    return { name: spec.name, documents, declared, roles };
+  };
+
+  const copernicus = distributable
+    ? await loadBundle({
+        name: "the Copernicus licence",
+        documents: [
+          { id: paths.licencePath, path: paths.licencePath, entryPath: LICENCE_ENTRY_PATH },
+        ],
+        attributionPath: paths.attributionPath,
+      })
+    : undefined;
 
   // `parseRegionDeclaration` rather than `loadRegionDeclaration`: the latter reads the file
   // itself, which would put I/O inside a stage this module promises to keep injectable. Reading
@@ -197,6 +226,46 @@ export async function runBuild(paths, deps, options = {}) {
   );
 
   const addresses = [...tilesInRange(declaration.bounds, declaration.minZoom, declaration.maxZoom)];
+
+  /**
+   * The basemap, when the caller asked for one.
+   *
+   * **Optional, and absent is not a degraded build.** The terrain fixture predates it and its
+   * tests declare no basemap paths; a stage that ran unconditionally would put a network read
+   * into every one of them. `build-fixture.mjs` supplies the paths, so the committed entry point
+   * always builds it and the suite reaches the same code through a synthetic upstream.
+   */
+  const basemap =
+    paths.basemapArchivePath === undefined
+      ? undefined
+      : await at("basemap", async () => {
+          const pin = deps.readJson(paths.basemapPinPath);
+          const region = await deps.readBasemapRegion(pin, declaration.bounds);
+          return { pin, ...region };
+        });
+
+  const basemapLicence =
+    basemap === undefined || !distributable
+      ? undefined
+      : await loadBundle({
+          name: "the basemap licence bundle",
+          documents: paths.basemapLicenceDocuments,
+          attributionPath: paths.basemapAttributionPath,
+          requiredRoles: paths.basemapRoles,
+        });
+
+  /**
+   * The notice the extract carries — ODbL §4.3, not §4.2 (ADR-0038).
+   *
+   * The licence documents back the declaration and are **not** archive payload: §4.2's "a copy of
+   * this License or its URI" belongs to the clause about conveying a Database, and this extract is
+   * a Produced Work. What §4.3 requires is a notice naming the source and the licence, which is
+   * what this is.
+   */
+  const basemapNotice =
+    basemap === undefined || !distributable
+      ? undefined
+      : await at("licence", () => deps.readJson(paths.basemapNoticePath));
 
   const { surface, rasterTiles } = await at("tiles", () => {
     for (const crop of crops) {
@@ -271,6 +340,7 @@ export async function runBuild(paths, deps, options = {}) {
   const outputs = [
     {
       kind: "terrain",
+      licence: copernicus,
       path: distributable ? paths.terrainArchivePath : `${paths.terrainArchivePath}.dev`,
       tiles: rasterTiles,
       tileType: "png",
@@ -279,6 +349,7 @@ export async function runBuild(paths, deps, options = {}) {
     },
     {
       kind: "contours",
+      licence: copernicus,
       path: distributable ? paths.contourArchivePath : `${paths.contourArchivePath}.dev`,
       tiles: contours.tiles,
       tileType: "mvt",
@@ -286,6 +357,54 @@ export async function runBuild(paths, deps, options = {}) {
       // share an archive even setting the tile type aside.
       compression: "gzip",
     },
+    ...(basemap === undefined
+      ? []
+      : [
+          {
+            kind: "basemap",
+            licence: basemapLicence,
+            carriesDocuments: false,
+            path: distributable ? paths.basemapArchivePath : `${paths.basemapArchivePath}.dev`,
+            tiles: basemap.tiles,
+            tileType: "mvt",
+            // **Uncompressed, which is what was proved.** `getZxy` hands back the tile already
+            // decompressed, and `basemap-roundtrip.mjs` established byte identity through a
+            // `compression: "none"` write. Re-gzipping would be smaller and is not what the
+            // round-trip measured, so it is a change to make against a fresh proof rather than
+            // on the way past.
+            compression: "none",
+            // Upstream's whole metadata document travels: `vector_layers` is the v4 schema 4b's
+            // style layers are written against, `attribution` is a licence obligation, and the
+            // `planetiler:*` keys say which OSM replication these tiles came from. An extract
+            // that dropped them would render identically and be untraceable (ADR-0038).
+            // **`attribution` is a string.** PMTiles defines it as one, and upstream's is
+            // `<a …>© OpenStreetMap</a>` — which omits "contributors" and so satisfies nothing
+            // declared. Ours supersedes it and carries the §4.3 notice in one line; the
+            // structured evidence lives under `mapatlas:` keys, where a role map belongs.
+            attribution:
+              `${basemapNotice.credit} — data available under the ` +
+              `${basemapNotice.licence}, ${basemapNotice.licenceUri} — source ` +
+              `${basemapNotice.sourceUri}`,
+            extraMetadata: {
+              ...basemap.metadata,
+              "mapatlas:notice": basemapNotice,
+              "mapatlas:attribution": Object.fromEntries(
+                Object.entries(basemapLicence?.declared ?? {}).map(([role, value]) => [
+                  role,
+                  declaredText(value),
+                ]),
+              ),
+              "mapatlas:source": {
+                product: basemap.pin.product,
+                key: basemap.pin.key,
+                url: basemap.pin.url,
+                version: basemap.pin.version,
+                size: basemap.pin.size,
+                blake3: basemap.pin.blake3,
+              },
+            },
+          },
+        ]),
   ].map((output) => ({ ...output, partialPath: `${output.path}.partial` }));
 
   /**
@@ -312,33 +431,52 @@ export async function runBuild(paths, deps, options = {}) {
           // implementation detail of how complete tiles were produced, and publishing it would
           // invite requests for tiles outside the region.
           bounds: declaration.bounds,
-          minzoom: declaration.minZoom,
-          maxzoom: declaration.maxZoom,
+          ...(output.extraMetadata ?? {}),
+          minzoom: output.kind === "basemap" ? basemap.pin.minZoom : declaration.minZoom,
+          maxzoom: output.kind === "basemap" ? basemap.pin.maxZoom : declaration.maxZoom,
           tileType: output.tileType,
           compression: output.compression,
           // Passed rather than inferred from an empty licence: a writer guessing the mode from
           // whether a string is blank would put a development archive one truthiness bug away
           // from looking distributable.
           distributable,
-          licenceText,
-          attribution,
+          // Documents are archive payload only for a product whose terms require it
+          // (Copernicus). The basemap carries a notice instead, so it declares none.
+          licenceDocuments: output.carriesDocuments === false ? [] : output.licence?.documents,
+          // Flattened for the archive: a consumer reads role → text. The document each string is
+          // backed by is a property of the *declaration*, checked above, and is not something a
+          // recipient needs in order to display a credit.
+          attribution:
+            output.attribution ??
+            Object.fromEntries(
+              Object.entries(output.licence?.declared ?? {}).map(([role, value]) => [
+                role,
+                declaredText(value),
+              ]),
+            ),
         }),
       );
       // **Both archives are derived works**, so both carry the notices. Checking only the one
       // that happens to hold the elevation data would ship contours traced from the same source
       // with no attribution at all.
       if (distributable) {
-        await at("archive", () =>
-          assertArchiveCarriesLicence(archive, licenceText, LICENCE_ENTRY_PATH),
-        );
-        // The second half of obligation 1: the strings were checked against the document above,
+        // **Once per document.** A recipient bound by three documents needs all three; checking
+        // only the first would ship an archive whose share-alike obligation travels with no text
+        // to read it in.
+        for (const doc of output.carriesDocuments === false ? [] : output.licence.documents) {
+          await at("archive", () => assertArchiveCarriesLicence(archive, doc.text, doc.entryPath));
+        }
+        // The second half of obligation 1: the strings were checked against the documents above,
         // and this is where they are confirmed to have reached the archive rather than stopping
-        // at the validation.
+        // at the validation. **Every document is excluded**, or a string is found inside the very
+        // document it was drawn from and the check passes with nothing emitted.
         await at("archive", () =>
           assertArchiveCarriesAttribution(
             archive,
-            /** @type {Record<string, string>} */ (attribution),
-            LICENCE_ENTRY_PATH,
+            /** @type {Record<string, unknown>} */ (output.licence.declared),
+            output.carriesDocuments === false
+              ? []
+              : output.licence.documents.map((d) => d.entryPath),
           ),
         );
       } else {
@@ -405,13 +543,28 @@ export async function runBuild(paths, deps, options = {}) {
   }
 
   return {
-    roles,
+    // The roles each product's declaration carried. Reported per product now that a build can
+    // ship archives under different licences — a flat list would have said which obligations were
+    // checked without saying whose.
+    roles: copernicus?.roles ?? [],
     distributable,
     region: declaration.id,
     envelope,
     sourceCells,
     contourLevels: contours.levels,
     archives: outputs.map(({ kind, path, tiles }) => ({ kind, path, tiles: tiles.length })),
+    ...(basemap === undefined
+      ? {}
+      : {
+          basemap: {
+            pin: basemap.pin.key,
+            version: basemap.pin.version,
+            tiles: basemap.tiles.length,
+            absent: basemap.absent.length,
+            rangeRequests: basemap.read.requests,
+            rangeBytes: basemap.read.bytes,
+          },
+        }),
     lowest,
   };
 }

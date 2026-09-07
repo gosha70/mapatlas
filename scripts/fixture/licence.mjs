@@ -108,11 +108,14 @@ export function declaredText(value) {
  * Which document backs a declared string.
  *
  * A plain string names no document and is backed by the bundle's only one — the single-document
- * form every existing product uses. A `{ document, text }` pair names it, which is what a product
- * whose obligations come from **two** sources needs: the basemap's credit line is required by
- * OpenStreetMap's copyright page and its share-alike wording is in ODbL §4.4, and neither
- * document contains the other's sentence. Concatenating them would let every string match
- * something and check nothing.
+ * form Copernicus uses. A `{ document, text }` pair names it, which is what a product whose
+ * obligations are stated in **more than one** source needs: the basemap's credit is mandated by
+ * the OSMF attribution guidelines while the sentence naming ODbL is on OpenStreetMap's copyright
+ * page, and neither document contains the other's. Concatenating them would let every string
+ * match something and check nothing.
+ *
+ * Backing a string is **not** the same as carrying the document: which documents an archive
+ * ships is each product's terms (ADR-0038), and the basemap ships none.
  */
 function documentFor(role, value, documents, licenceSource) {
   const ids = Object.keys(documents);

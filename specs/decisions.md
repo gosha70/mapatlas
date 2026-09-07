@@ -1306,7 +1306,7 @@ acceptable"* — so that is where the credit is backed. This is the substitution
 exists to catch, arriving from the declaration side rather than the document side; it was caught
 in review before the build emitted anything.
 
-The three roles are what the two documents actually contain, checked verbatim; **no role is
+The two roles are what those documents actually contain, checked verbatim; **no role is
 invented to make the set look complete**, and none of ADR-0024's four Copernicus roles applies
 here because ODbL has no words for them. All three documents are checked in under
 `fixtures/basemap/licence/` with provenance — URL, retrieval date, SHA-256, and for the OSM page

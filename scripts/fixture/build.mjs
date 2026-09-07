@@ -240,6 +240,22 @@ export async function runBuild(paths, deps, options = {}) {
       ? undefined
       : await at("basemap", async () => {
           const pin = deps.readJson(paths.basemapPinPath);
+          /**
+           * A distributable basemap **must** record the hash of the extract it produces.
+           *
+           * Checked here, before the read, for two reasons. It is the cheap check — refusing a
+           * misdeclared pin after a two-megabyte range read wastes the read and says nothing
+           * extra. And it must not be *optional*: an integrity check that a pin can switch off
+           * by omitting a field is one that silently stops holding, which is the failure it
+           * exists to prevent rather than a lenient version of it.
+           */
+          if (distributable && !/^[0-9a-f]{64}$/.test(String(pin.extractSha256 ?? ""))) {
+            throw new Error(
+              `the basemap pin records extractSha256 ${JSON.stringify(pin.extractSha256)}, which ` +
+                `is not a SHA-256 — a distributable extract must declare the bytes it is pinned ` +
+                `to reproduce, and a pin that omits it would publish unchecked`,
+            );
+          }
           const region = await deps.readBasemapRegion(pin, declaration.bounds);
           return { pin, ...region };
         });
@@ -381,13 +397,27 @@ export async function runBuild(paths, deps, options = {}) {
             // `<a …>© OpenStreetMap</a>` — which omits "contributors" and so satisfies nothing
             // declared. Ours supersedes it and carries the §4.3 notice in one line; the
             // structured evidence lives under `mapatlas:` keys, where a role map belongs.
-            attribution:
-              `${basemapNotice.credit} — data available under the ` +
-              `${basemapNotice.licence}, ${basemapNotice.licenceUri} — source ` +
-              `${basemapNotice.sourceUri}`,
+            //
+            // **Only in a distributable build.** A development archive carries no licence
+            // notice, exactly as it carries no licence: it trades those for the
+            // NOT-FOR-DISTRIBUTION marker, and constructing a production notice for it both
+            // crashed (`basemapNotice` is deliberately absent) and would have labelled an
+            // archive nobody may publish as though it were publishable.
+            ...(distributable
+              ? {
+                  attribution:
+                    `${basemapNotice.credit} — data available under the ` +
+                    `${basemapNotice.licence}, ${basemapNotice.licenceUri} — source ` +
+                    `${basemapNotice.sourceUri}`,
+                }
+              : {}),
+            // The recorded hash belongs to the distributable extract. A `.dev` archive is
+            // intentionally a different artefact, so enforcing the production hash against it
+            // would fail every development build for being what it is meant to be.
+            ...(distributable ? { expectedSha256: basemap.pin.extractSha256 } : {}),
             extraMetadata: {
               ...basemap.metadata,
-              "mapatlas:notice": basemapNotice,
+              ...(distributable ? { "mapatlas:notice": basemapNotice } : {}),
               "mapatlas:attribution": Object.fromEntries(
                 Object.entries(basemapLicence?.declared ?? {}).map(([role, value]) => [
                   role,
@@ -440,9 +470,11 @@ export async function runBuild(paths, deps, options = {}) {
           // whether a string is blank would put a development archive one truthiness bug away
           // from looking distributable.
           distributable,
-          // Documents are archive payload only for a product whose terms require it
-          // (Copernicus). The basemap carries a notice instead, so it declares none.
-          licenceDocuments: output.carriesDocuments === false ? [] : output.licence?.documents,
+          // The licence document is archive payload only for a product whose terms require it
+          // (Copernicus, one document). The basemap carries a §4.3 notice instead, so it passes
+          // none — and the writer takes one or none, never a list.
+          licenceText:
+            output.carriesDocuments === false ? undefined : output.licence?.documents[0]?.text,
           // Flattened for the archive: a consumer reads role → text. The document each string is
           // backed by is a property of the *declaration*, checked above, and is not something a
           // recipient needs in order to display a credit.
@@ -456,14 +488,16 @@ export async function runBuild(paths, deps, options = {}) {
             ),
         }),
       );
-      // **Both archives are derived works**, so both carry the notices. Checking only the one
+      // **Both Copernicus archives are derived works**, so both carry the notices. Checking only the one
       // that happens to hold the elevation data would ship contours traced from the same source
       // with no attribution at all.
       if (distributable) {
-        // **Once per document.** A recipient bound by three documents needs all three; checking
-        // only the first would ship an archive whose share-alike obligation travels with no text
-        // to read it in.
-        for (const doc of output.carriesDocuments === false ? [] : output.licence.documents) {
+        if (output.carriesDocuments !== false) {
+          // **One document, the one its terms require.** Copernicus's licence must travel with
+          // its archive; the basemap's do not, because ODbL §4.3 asks a Produced Work for a
+          // notice rather than the licence (ADR-0038). A bundle's other documents are validation
+          // evidence for the declaration and are never payload.
+          const [doc] = output.licence.documents;
           await at("archive", () => assertArchiveCarriesLicence(archive, doc.text, doc.entryPath));
         }
         // The second half of obligation 1: the strings were checked against the documents above,
@@ -481,6 +515,37 @@ export async function runBuild(paths, deps, options = {}) {
         );
       } else {
         await at("archive", () => assertNotForDistribution(archive));
+      }
+
+      /**
+       * The extract must hash to what the pin records — **before promotion**, so a mismatch
+       * promotes no new archive. A previous build's finalised pair is left as it was: rollback
+       * removes what *this* build published, and before promotion begins there is nothing of
+       * this build's to remove.
+       *
+       * This is the integrity signal for what this build makes. The pin's BLAKE3 identifies the
+       * 137 GB upstream and is checked against its published metadata row, which is not
+       * source-byte verification; this is. A change in the upstream's tiles, in the tile set, or
+       * in what the metadata carries all move it, and none of them announces itself otherwise —
+       * the archive is still a valid archive and still renders.
+       *
+       * **Present for every distributable basemap**, because the pin is required to declare a
+       * well-formed one before the read — including the suite's synthetic fixture, which records
+       * its own. Absent only for development output, which is intentionally a different artefact
+       * and would fail a production hash for being exactly what it is meant to be.
+       */
+      if (output.expectedSha256 !== undefined) {
+        // Reached for every distributable basemap: the pin was required to declare this above,
+        // so the branch is not a way to skip the check but the place it runs.
+        await at("archive", () => {
+          const actual = deps.io.sha256(deps.io.readFileSync(output.partialPath));
+          if (actual !== output.expectedSha256) {
+            throw new Error(
+              `${output.kind} hashed ${actual}, but the pin records ${output.expectedSha256} — ` +
+                `the extract is not the one this build is pinned to reproduce`,
+            );
+          }
+        });
       }
     }
     // Promotion is a sequence of renames, and a filesystem offers no way to make several of them

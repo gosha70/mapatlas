@@ -176,17 +176,17 @@ function harness(overrides = {}) {
           entries: () =>
             m.distributable
               ? [
-                  ...(m.licenceDocuments ?? []).map((d) => ({ path: d.entryPath, text: d.text })),
+                  { path: "LICENSE", text: m.licenceText },
                   {
                     path: "metadata.json",
-                    text: JSON.stringify({ ...m, licenceDocuments: undefined }),
+                    text: JSON.stringify({ ...m, licenceText: undefined }),
                   },
                 ]
               : [
                   { path: "NOT-FOR-DISTRIBUTION", text: "dev" },
                   {
                     path: "metadata.json",
-                    text: JSON.stringify({ ...m, licenceDocuments: undefined }),
+                    text: JSON.stringify({ ...m, licenceText: undefined }),
                   },
                 ],
         }))
@@ -946,7 +946,7 @@ describe("the archive must carry what it was built under", () => {
     // every earlier check passes. Only an assertion over what the archive *emits* catches it.
     const { deps } = harness({
       writeArchive: (_p, _t, m) => ({
-        entries: () => (m.licenceDocuments ?? []).map((d) => ({ path: d.entryPath, text: d.text })),
+        entries: () => [{ path: "LICENSE", text: m.licenceText }],
       }),
     });
     withSnapshot(deps, ["N45E006"]);
@@ -965,7 +965,7 @@ describe("the archive must carry what it was built under", () => {
         received = m.attribution;
         return {
           entries: () => [
-            ...(m.licenceDocuments ?? []).map((d) => ({ path: d.entryPath, text: d.text })),
+            { path: "LICENSE", text: m.licenceText },
             { path: "meta", text: Object.values(m.attribution).join(" ") },
           ],
         };
@@ -1054,7 +1054,7 @@ describe("the archive must carry what it was built under", () => {
     const { deps } = harness({
       writeArchive: (_p, _t, m) => ({
         entries: () => [
-          ...(m.licenceDocuments ?? []).map((d) => ({ path: d.entryPath, text: d.text })),
+          { path: "LICENSE", text: m.licenceText },
           { path: "meta", text: Object.values(m.attribution).join(" ") },
         ],
       }),

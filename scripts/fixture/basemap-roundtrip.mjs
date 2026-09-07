@@ -18,7 +18,11 @@
  * 4. Every tile upstream has is written and read back through `pmtiles` 4.5.0 **byte for byte**;
  *    coordinates never written stay absent.
  * 5. The output header — bounds, zoom range, tile type, compression — and the **whole metadata
- *    document**, including v4 `vector_layers`, attribution and Planetiler provenance, survive.
+ *    document**, including v4 `vector_layers`, attribution and Planetiler provenance, are what
+ *    the intended transformation says they should be. Not all of these *survive*: bounds and the
+ *    zoom range are narrowed to the declared region, and the stored compression is **chosen**
+ *    rather than carried — upstream stores gzip and this extract stores none. Only the metadata
+ *    document and the tile type pass through unchanged.
  * 6. The extract is byte-deterministic: its SHA-256 is compared with a recorded constant.
  *
  * **File size is deliberately not one of those checks.** `s2-pmtiles` pads the region before the
@@ -30,11 +34,14 @@
  * **Nothing is committed and nothing is written into the repo** — the extract goes to a temporary
  * directory and is removed in a `finally`, per `CLAUDE.md`'s no-bundled-tiles rule.
  *
- * **`--mutate=` exists so the proof can be disproved.** `drop`, `alter`, `invent`, `header` and
- * `metadata` each corrupt the extract between write and read-back; a run with any of them must
- * fail. A comparison that cannot fail is not evidence.
+ * **`--mutate=` exists so the proof can be disproved.** Each of `drop`, `alter`, `invent`,
+ * `header`, `metadata` and `compression` changes one property the proof claims, and a run with
+ * any of them must fail. They are not all corruption: `compression` produces a perfectly valid
+ * gzip archive that every tile and metadata comparison passes, and it fails because the encoding
+ * is not the one this build declares. A comparison that cannot fail is not evidence.
  *
- * Run: `node scripts/fixture/basemap-roundtrip.mjs [--mutate=drop|alter|invent|header|metadata]`
+ * Run: `node scripts/fixture/basemap-roundtrip.mjs
+ * [--mutate=drop|alter|invent|header|metadata|compression]`
  */
 
 import { createHash } from "node:crypto";
@@ -263,6 +270,7 @@ export async function runProof({ mutate, log = console.log } = {}) {
     let writing = present;
     let metadata = extractMetadata(upstreamMetadata, region);
     let tileType = "mvt";
+    let compression = "none";
 
     if (mutate === "drop") writing = present.slice(1);
     if (mutate === "alter") {
@@ -281,16 +289,14 @@ export async function runProof({ mutate, log = console.log } = {}) {
       writing = [...present, { ...stray, bytes: present[0].bytes }];
     }
     if (mutate === "header") tileType = "png";
+    if (mutate === "compression") compression = "gzip";
     if (mutate === "metadata") {
       metadata = { ...metadata };
       delete metadata["vector_layers"];
     }
     if (mutate !== undefined) log(`MUTATION      ${mutate}`);
 
-    const written = await writeArchive(path, writing, metadata, {
-      tileType,
-      compression: "none",
-    });
+    const written = await writeArchive(path, writing, metadata, { tileType, compression });
 
     const bytes = await readFile(path);
     const size = (await stat(path)).size;
@@ -350,6 +356,28 @@ export async function runProof({ mutate, log = console.log } = {}) {
     if (outHeader.tileType !== upstreamHeader.tileType) {
       failures.push(
         `header tileType ${String(outHeader.tileType)} != upstream ${String(upstreamHeader.tileType)}`,
+      );
+    }
+    /**
+     * Compression, asserted rather than named — and it pins an **encoding choice**, not validity.
+     *
+     * Two earlier versions of this comment were wrong, in opposite directions. The first claimed
+     * a gzip label over raw tiles; `writeArchive` asks the writer to gzip, so `--mutate=compression`
+     * yields a perfectly valid archive — 1,138,892 bytes, every tile and metadata comparison
+     * passing. The second said the encoding could change "with nothing red"; it could not, because
+     * the recorded SHA-256 below moves with it.
+     *
+     * What this assertion is actually for: it states the `none` policy **semantically**, where the
+     * hash only pins whatever bytes the last baseline happened to have. A deliberate re-baseline
+     * of that hash — after a legitimate change elsewhere — would otherwise bless a changed
+     * encoding in passing, and the failure would read as "the extract moved" rather than "the
+     * extract is stored differently now". `getZxy` decompresses on the way out, so the byte
+     * comparison above cannot see this at all.
+     */
+    if (outHeader.tileCompression !== 1) {
+      failures.push(
+        `header tileCompression ${String(outHeader.tileCompression)}, expected 1 (none) — the ` +
+          `extract's encoding is pinned, and a change to it moves the archive's bytes`,
       );
     }
     const bounds = [outHeader.minLon, outHeader.minLat, outHeader.maxLon, outHeader.maxLat];

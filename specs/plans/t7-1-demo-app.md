@@ -217,7 +217,7 @@ silently.
   > documents stay checked in as **provenance for the declaration**, which is what makes those
   > strings verifiable as quoted rather than recalled.
 - **The licence documents still have to be named, because the mirror ships none** — they back the
-  declaration even though the archive no longer carries them.** `LICENSE` is 404
+  declaration even though the archive no longer carries them. `LICENSE` is 404
   there, and the README says only "Produced Works of the ODbL" with a link — but obligation 1's
   rule needs a checked-in document to compare strings against verbatim. The ADR entry therefore
   names them: the **ODbL 1.0 text from `opendatacommons.org`**, and the attribution line

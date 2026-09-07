@@ -258,30 +258,19 @@ export const METADATA_ENTRY_PATH = "metadata.json";
  */
 export function createArchiveWriter() {
   return async (path, tiles, meta) => {
-    const {
-      licenceText,
-      licenceDocuments,
-      attribution,
-      distributable,
-      tileType,
-      compression,
-      ...rest
-    } = meta;
+    const { licenceText, attribution, distributable, tileType, compression, ...rest } = meta;
     /**
-     * The licence documents this archive carries, as `{ id, text, entryPath }`.
+     * Whether this archive carries a licence document at all.
      *
-     * One document stays exactly as it was: its metadata key is `license` and its entry is
-     * `LICENSE`, so the Copernicus archives are byte-identical to before. A product with several
-     * (ADR-0038's basemap has three) gets one key and one entry per document, named by the ADR —
-     * because a recipient bound by three documents needs all three, and because the attribution
-     * scan must exclude every one of them or a string is found inside the document it came from.
+     * **One document or none — never a list.** An earlier version took an array of documents and
+     * wrote one metadata key and one entry per member, built for a design that required the
+     * basemap to carry three. That design was overturned: ODbL §4.3 asks a Produced Work for a
+     * *notice*, not the licence (ADR-0038), so the basemap carries none and Copernicus carries
+     * exactly the one its terms require. The generalisation outlived its reason, and a writer
+     * able to embed arbitrary documents is also a writer able to embed 25 KB of them — which is
+     * how the metadata comes to exceed the root-directory budget `s2-pmtiles` hangs on.
      */
-    const documents =
-      licenceDocuments ??
-      (licenceText === undefined
-        ? []
-        : [{ id: "licence", text: licenceText, entryPath: LICENCE_ENTRY_PATH }]);
-    const keyFor = (doc) => (doc.entryPath === LICENCE_ENTRY_PATH ? "license" : doc.entryPath);
+    const carriesLicence = licenceText !== undefined;
     // A development archive carries the marker **in the archive**, not merely in its filename.
     // The `.dev` suffix is a naming convention and a rename away from being nothing; a key
     // inside the metadata travels with the bytes. That is the obligation a non-distributable
@@ -295,16 +284,14 @@ export function createArchiveWriter() {
     await writeArchive(
       path,
       tiles,
-      distributable
-        ? { ...metadata, ...Object.fromEntries(documents.map((d) => [keyFor(d), d.text])) }
-        : metadata,
+      distributable && carriesLicence ? { ...metadata, license: licenceText } : metadata,
       { tileType, compression },
     );
     return {
       entries: () =>
         distributable
           ? [
-              ...documents.map((d) => ({ path: d.entryPath, text: d.text })),
+              ...(carriesLicence ? [{ path: LICENCE_ENTRY_PATH, text: licenceText }] : []),
               { path: METADATA_ENTRY_PATH, text: JSON.stringify(metadata) },
             ]
           : [

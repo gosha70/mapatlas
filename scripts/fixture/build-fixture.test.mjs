@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -47,6 +48,8 @@ const REGION = {
   contourIntervalJustification: "100 m across the synthetic ramp gives several levels",
 };
 const SPACING = 1 / 3600;
+/** The synthetic basemap extract's SHA-256, recorded rather than derived at run time. */
+const SYNTHETIC_EXTRACT_SHA256 = "42b0a1f51416c484cb37e206a180c6b7be4996496ba10a225669ed567b404826";
 /**
  * Well clear of the floor, and varying enough to carry contours.
  *
@@ -159,7 +162,13 @@ function openArchive(path) {
  * size and hash — a stage only a live run can reach is a stage CI never runs, and one reached
  * through a different code path proves something about that path instead.
  */
+let syntheticBasemapSeq = 0;
 async function syntheticBasemap(dir) {
+  // **A fresh path per call.** The sink appends and refuses nothing, so reusing one name made
+  // each call extend the previous test's upstream — the archive differed per test and its hash
+  // was a function of call order rather than of the inputs. A recorded hash cannot mean anything
+  // against a fixture that is not the same twice.
+  const seq = (syntheticBasemapSeq += 1);
   const bounds = REGION.bounds;
   const minZoom = 14;
   const maxZoom = 14;
@@ -171,7 +180,7 @@ async function syntheticBasemap(dir) {
     // rather than pass a count.
     bytes: Uint8Array.from([z, x & 0xff, y & 0xff, 7]),
   }));
-  const upstreamPath = join(dir, "upstream.pmtiles");
+  const upstreamPath = join(dir, `upstream-${String(seq)}.pmtiles`);
   await writeArchive(
     upstreamPath,
     tiles,
@@ -193,8 +202,14 @@ async function syntheticBasemap(dir) {
     metadataUrl: "https://upstream.invalid/builds.json",
     minZoom,
     maxZoom,
+    // **Recorded, not learned.** An earlier version of the positive test built once, hashed
+    // whatever that run produced and then blessed it — which any deterministic defect passes
+    // twice, because the oracle is the implementation's own output. This value was taken once
+    // and written down; a change in the stage, the metadata or the tiles moves it and the test
+    // says so.
+    extractSha256: SYNTHETIC_EXTRACT_SHA256,
   };
-  const pinPath = join(dir, "pin.json");
+  const pinPath = join(dir, `pin-${String(seq)}.json`);
   writeFileSync(pinPath, JSON.stringify(pin));
 
   const fetchImpl = (url, init) => {
@@ -223,6 +238,17 @@ async function syntheticBasemap(dir) {
   };
   return { pin, pinPath, fetchImpl, tiles };
 }
+
+/** The basemap paths a synthetic run needs, in one place rather than five. */
+const withBasemap = (base, basemap, archivePath) => ({
+  ...base,
+  basemapArchivePath: archivePath,
+  basemapPinPath: basemap.pinPath,
+  basemapAttributionPath: DEFAULT_PATHS.basemapAttributionPath,
+  basemapNoticePath: DEFAULT_PATHS.basemapNoticePath,
+  basemapRoles: DEFAULT_PATHS.basemapRoles,
+  basemapLicenceDocuments: DEFAULT_PATHS.basemapLicenceDocuments,
+});
 
 describe("the committed entry point produces an archive", () => {
   // What this establishes and what it does not. It proves the **assembled, committed path**
@@ -313,6 +339,111 @@ describe("the committed entry point produces an archive", () => {
     expect(JSON.stringify(metadata)).not.toContain(
       "Open Data Commons Open Database License (ODbL)".repeat(1) + " Text",
     );
+  });
+
+  it("refuses an extract that does not hash to the pin, and leaves nothing behind", async () => {
+    // **The integrity signal for what this build makes.** The pin's BLAKE3 identifies the
+    // upstream; this is the check on the artefact. A wrong hash must fail *before* promotion, or
+    // the failure ships an archive nobody vouched for.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    writeFileSync(
+      basemap.pinPath,
+      JSON.stringify({ ...basemap.pin, extractSha256: "0".repeat(64) }),
+    );
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+    const out = join(dir, "out", "basemap-badhash.pmtiles");
+
+    await expect(
+      buildFixture({
+        paths: {
+          ...paths,
+          basemapArchivePath: out,
+          basemapPinPath: basemap.pinPath,
+          basemapAttributionPath: DEFAULT_PATHS.basemapAttributionPath,
+          basemapNoticePath: DEFAULT_PATHS.basemapNoticePath,
+          basemapRoles: DEFAULT_PATHS.basemapRoles,
+          basemapLicenceDocuments: DEFAULT_PATHS.basemapLicenceDocuments,
+        },
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/not the one this build is pinned to reproduce/);
+
+    // Neither the promoted archive nor the partial survives: a failed build that left either
+    // would be indistinguishable from a successful one to anything reading the path.
+    expect(existsSync(out), "a failed build promoted its archive").toBe(false);
+    expect(existsSync(`${out}.partial`), "the partial outlived the failure").toBe(false);
+  });
+
+  it("accepts the extract when it hashes to the recorded value", async () => {
+    // The positive half, against a hash **written down** rather than learned from a first run of
+    // the same implementation — otherwise a deterministic defect satisfies its own oracle.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+    const out = join(dir, "out", "basemap-hash-ok.pmtiles");
+
+    await expect(
+      buildFixture({ paths: withBasemap(paths, basemap, out), fetchImpl }),
+    ).resolves.toBeDefined();
+
+    expect(createHash("sha256").update(readFileSync(out)).digest("hex")).toBe(
+      SYNTHETIC_EXTRACT_SHA256,
+    );
+  });
+
+  it("refuses a distributable pin that records no extract hash at all", async () => {
+    // **The bypass this closes.** While the check was conditional on the field being present, a
+    // pin could switch integrity off by omitting it — an assertion that silently stops holding.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    const withoutHash = { ...basemap.pin };
+    delete withoutHash.extractSha256;
+    writeFileSync(basemap.pinPath, JSON.stringify(withoutHash));
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+
+    await expect(
+      buildFixture({
+        paths: withBasemap(paths, basemap, join(dir, "out", "basemap-nohash.pmtiles")),
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/must declare the bytes it is pinned to reproduce/);
+  });
+
+  it("builds all three development archives, with the marker and no notice", async () => {
+    // `--not-for-distribution` is a supported command, and it crashed: the production notice was
+    // built unconditionally while being deliberately absent in this mode. A development archive
+    // trades the licence notices for the marker; labelling it with a production credit would say
+    // an unpublishable archive was ready to publish.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+    const out = join(dir, "out", "dev-basemap.pmtiles");
+
+    const report = await buildFixture({
+      paths: withBasemap(paths, basemap, out),
+      distributable: false,
+      fetchImpl,
+    });
+
+    expect(report.distributable).toBe(false);
+    expect(report.archives.map((a) => a.kind)).toEqual(["terrain", "contours", "basemap"]);
+    for (const archive of report.archives) {
+      expect(archive.path.endsWith(".dev"), `${archive.kind} is not a .dev archive`).toBe(true);
+      expect(existsSync(archive.path)).toBe(true);
+    }
+
+    const metadata = await openArchive(`${out}.dev`).getMetadata();
+    expect(metadata["NOT-FOR-DISTRIBUTION"]).toBeDefined();
+    expect(
+      metadata.attribution,
+      "a development archive carried a production credit",
+    ).toBeUndefined();
+    expect(metadata["mapatlas:notice"]).toBeUndefined();
   });
 
   it("refuses an upstream that is not the pinned build", async () => {

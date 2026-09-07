@@ -217,15 +217,23 @@ export function assertArchiveCarriesAttribution(
   licencePath = LICENCE_ENTRY_PATH,
 ) {
   const entries = [...archive.entries()];
-  // The licence entry is excluded, and that exclusion is the whole check. Every declared
-  // string is drawn *from* the licence document, so scanning an archive that carries the
-  // licence would find all of them inside it and pass without a single credit having been
+  // The licence entries are excluded, and that exclusion is the whole check. Every declared
+  // string is drawn *from* a licence document, so scanning an archive that carries the
+  // documents would find all of them inside and pass without a single credit having been
   // emitted — a check satisfied by the presence of the very thing it is meant to be
   // independent of. Attribution must appear in addition to the licence, not within it.
-  const carrying = entries.filter((entry) => entry.path !== licencePath);
+  //
+  // **Every document, not just the first.** A product with two documents excluded only one of
+  // them, so a string drawn from the second was found *in the second* and passed vacuously —
+  // the precise failure this exclusion exists to prevent, reintroduced by having more than one
+  // document. Accepting a list is what keeps the check meaning the same thing for both.
+  const licencePaths = new Set(Array.isArray(licencePath) ? licencePath : [licencePath]);
+  const carrying = entries.filter((entry) => !licencePaths.has(entry.path));
   const emitted = normaliseWhitespace(carrying.map((entry) => entry.text).join(" "));
   const held =
-    carrying.length === 0 ? `(only ${licencePath})` : carrying.map((e) => e.path).join(", ");
+    carrying.length === 0
+      ? `(only ${[...licencePaths].join(", ")})`
+      : carrying.map((e) => e.path).join(", ");
 
   for (const role of Object.keys(declared)) {
     const needle = normaliseWhitespace(declaredText(declared[role]) ?? "");

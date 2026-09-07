@@ -367,3 +367,67 @@ describe("a product declares its own roles and its own documents", () => {
     ).toThrow(/never reaches the archive/);
   });
 });
+
+describe("two licence documents in one archive", () => {
+  const ODBL =
+    "4.4 Share alike. Any Derivative Database that You Publicly Use must be only under the terms of";
+  const OSM =
+    "You are free to adapt our data, as long as you credit OpenStreetMap and its contributors.";
+
+  it("does not let a document vouch for a string drawn from it", () => {
+    // **The vacuity a second document reintroduces.** The credit is declared from OSM-COPYRIGHT
+    // and the archive carries OSM-COPYRIGHT — so a check that excluded only LICENSE would find
+    // the string inside the document it came from and pass with no credit emitted anywhere.
+    const archive = {
+      entries: () => [
+        { path: "LICENSE", text: ODBL },
+        { path: "LICENSE-OSM-COPYRIGHT", text: OSM },
+      ],
+    };
+
+    expect(() =>
+      assertArchiveCarriesAttribution(
+        archive,
+        {
+          credit: { document: "OSM-COPYRIGHT", text: "credit OpenStreetMap and its contributors" },
+        },
+        ["LICENSE", "LICENSE-OSM-COPYRIGHT"],
+      ),
+    ).toThrow(/never reaches the archive/);
+  });
+
+  it("passes once the credit is emitted outside both documents", () => {
+    const archive = {
+      entries: () => [
+        { path: "LICENSE", text: ODBL },
+        { path: "LICENSE-OSM-COPYRIGHT", text: OSM },
+        { path: "METADATA", text: '{"attribution":"credit OpenStreetMap and its contributors"}' },
+      ],
+    };
+
+    expect(() =>
+      assertArchiveCarriesAttribution(
+        archive,
+        {
+          credit: { document: "OSM-COPYRIGHT", text: "credit OpenStreetMap and its contributors" },
+        },
+        ["LICENSE", "LICENSE-OSM-COPYRIGHT"],
+      ),
+    ).not.toThrow();
+  });
+
+  it("still takes a single path, so existing callers are unchanged", () => {
+    const archive = {
+      entries: () => [
+        { path: "LICENSE", text: ODBL },
+        { path: "METADATA", text: "credit OpenStreetMap and its contributors" },
+      ],
+    };
+
+    expect(() =>
+      assertArchiveCarriesAttribution(archive, {
+        credit: "credit OpenStreetMap and its contributors",
+      }),
+    ).not.toThrow();
+  });
+});

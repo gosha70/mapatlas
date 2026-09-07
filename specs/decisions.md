@@ -1207,3 +1207,83 @@ Fixing this is also what made T7.1's browser evidence honest. The pixel differen
 compared a map declaring two archives against one declaring none, and passed on the attribution
 control's text alone — zero tiles drawn either way. The claim now rests on range reads past each
 archive's header, which nothing but the archive can produce.
+
+## ADR-0038 — Demo basemap: Protomaps build 20260811, ODbL as a Produced Work
+
+**Status.** Decided.
+
+**Decision.** The demo's basemap is the **Protomaps Basemap**, build **`20260811.pmtiles`**,
+version **4.15.1**, read by HTTP range request at build time and re-written into
+`build/fixture/basemap.pmtiles` cut to the declared region. Nothing is fetched from a third party
+at runtime, and no archive is committed.
+
+**A named product, not a named project** — ADR-0024's first criterion, applied here. "Protomaps"
+is a project with several tilesets; this is the OpenStreetMap **basemap**, and the *build* is part
+of the identity because the schema moves between major versions: v4.15.1 is v4-schema, and the
+Source Cooperative mirror was observed serving v3. A style written against the wrong schema
+renders nothing and reads as a styling bug.
+
+**The pin, recorded as ADR-0024 records the Copernicus ETag.**
+
+| | |
+| --- | --- |
+| key | `20260811.pmtiles` |
+| version | 4.15.1 |
+| size | 137,295,889,397 bytes |
+| BLAKE3 (published) | `b2aa7f4b1858ec873bd2fb6aff1393ce330ad4d236f2b4f9ad1875e910c1eb8e` |
+| metadata | `https://build-metadata.protomaps.dev/builds.json` |
+
+**Why a superseded version's final build rather than the newest.** Retention on the daily bucket
+is the past week plus the final build of each superseded patch version. A pin on the current
+version's daily ages out in a week; `20260811` is the last build of 4.15.1 and therefore stays
+addressable. **"Too old" is the upstream's own answer, not a local expiry**: the pin has aged out
+exactly when its row is no longer listed, and the build fails by name at that point.
+
+**What is verified, and what is not.** The metadata row's size, BLAKE3 and version are compared
+before a single tile is read, and every range response's `Content-Range` total is checked against
+the pinned size — so a different archive served at the same URL fails on the first read rather
+than producing a plausible extract. **Comparing a metadata row is not source-byte verification**
+and is not described as such: verifying the published BLAKE3 would mean hashing 137 GB to cut
+2 MB. The integrity signal for what this build produces is the **extract's own SHA-256**, which is
+the byte-for-byte reproducibility ADR-0024 asks for applied to the artefact we actually make.
+See the amendment in `specs/plans/t7-1-demo-app.md`, which corrects the bar that asked for the
+whole-file form.
+
+**Licence: ODbL 1.0, and the extract is a Produced Work.** OpenStreetMap data is licensed under
+the Open Data Commons Open Database License by the OSM Foundation. The tiles we cut are a Produced
+Work created from that database.
+
+**Share-alike travels with the extract.** In those words: anyone who takes this archive and builds
+a derivative database from it is bound by ODbL §4.4 exactly as we are, and may distribute the
+result only under the same licence. That obligation is not discharged by an on-map credit, which
+is why the archive carries the licence documents themselves and not merely a notice.
+
+**Two documents, because two products state the obligations** — and neither contains the other's
+sentence, so neither alone can back the declaration:
+
+| role | backed by | archive entry |
+| --- | --- | --- |
+| `credit` | `OSM-COPYRIGHT` | — |
+| `openDataNotice` | `OSM-COPYRIGHT` | — |
+| `shareAlike` | `ODbL-1.0` | — |
+| the licence itself | `ODbL-1.0` | `LICENSE` |
+| the credit requirement | `OSM-COPYRIGHT` | `LICENSE-OSM-COPYRIGHT` |
+
+The three roles are what the two documents actually contain, checked verbatim; **no role is
+invented to make the set look complete**, and none of ADR-0024's four Copernicus roles applies
+here because ODbL has no words for them. Both documents are checked in under
+`fixtures/basemap/licence/` with provenance — URL, retrieval date, SHA-256, and for the OSM page
+the raw HTML's hash beside the extracted text so the transform can be repeated against the same
+bytes. ODbL is served as `text/plain` and is stored byte for byte with no extraction step.
+
+**Both documents are excluded from the attribution scan.** A declared string is drawn *from* a
+document, so an archive carrying that document would satisfy the check with the string found
+inside the very thing it is meant to be independent of. Excluding only the first document
+reintroduces that vacuity for the second, which is why the check takes every licence path.
+
+**Consequences.** The demo's basemap source is declared `offlineLicensed: true` because it is
+self-hosted from our own extract (ADR-0033), and the attribution line is rendered verbatim as an
+addition to the existing DEM attribution, never as a replacement — two derived works, two
+notices. Style layers are written against **the extract's own `vector_layers`**, which is how the
+v3/v4 question is settled structurally rather than by reading documentation.
+

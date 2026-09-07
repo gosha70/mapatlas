@@ -539,3 +539,68 @@ describe("a rejected event write leaves the trip operable", () => {
     expect(app.querySelector("#recorder-status")?.getAttribute("data-events")).toBe("1");
   });
 });
+
+describe("export", () => {
+  it("is offered only once there is a finished trip to export", async () => {
+    // Exporting mid-recording would have to invent a track: `useTrackRecorder` publishes none
+    // until `stop()` resolves, so the control cannot mean anything before then.
+    const app = await render();
+    expect(app.querySelector("#export-geojson")).toBeNull();
+
+    await click("#record-start");
+    expect(app.querySelector("#export-geojson"), "offered with no trip to export").toBeNull();
+
+    await click("#record-stop");
+    expect(app.querySelector("#export-geojson")).not.toBeNull();
+  });
+
+  it("exports the reviewed trip and says what it wrote", async () => {
+    const created: string[] = [];
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => {
+      created.push("blob:demo");
+      return "blob:demo";
+    });
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+
+    const app = await render();
+    await click("#record-start");
+    await click("#record-stop");
+    await click("#export-geojson");
+
+    expect(created, "no document was handed to the browser").toHaveLength(1);
+    expect(app.querySelector("#export-result")?.textContent ?? "").toContain(".geojson");
+    vi.restoreAllMocks();
+  });
+
+  it("says a photo is referenced rather than included", async () => {
+    // The obligation a consumer discovers too late otherwise: the bytes are not in the file.
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => "blob:demo");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+
+    const app = await render();
+    await click("#record-start");
+    await click('[data-testid="map"]');
+    await click('[data-testid="composer"]');
+    await click("#record-stop");
+    await click("#export-geojson");
+
+    expect(app.querySelector("#export-result")?.textContent ?? "").toContain("not included");
+    vi.restoreAllMocks();
+  });
+
+  it("does not carry a previous trip's export notice into the next one", async () => {
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => "blob:demo");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+
+    const app = await render();
+    await click("#record-start");
+    await click("#record-stop");
+    await click("#export-geojson");
+    expect(app.querySelector("#export-result")).not.toBeNull();
+
+    await click("#record-start");
+
+    expect(app.querySelector("#export-result"), "a stale export notice survived").toBeNull();
+    vi.restoreAllMocks();
+  });
+});

@@ -2,6 +2,10 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
+import { readFile } from "node:fs/promises";
+
+import { geoJSONToTrack } from "@mapatlas/core";
+
 import { consoleFor, fixturePng, watchConsole } from "./fixtures/browser.js";
 
 /**
@@ -137,4 +141,48 @@ test("the review is of the trip that was recorded, not an empty one", async ({ p
   // Distance is computed from the retained points, so it is zero for a track of nought or one
   // and cannot be produced by anything but a recording that kept both fixes.
   expect(await distanceKm(page)).toBeGreaterThan(0);
+});
+
+test("the exported file parses, and round-trips the trip that produced it", async ({ page }) => {
+  // **The criterion, observed where it is real.** The unit lane proves `buildTripExport` produces
+  // a document that round-trips; it cannot prove the browser was ever handed one. This drives the
+  // actual control, takes the actual file the browser saved, and reads it back through the
+  // published importer — the same function a consumer would use on the far side.
+  await page.goto(withArchives);
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+
+  await recordTwoFixes(page);
+  await pinOnMap(page);
+  const chooser = page.waitForEvent("filechooser");
+  await page.locator(".mapatlas-composer-photo").click();
+  await (await chooser).setFiles(PHOTO);
+  await expect(page.locator(".mapatlas-composer-preview")).toBeVisible();
+  await page.locator(".mapatlas-composer-save").click();
+  await expect(page.locator("#recorder-status")).toHaveAttribute("data-events", "1");
+
+  await page.locator("#record-stop").click();
+  await expect(page.locator("#app-review")).toBeVisible();
+
+  const saving = page.waitForEvent("download");
+  await page.locator("#export-geojson").click();
+  const download = await saving;
+
+  expect(download.suggestedFilename()).toMatch(/^trip-.*\.geojson$/);
+  const saved = await download.path();
+  if (saved === null) throw new Error("the browser saved no file");
+  const text = await readFile(saved, "utf8");
+
+  // Parses — the first half of the observable, and the half a component test cannot make.
+  const parsed: unknown = JSON.parse(text);
+  expect((parsed as { type: string }).type).toBe("FeatureCollection");
+
+  // Round-trips — the second half, through the published importer rather than a local reader.
+  const back = geoJSONToTrack({ geojson: parsed as never, media: [] });
+
+  expect(back.track.points.length, "the exported trip kept no fixes").toBeGreaterThanOrEqual(2);
+  expect(back.track.origin).toBe("recorded");
+  expect(back.events).toHaveLength(1);
+  // The photo travels by reference: a key into the store, and no bytes in the file.
+  expect(back.events[0]?.media[0]?.blobKey).toBeDefined();
+  expect(text, "the photo bytes were inlined").not.toContain("base64");
 });

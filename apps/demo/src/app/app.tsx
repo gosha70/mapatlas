@@ -1,26 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The demo app — T7.1 increment 1, the shell.
+ * The demo app — the shell.
  *
- * **Assembled only from package entry points.** `MapCanvas` comes from `@mapatlas/react` by bare
- * name, the storage adapters from `@mapatlas/storage-idb`, the types from `@mapatlas/core`. That
- * restriction is the point rather than a convenience: this app is the evidence that the seams
- * compose for someone who ran `npm install`, and an app reaching into `dist` paths or internals
- * would demonstrate that the repo works, not that the packages do.
+ * **Assembled only from package entry points.** The storage adapters come from
+ * `@mapatlas/storage-idb` by bare name, the types from `@mapatlas/core`, and everything the loop
+ * uses from `@mapatlas/react`. That restriction is the point rather than a convenience: this app
+ * is the evidence that the seams compose for someone who ran `npm install`, and an app reaching
+ * into `dist` paths or internals would demonstrate that the repo works, not that the packages do.
  *
- * **What this increment is, and is not.** It mounts a map over the demo's tile stack, opens the
- * two stores, and carries T6.2's settings panels. It does **not** record, compose an event,
- * attach a photo, review, or export — that is increment 2 and increment 3, split out precisely so
- * each has an observable a reviewer can judge on its own. The status line below reports what this
- * increment can actually claim, and nothing more.
+ * **What this file owns.** Opening the two stores and reporting honestly whether they opened,
+ * resolving the tile stack from the URL, and carrying T6.2's settings panels. The
+ * record → pin → photo → review loop is `loop.tsx`'s (increment 2); export is not built yet
+ * (increment 3). The status line below reports what *this* file can claim — that storage is open
+ * and how many sources were declared — and deliberately says nothing about the loop, which has
+ * its own status line and its own observables.
  */
 
 import { useEffect, useMemo, useState } from "react";
 import type { ReactElement } from "react";
 
-import { MapCanvas } from "@mapatlas/react";
-
+import { Loop } from "./loop.js";
 import { InstallPanel, PersistencePanel } from "./panels.js";
 import {
   BLANK_STYLE,
@@ -106,18 +106,13 @@ export function App({ here, storage }: AppProps): ReactElement {
             : "Opening storage…"}
       </p>
 
-      <div className="app-map" id="app-map">
-        {/* **The camera is load-bearing, not a nicety.** The archives cover 0.08 degrees; the
-            default view is the whole world, and from there every tile MapLibre asks for is
-            outside them. Read once at construction and never tracked (ADR-0037), which is why
-            a module constant rather than state is the honest shape for it. */}
-        <MapCanvas
-          sources={sources}
-          style={BLANK_STYLE}
-          terrain={terrain}
-          initialCamera={DEMO_CAMERA}
-        />
-      </div>
+      <Loop
+        storage={storage}
+        sources={sources}
+        style={BLANK_STYLE}
+        terrain={terrain}
+        initialCamera={DEMO_CAMERA}
+      />
 
       <PersistencePanel />
       <InstallPanel />

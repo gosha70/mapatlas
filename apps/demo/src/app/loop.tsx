@@ -31,6 +31,7 @@ import {
 } from "@mapatlas/react";
 import type { JSONValue, TileSource } from "@mapatlas/core";
 
+import { buildTripExport, downloadDocument } from "./export.js";
 import { DEMO_CATEGORIES, demoPresentation } from "./presentation.js";
 import type { DemoStorage } from "./storage.js";
 
@@ -83,6 +84,7 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
   const start = useCallback(async (): Promise<void> => {
     setReviewing(undefined);
     setSessionIds([]);
+    setExported(undefined);
     await recorder.start();
   }, [recorder]);
 
@@ -162,6 +164,40 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
    * shipping that shape would teach the pattern.
    */
   const composable = recording && reviewing === undefined;
+  /** What the last export wrote, so the media obligation is visible rather than discovered later. */
+  const [exported, setExported] = useState<string | undefined>(undefined);
+
+  /**
+   * The reviewed trip's events, filtered here rather than trusted from the log.
+   *
+   * **`useEventLog`'s list lags its `trackId` on purpose.** Switching from `undefined` to the
+   * finalized id issues a fresh load, and until that load lands the binding still answers with
+   * the *previous* list — which, while recording, was every event ever stored. It also keeps
+   * that list deliberately when the filtered read rejects, so the lag has no upper bound.
+   * `trackToGeoJSON` serializes exactly the events it is handed, so an export taken in that
+   * window would carry other trips' events and their media references into this trip's file.
+   *
+   * Filtering synchronously closes the window instead of racing it. It feeds the review as well
+   * as the export: the same stale list would otherwise draw a previous trip's pins over this
+   * one, which is the same defect wearing different clothes.
+   */
+  const reviewEvents = useMemo(
+    () =>
+      reviewing === undefined ? [] : log.events.filter((event) => event.trackId === reviewing.id),
+    [log.events, reviewing],
+  );
+
+  const exportTrip = useCallback((): void => {
+    if (reviewing === undefined) return;
+    const doc = buildTripExport(reviewing, reviewEvents);
+    downloadDocument(doc);
+    setExported(
+      doc.media.length === 0
+        ? doc.filename
+        : `${doc.filename} — ${String(doc.media.length)} photo${doc.media.length === 1 ? "" : "s"} referenced, not included`,
+    );
+  }, [reviewEvents, reviewing]);
+
   /** Finalizing has to wait for the composer to be resolved and for every write to settle. */
   const finalizable = recording && pinAt === undefined && inFlight === 0;
 
@@ -225,9 +261,17 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
         </div>
       ) : (
         <div className="app-review" id="app-review">
+          <div className="app-export">
+            <button id="export-geojson" type="button" onClick={exportTrip}>
+              Export GeoJSON
+            </button>
+            {exported === undefined ? null : (
+              <p id="export-result" data-file={exported}>{`Exported ${exported}`}</p>
+            )}
+          </div>
           <TripReview
             track={reviewing}
-            events={log.events}
+            events={reviewEvents}
             store={storage.trips}
             sources={sources}
             style={style}

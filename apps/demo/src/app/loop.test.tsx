@@ -31,6 +31,10 @@ const seen = vi.hoisted(() => ({
   holdWrite: undefined as { release: () => void; blocked: Promise<void> } | undefined,
   /** When set, `addEvent` rejects with it. */
   rejectWrite: undefined as Error | undefined,
+  /** Events from other trips, already in the store when this session starts. */
+  foreign: [] as MapEvent[],
+  /** When true, the log answers with its unfiltered list, as it does while a load is pending. */
+  staleList: false,
   /** Blob keys the component asked the store to delete, and keys whose delete fails. */
   deleted: [] as string[],
   undeletable: new Set<string>(),
@@ -82,7 +86,7 @@ vi.mock("@mapatlas/react", () => ({
   // An in-memory log with the real one's two behaviours that matter here: ids are assigned on
   // write, and `list` is filtered by `trackId`.
   useEventLog: (_store: StorageAdapter, trackId?: Id) => {
-    const [all, setAll] = useState<MapEvent[]>([]);
+    const [all, setAll] = useState<MapEvent[]>([...seen.foreign]);
     const addEvent = useCallback(async (input: Omit<MapEvent, "id">) => {
       // A real write is not instantaneous. Holding it here is the only way to observe what the
       // component permits *during* the gap between issuing the write and it landing.
@@ -97,7 +101,11 @@ vi.mock("@mapatlas/react", () => ({
       return Promise.resolve();
     }, []);
     return {
-      events: trackId === undefined ? all : all.filter((e) => e.trackId === trackId),
+      // **The lag the real hook has.** Switching `trackId` issues a fresh load and keeps
+      // answering with the *previous* list until it lands — and keeps it deliberately if that
+      // read rejects. `seen.staleList` holds the binding in that window.
+      events:
+        seen.staleList || trackId === undefined ? all : all.filter((e) => e.trackId === trackId),
       addEvent,
       updateEvent,
       deleteEvent: async () => Promise.resolve(),
@@ -210,6 +218,8 @@ afterEach(() => {
   seen.stops = 0;
   seen.holdWrite = undefined;
   seen.rejectWrite = undefined;
+  seen.foreign = [];
+  seen.staleList = false;
   seen.deleted = [];
   seen.undeletable = new Set();
 });
@@ -532,10 +542,136 @@ describe("a rejected event write leaves the trip operable", () => {
     expect(app.querySelector("#event-failure")).not.toBeNull();
 
     seen.rejectWrite = undefined;
+    seen.foreign = [];
+    seen.staleList = false;
     await click('[data-testid="map"]');
     await click('[data-testid="composer"]');
 
     expect(app.querySelector("#event-failure"), "the stale failure outlived the retry").toBeNull();
     expect(app.querySelector("#recorder-status")?.getAttribute("data-events")).toBe("1");
+  });
+});
+
+describe("export", () => {
+  it("is offered only once there is a finished trip to export", async () => {
+    // Exporting mid-recording would have to invent a track: `useTrackRecorder` publishes none
+    // until `stop()` resolves, so the control cannot mean anything before then.
+    const app = await render();
+    expect(app.querySelector("#export-geojson")).toBeNull();
+
+    await click("#record-start");
+    expect(app.querySelector("#export-geojson"), "offered with no trip to export").toBeNull();
+
+    await click("#record-stop");
+    expect(app.querySelector("#export-geojson")).not.toBeNull();
+  });
+
+  it("exports the reviewed trip and says what it wrote", async () => {
+    const created: string[] = [];
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => {
+      created.push("blob:demo");
+      return "blob:demo";
+    });
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+
+    const app = await render();
+    await click("#record-start");
+    await click("#record-stop");
+    await click("#export-geojson");
+
+    expect(created, "no document was handed to the browser").toHaveLength(1);
+    expect(app.querySelector("#export-result")?.textContent ?? "").toContain(".geojson");
+    vi.restoreAllMocks();
+  });
+
+  it("says a photo is referenced rather than included", async () => {
+    // The obligation a consumer discovers too late otherwise: the bytes are not in the file.
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => "blob:demo");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+
+    const app = await render();
+    await click("#record-start");
+    await click('[data-testid="map"]');
+    await click('[data-testid="composer"]');
+    await click("#record-stop");
+    await click("#export-geojson");
+
+    expect(app.querySelector("#export-result")?.textContent ?? "").toContain("not included");
+    vi.restoreAllMocks();
+  });
+
+  it("does not carry a previous trip's export notice into the next one", async () => {
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => "blob:demo");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+
+    const app = await render();
+    await click("#record-start");
+    await click("#record-stop");
+    await click("#export-geojson");
+    expect(app.querySelector("#export-result")).not.toBeNull();
+
+    await click("#record-start");
+
+    expect(app.querySelector("#export-result"), "a stale export notice survived").toBeNull();
+    vi.restoreAllMocks();
+  });
+});
+
+describe("a trip's export is that trip's", () => {
+  /** An event from a previous trip, already in the store. */
+  const FOREIGN: MapEvent = {
+    id: "old-1",
+    trackId: "an-earlier-trip",
+    position: { lat: 1, lng: 2 },
+    occurredAt: 10,
+    media: [{ id: "old-m", mime: "image/jpeg", blobKey: "someone-elses-photo" }],
+    tags: [],
+  };
+
+  it("excludes other trips' events while the filtered load is still pending", async () => {
+    // **The window this closes.** `useEventLog` answers with its previous, unfiltered list until
+    // the load for the new `trackId` lands — and that list, during recording, is every event ever
+    // stored. `trackToGeoJSON` serializes exactly what it is handed.
+    seen.foreign = [FOREIGN];
+    seen.staleList = true;
+
+    await render();
+    await click("#record-start");
+    await click("#record-stop");
+
+    expect((seen.review?.["events"] as MapEvent[]).map((e) => e.id)).not.toContain(FOREIGN.id);
+  });
+
+  it("excludes them when the filtered load has failed outright", async () => {
+    // The real binding keeps the stale list deliberately when the filtered read rejects, so the
+    // window has no upper bound — an export minutes later would still carry them.
+    seen.foreign = [FOREIGN];
+    seen.staleList = true;
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => "blob:demo");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+
+    const app = await render();
+    await click("#record-start");
+    await click("#record-stop");
+    await click("#export-geojson");
+
+    // No foreign media reached the manifest, so no other trip's photo is named by this file.
+    expect(app.querySelector("#export-result")?.textContent ?? "").not.toContain("photo");
+    vi.restoreAllMocks();
+  });
+
+  it("still carries this trip's own events", async () => {
+    // The filter must not be a blanket refusal: the negative above passes trivially if nothing
+    // is ever exported.
+    seen.foreign = [FOREIGN];
+
+    await render();
+    await click("#record-start");
+    await click('[data-testid="map"]');
+    await click('[data-testid="composer"]');
+    await click("#record-stop");
+
+    const reviewed = (seen.review?.["events"] as MapEvent[]).map((e) => e.trackId);
+    expect(reviewed).toStrictEqual([FINALIZED.id]);
   });
 });

@@ -1,7 +1,7 @@
 {
   "credit": {
-    "document": "OSM-COPYRIGHT",
-    "text": "you credit OpenStreetMap and its contributors"
+    "document": "OSMF-ATTRIBUTION-GUIDELINES",
+    "text": "© OpenStreetMap contributors"
   },
   "openDataNotice": {
     "document": "OSM-COPYRIGHT",

@@ -1258,25 +1258,35 @@ a derivative database from it is bound by ODbL §4.4 exactly as we are, and may 
 result only under the same licence. That obligation is not discharged by an on-map credit, which
 is why the archive carries the licence documents themselves and not merely a notice.
 
-**Two documents, because two products state the obligations** — and neither contains the other's
-sentence, so neither alone can back the declaration:
+**Three documents, because the obligations are stated in three places** — and no one of them
+contains the others' sentences, so none alone can back the declaration:
 
-| role | backed by | archive entry |
-| --- | --- | --- |
-| `credit` | `OSM-COPYRIGHT` | — |
-| `openDataNotice` | `OSM-COPYRIGHT` | — |
-| `shareAlike` | `ODbL-1.0` | — |
-| the licence itself | `ODbL-1.0` | `LICENSE` |
-| the credit requirement | `OSM-COPYRIGHT` | `LICENSE-OSM-COPYRIGHT` |
+| role | text | backed by | archive entry |
+| --- | --- | --- | --- |
+| `credit` | `© OpenStreetMap contributors` | `OSMF-ATTRIBUTION-GUIDELINES` | `LICENSE-OSMF-ATTRIBUTION-GUIDELINES` |
+| `openDataNotice` | the sentence naming ODbL and the OSMF | `OSM-COPYRIGHT` | `LICENSE-OSM-COPYRIGHT` |
+| `shareAlike` | ODbL §4.4's opening clause | `ODbL-1.0` | `LICENSE` |
+
+**Why the guidelines are a document and not a footnote.** `credit` was first declared from
+`OSM-COPYRIGHT` as *"you credit OpenStreetMap and its contributors"* — which is the page's
+**requirement sentence, not the credit**. The archive would then have emitted a sentence telling
+the reader to credit OpenStreetMap, as the credit. The copyright page does not contain the notice:
+it says *"Provide credit to OpenStreetMap by displaying our attribution notice"* and defers the
+wording to the attribution guidelines, and its one example of the notice is an image, lost in text
+extraction. The guidelines mandate *"Attribution must be to 'OpenStreetMap'"* and state that
+*"The historical forms of attribution '© OpenStreetMap contributors' or '© OpenStreetMap' are
+acceptable"* — so that is where the credit is backed. This is the substitution the verbatim rule
+exists to catch, arriving from the declaration side rather than the document side; it was caught
+in review before the build emitted anything.
 
 The three roles are what the two documents actually contain, checked verbatim; **no role is
 invented to make the set look complete**, and none of ADR-0024's four Copernicus roles applies
-here because ODbL has no words for them. Both documents are checked in under
+here because ODbL has no words for them. All three documents are checked in under
 `fixtures/basemap/licence/` with provenance — URL, retrieval date, SHA-256, and for the OSM page
 the raw HTML's hash beside the extracted text so the transform can be repeated against the same
 bytes. ODbL is served as `text/plain` and is stored byte for byte with no extraction step.
 
-**Both documents are excluded from the attribution scan.** A declared string is drawn *from* a
+**Every document is excluded from the attribution scan.** A declared string is drawn *from* a
 document, so an archive carrying that document would satisfy the check with the string found
 inside the very thing it is meant to be independent of. Excluding only the first document
 reintroduces that vacuity for the second, which is why the check takes every licence path.

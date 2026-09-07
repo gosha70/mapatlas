@@ -1253,19 +1253,46 @@ whole-file form.
 the Open Data Commons Open Database License by the OSM Foundation. The tiles we cut are a Produced
 Work created from that database.
 
-**Share-alike travels with the extract.** In those words: anyone who takes this archive and builds
-a derivative database from it is bound by ODbL §4.4 exactly as we are, and may distribute the
-result only under the same licence. That obligation is not discharged by an on-map credit, which
-is why the archive carries the licence documents themselves and not merely a notice.
+**§4.3 governs, not §4.2 — and this correction changes the archive's obligations.** An earlier
+version of this ADR required the archive to carry the licence documents themselves and said
+"share-alike travels with the extract". That reasoning applied §4.2, which covers Publicly
+Conveying a Database or Derivative Database. **We convey neither.** Protomaps distributes this
+basemap expressly as an ODbL **Produced Work**, and the tiles we cut from it are a Produced Work
+too. §4.3 says so in terms: *"Creating and Using a Produced Work does not require the notice in
+Section 4.2. However, if you Publicly Use a Produced Work, You must include a notice associated
+with the Produced Work reasonably calculated to make any Person ... aware that Content was
+obtained from the Database ... and that it is available under this License."*
+
+So the obligation is **a notice**, and §4.2's "a copy of this License or its URI" alternative is
+not the governing route either — it belongs to the clause that does not apply. `shareAlike` is
+therefore not an archive role: §4.4 binds whoever creates a *Derivative Database*, which this
+extract is not, and asserting it as something the archive carries claimed an obligation on
+recipients that the licence does not place there.
+
+**What the archive must carry**, and it is small enough to fit alongside the root directory:
+
+| | |
+| --- | --- |
+| the credit | `© OpenStreetMap contributors` |
+| the licence notice | that the content is available under the Open Database License (ODbL) |
+| the source URI | the database the content came from |
+| the licence URI | `https://opendatacommons.org/licenses/odbl/1-0/` |
+
+**The three documents stay checked in, as provenance for the declaration** — not as archive
+payload. They are what makes the credit and the notice verifiable as quoted rather than recalled;
+`fixtures/basemap/licence/manifest.json` carries each one's URL, retrieval date and hash.
 
 **Three documents, because the obligations are stated in three places** — and no one of them
 contains the others' sentences, so none alone can back the declaration:
 
-| role | text | backed by | archive entry |
-| --- | --- | --- | --- |
-| `credit` | `© OpenStreetMap contributors` | `OSMF-ATTRIBUTION-GUIDELINES` | `LICENSE-OSMF-ATTRIBUTION-GUIDELINES` |
-| `openDataNotice` | the sentence naming ODbL and the OSMF | `OSM-COPYRIGHT` | `LICENSE-OSM-COPYRIGHT` |
-| `shareAlike` | ODbL §4.4's opening clause | `ODbL-1.0` | `LICENSE` |
+| role | text | backed by |
+| --- | --- | --- |
+| `credit` | `© OpenStreetMap contributors` | `OSMF-ATTRIBUTION-GUIDELINES` |
+| `openDataNotice` | the sentence naming ODbL and the OSMF | `OSM-COPYRIGHT` |
+
+No archive-entry column, because no document is written into the archive. `ODbL-1.0` remains
+checked in — it is what `openDataNotice`'s licence name is read against and what a reviewer
+checks §4.3 in — but it backs no declared string of its own now that `shareAlike` is gone.
 
 **Why the guidelines are a document and not a footnote.** `credit` was first declared from
 `OSM-COPYRIGHT` as *"you credit OpenStreetMap and its contributors"* — which is the page's
@@ -1286,10 +1313,20 @@ here because ODbL has no words for them. All three documents are checked in unde
 the raw HTML's hash beside the extracted text so the transform can be repeated against the same
 bytes. ODbL is served as `text/plain` and is stored byte for byte with no extraction step.
 
-**Every document is excluded from the attribution scan.** A declared string is drawn *from* a
-document, so an archive carrying that document would satisfy the check with the string found
-inside the very thing it is meant to be independent of. Excluding only the first document
-reintroduces that vacuity for the second, which is why the check takes every licence path.
+**Nothing needs excluding from the attribution scan here**, because the archive carries no
+licence document for a declared string to hide inside. The rule's multi-path exclusion still
+matters for any product that *does* carry more than one, and is kept: a declared string is drawn
+*from* a document, so an archive carrying that document would satisfy the check with the string
+found inside the very thing it is meant to be independent of.
+
+**Why the documents are not carried, recorded so it is not re-litigated as an oversight.**
+`s2-pmtiles`' writer does not terminate when the JSON metadata leaves no room for the root
+directory: at ~16 KB of metadata it spins rather than refusing, measured at 4/8/12 KB fine and
+16/24 KB hung. ODbL alone is 25,877 bytes as JSON. **This is a limitation of that writer, not of
+PMTiles** — the v3 specification constrains only the root directory to the first 16 KiB, and
+other sections may be relocated. It is recorded because it bounds what any archive this build
+writes may carry in metadata, and because the compact notice above is the right shape on the
+licence's own terms regardless of it.
 
 **Consequences.** The demo's basemap source is declared `offlineLicensed: true` because it is
 self-hosted from our own extract (ADR-0033), and the attribution line is rendered verbatim as an

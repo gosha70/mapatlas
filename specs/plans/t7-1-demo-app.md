@@ -190,12 +190,34 @@ silently.
   (v4.15.1) is pinnable, `20260907` (v4.15.2, current) is not. This is the coverage-snapshot
   precedent applied — the record carries a date, and the check is the upstream's own answer
   rather than an expiry someone has to remember to bump.
-- **Licence handled exactly as Copernicus is** (ADR-0024): decided per *named product* after
-  reading its terms, the archive carrying the licence document and attribution strings verbatim
-  through the existing `licence.mjs` rule, `offlineLicensed: true` because self-hosted, and
-  attribution rendered verbatim. **ODbL means share-alike travels with the extract** — the ADR
-  entry says so in those words.
-- **The licence document has to be named, because the mirror ships none.** `LICENSE` is 404
+- **Licence decided per *named product* after reading its terms** (ADR-0024's method), with the
+  declared strings checked verbatim against the documents through the existing `licence.mjs`
+  rule, `offlineLicensed: true` because self-hosted, and attribution rendered verbatim.
+
+  > **Amended after reading ODbL against this product (increment 4a).** This bar originally said
+  > the licence was "handled exactly as Copernicus is" — *the archive carrying the licence
+  > document* — and that "**ODbL means share-alike travels with the extract**", to be said in the
+  > ADR in those words. Both were wrong for this product, and the ADR now says something
+  > different rather than the promised phrase.
+  >
+  > The Copernicus archive carries its licence because that is what those terms require. ODbL
+  > §4.2, which carries the "include a copy of this License or its URI" obligation, applies to
+  > **Publicly Conveying a Database or Derivative Database**. Protomaps distributes this basemap
+  > expressly as a **Produced Work**, and the tiles cut from it are one too — so §4.3 applies
+  > instead, and it says in terms that *"Creating and Using a Produced Work does not require the
+  > notice in Section 4.2"*, requiring an associated notice naming the source and the licence.
+  >
+  > **Share-alike is not an obligation this extract passes on.** §4.4 binds whoever creates a
+  > *Derivative Database*; this extract is not one. Asserting it as something the archive carries
+  > claimed an obligation on recipients that the licence does not place there — a claim in the
+  > safe direction, which is still a claim nobody checked.
+  >
+  > What the archive carries instead is a compact notice: the credit `© OpenStreetMap
+  > contributors`, an explicit ODbL notice, the source URI and the licence URI. The three
+  > documents stay checked in as **provenance for the declaration**, which is what makes those
+  > strings verifiable as quoted rather than recalled.
+- **The licence documents still have to be named, because the mirror ships none** — they back the
+  declaration even though the archive no longer carries them.** `LICENSE` is 404
   there, and the README says only "Produced Works of the ODbL" with a link — but obligation 1's
   rule needs a checked-in document to compare strings against verbatim. The ADR entry therefore
   names them: the **ODbL 1.0 text from `opendatacommons.org`**, and the attribution line

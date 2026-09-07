@@ -130,11 +130,57 @@ describe("the exported document", () => {
     expect(second.filename).not.toBe(first.filename);
   });
 
-  it("keeps a filename usable when the id is not", () => {
-    // Ids are opaque to the engine; a consumer's may contain separators a filename cannot hold.
-    const awkward = buildTripExport({ ...TRACK, id: "a/b c:d" }, []);
+  it("keeps ids that are already filename-safe readable", () => {
+    // The encoding must not be gratuitously ugly for the common case: an id a filename can
+    // already hold passes through unchanged.
+    expect(buildTripExport({ ...TRACK, id: "trip-1" }, []).filename).toContain("-trip-1.geojson");
+  });
 
-    expect(awkward.filename).toMatch(/^trip-[\dT-]+-a-b-c-d\.geojson$/);
+  it("keeps distinct ids distinct, even when every unsafe run looks alike", () => {
+    // **The defect this replaced.** The first encoder replaced each run of unsafe characters
+    // with `-`, which is many-to-one: all four of these became `a-b`, so two distinct trips
+    // begun in the same second still collided — the exact failure the id was added to prevent.
+    // A sanitiser is not an encoder.
+    const ids = ["a/b", "a b", "a:b", "a-b", "a_b"];
+
+    const names = ids.map((id) => buildTripExport({ ...TRACK, id, startedAt: 1_000 }, []).filename);
+
+    expect(new Set(names).size, `collapsed: ${names.join(", ")}`).toBe(ids.length);
+  });
+
+  it("keeps the escape width fixed, so an escape cannot run into a literal", () => {
+    // **Why four digits and not the two a byte needs.** At width two, `\u0100` encodes to `_100`
+    // — and so does `\u0010` followed by a literal `0`, because the escape ends wherever the
+    // reader decides it does. Fixed width is what makes the boundary unambiguous, and this pair
+    // is the one that exhibits it.
+    const wide = buildTripExport({ ...TRACK, id: "\u0100", startedAt: 1_000 }, []).filename;
+    const narrowThenDigit = buildTripExport(
+      { ...TRACK, id: "\u00100", startedAt: 1_000 },
+      [],
+    ).filename;
+
+    expect(wide).not.toBe(narrowThenDigit);
+  });
+
+  it("names an empty id something no other id can produce", () => {
+    // A readable placeholder such as "trip" is a collision: the id `trip` produces it too. A bare
+    // `_` cannot be produced, because every `_` the encoder emits carries four hex digits.
+    const empty = buildTripExport({ ...TRACK, id: "", startedAt: 1_000 }, []).filename;
+    const named = buildTripExport({ ...TRACK, id: "trip", startedAt: 1_000 }, []).filename;
+
+    expect(empty).not.toBe(named);
+  });
+
+  it("does not let an id spell another id's escape sequence", () => {
+    // **The forgery, and the pair that actually exhibits it.** If `_` were passed through as a
+    // safe character, the id `a b` would encode to `a_0020b` — which is exactly what the literal
+    // id `a_0020b` produces, so two distinct trips would collide again. Escaping `_` itself is
+    // what closes it. An earlier version of this test compared `a_005Fb` with `a_b`, which stay
+    // distinct either way and so proved nothing.
+    const spaced = buildTripExport({ ...TRACK, id: "a b", startedAt: 1_000 }, []).filename;
+    const literal = buildTripExport({ ...TRACK, id: "a_0020b", startedAt: 1_000 }, []).filename;
+
+    expect(literal).not.toBe(spaced);
   });
 
   it("exports the same bytes however the events were ordered", () => {

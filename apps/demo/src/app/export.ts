@@ -49,17 +49,36 @@ function stamp(at: number): string {
 }
 
 /**
- * The trip's id, reduced to characters a filename can hold.
+ * The trip's id, encoded into characters a filename can hold — **without losing uniqueness**.
  *
  * **The timestamp alone is not unique.** It is second-resolution, so two trips begun within the
- * same second produce the same name — and a downloads folder resolves that by silently
- * overwriting or by appending `(1)`, neither of which says that two different trips were
- * involved. The id is what makes the name unique; the timestamp is what makes it sort and what
- * makes it mean something to a person reading the folder.
+ * same second produce the same stamp — and a downloads folder resolves a clash by silently
+ * overwriting or by appending `(1)`, neither of which says two different trips were involved.
+ * The id is what makes the name unique; the timestamp is what makes it sort.
+ *
+ * **The first version of this destroyed the uniqueness it existed to provide.** It replaced each
+ * run of unsafe characters with `-`, which is many-to-one: `a/b`, `a b`, `a:b` and `a-b` all
+ * became `a-b`, so two distinct same-second trips still collided. A sanitiser is not an encoder,
+ * and the test that passed only checked the output held safe characters.
+ *
+ * This escapes instead: every code unit outside `[A-Za-z0-9-]` becomes `_` followed by exactly
+ * four hex digits. Fixed width is what makes it unambiguous — a variable-length escape could not
+ * be told from an escape followed by a literal digit — and `_` is itself outside the safe set, so
+ * the escape character is escaped (`_005F`) and never appears bare. Distinct ids therefore always
+ * produce distinct slugs. Ids that are already filename-safe pass through unchanged, so the
+ * common case stays readable.
  */
 function slug(id: string): string {
-  const safe = id.replace(/[^A-Za-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-  return safe === "" ? "trip" : safe;
+  let out = "";
+  for (let i = 0; i < id.length; i += 1) {
+    const ch = id.charAt(i);
+    out += /[A-Za-z0-9-]/.test(ch)
+      ? ch
+      : `_${id.charCodeAt(i).toString(16).toUpperCase().padStart(4, "0")}`;
+  }
+  // A bare `_` is unproducible above — every `_` the encoder emits carries four hex digits — so
+  // it names the empty id without colliding with any non-empty one.
+  return out === "" ? "_" : out;
 }
 
 export function buildTripExport(track: Track, events: readonly MapEvent[]): TripExport {

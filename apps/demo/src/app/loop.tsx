@@ -57,6 +57,16 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
    * can answer afterwards.
    */
   const [sessionIds, setSessionIds] = useState<readonly Id[]>([]);
+  /**
+   * Writes issued and not yet settled.
+   *
+   * **Finalizing is not allowed to overtake one.** `stop()` reads the ids written so far and binds
+   * those events to the finalized track; a write still in flight is not in that list yet, so a
+   * stop that ran first would finalize the trip, publish the review without the event, and leave
+   * the event unbound with nothing in this UI able to reach it. Counted rather than a boolean: two
+   * composers cannot be open at once today, but a count cannot be wrong if that changes.
+   */
+  const [inFlight, setInFlight] = useState(0);
 
   // Bound to the trip under review, and to nothing while recording: `useEventLog(store, undefined)`
   // lists *every* event ever stored, which on the live map would draw previous trips' pins over
@@ -86,14 +96,32 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
 
   const save = useCallback(
     async (input: Omit<MapEvent, "id" | "position">, at: LatLng): Promise<void> => {
-      const written = await log.addEvent({ ...input, position: at });
-      setSessionIds((ids) => [...ids, written.id]);
-      setPinAt(undefined);
+      setInFlight((n) => n + 1);
+      try {
+        const written = await log.addEvent({ ...input, position: at });
+        setSessionIds((ids) => [...ids, written.id]);
+        setPinAt(undefined);
+      } finally {
+        // Released in `finally`, so a rejected write re-enables Stop instead of stranding the
+        // trip in a state with no way out.
+        setInFlight((n) => n - 1);
+      }
     },
     [log],
   );
 
   const recording = recorder.status === "recording" || recorder.status === "paused";
+  /**
+   * Composition belongs to a trip, and there is no trip yet.
+   *
+   * An event dropped while the recorder is `finalized` is written with no `trackId` and is
+   * remembered only in `sessionIds` — which the next `start()` clears. The event survives in the
+   * store, orphaned, with no path back to it from this UI. The demo is a consumer's reference:
+   * shipping that shape would teach the pattern.
+   */
+  const composable = recording && reviewing === undefined;
+  /** Finalizing has to wait for the composer to be resolved and for every write to settle. */
+  const finalizable = recording && pinAt === undefined && inFlight === 0;
 
   return (
     <>
@@ -125,7 +153,7 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
         >
           Resume
         </button>
-        <button id="record-stop" type="button" onClick={() => void stop()} disabled={!recording}>
+        <button id="record-stop" type="button" onClick={() => void stop()} disabled={!finalizable}>
           Stop and review
         </button>
       </div>
@@ -144,7 +172,7 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
             presentation={demoPresentation}
             events={session}
             {...(recorder.livePoint === undefined ? {} : { livePoint: recorder.livePoint })}
-            onMapTap={setPinAt}
+            {...(composable ? { onMapTap: setPinAt } : {})}
           />
         </div>
       ) : (
@@ -161,7 +189,7 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
         </div>
       )}
 
-      {pinAt === undefined ? null : (
+      {pinAt === undefined || !composable ? null : (
         <div className="app-composer" id="app-composer">
           <EventComposer
             at={pinAt}

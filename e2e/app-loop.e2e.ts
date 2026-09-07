@@ -70,6 +70,16 @@ async function pinOnMap(page: Page): Promise<void> {
   await expect(page.locator("#app-composer")).toBeVisible();
 }
 
+/** The review's own reported distance, in km, read out of the stats panel. */
+async function distanceKm(page: Page): Promise<number> {
+  const stats = page.locator(".mapatlas-trip-stats");
+  await expect(stats).toBeVisible();
+  const text = (await stats.textContent()) ?? "";
+  const found = /Distance\s*([\d.]+)\s*km/.exec(text);
+  if (found?.[1] === undefined) throw new Error(`no distance in the stats panel: ${text}`);
+  return Number(found[1]);
+}
+
 test("a recorded trip carries an event with a photo, and the review renders it", async ({
   page,
 }) => {
@@ -116,8 +126,15 @@ test("the review is of the trip that was recorded, not an empty one", async ({ p
   await page.locator("#record-stop").click();
 
   await expect(page.locator("#app-review")).toBeVisible();
-  // The track line is the renderer's own evidence that a multi-point track reached it: one point
-  // draws no line, and `demoPresentation.trackLine` is what colours this one.
-  await expect(page.locator("#app-review canvas")).toBeVisible();
   await expect(page.locator("#recorder-status")).toHaveAttribute("data-status", "finalized");
+
+  // **What the first version of this assertion got wrong, kept because the trap is the one the
+  // plan names.** It read `#app-review canvas` as evidence of a multi-point track. `TripReview`
+  // renders its map for an empty track too, so a run that recorded nothing showed that canvas and
+  // passed, reporting `Distance 0.00 km` beside it. A canvas proves a component mounted, never
+  // that a fix was kept.
+  //
+  // Distance is computed from the retained points, so it is zero for a track of nought or one
+  // and cannot be produced by anything but a recording that kept both fixes.
+  expect(await distanceKm(page)).toBeGreaterThan(0);
 });

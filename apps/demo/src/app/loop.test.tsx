@@ -27,6 +27,8 @@ const seen = vi.hoisted(() => ({
   review: undefined as Record<string, unknown> | undefined,
   stops: 0,
   starts: 0,
+  /** When set, `addEvent` blocks on this until the test releases it. */
+  holdWrite: undefined as { release: () => void; blocked: Promise<void> } | undefined,
 }));
 
 /** The trip `stop()` resolves. Two points, so it is a track rather than a placeholder. */
@@ -77,9 +79,12 @@ vi.mock("@mapatlas/react", () => ({
   useEventLog: (_store: StorageAdapter, trackId?: Id) => {
     const [all, setAll] = useState<MapEvent[]>([]);
     const addEvent = useCallback(async (input: Omit<MapEvent, "id">) => {
+      // A real write is not instantaneous. Holding it here is the only way to observe what the
+      // component permits *during* the gap between issuing the write and it landing.
+      if (seen.holdWrite !== undefined) await seen.holdWrite.blocked;
       const written = { ...input, id: `e${String(Date.now())}-${String(Math.random())}` };
       setAll((prior) => [...prior, written]);
-      return Promise.resolve(written);
+      return written;
     }, []);
     const updateEvent = useCallback(async (event: MapEvent) => {
       setAll((prior) => prior.map((held) => (held.id === event.id ? event : held)));
@@ -100,8 +105,11 @@ vi.mock("@mapatlas/react", () => ({
       type: "button",
       // The tap is a real user action in this lane too: the component under test is what decides
       // that a tap opens a composer at that position.
+      // Absent when the component declines to accept taps: the stub must report that rather
+      // than throw, so a test can assert the tap did nothing.
+      "data-taps": props["onMapTap"] === undefined ? "declined" : "accepted",
       onClick: () => {
-        (props["onMapTap"] as (at: LatLng) => void)({ lat: 10, lng: 20 });
+        (props["onMapTap"] as ((at: LatLng) => void) | undefined)?.({ lat: 10, lng: 20 });
       },
     });
   },
@@ -182,7 +190,21 @@ afterEach(() => {
   seen.review = undefined;
   seen.starts = 0;
   seen.stops = 0;
+  seen.holdWrite = undefined;
 });
+
+/** A write the test settles by hand. */
+const holdTheWrite = (): (() => void) => {
+  let release = (): void => undefined;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  seen.holdWrite = { release, blocked };
+  return release;
+};
+
+const disabled = (id: string): boolean =>
+  (host?.querySelector<HTMLButtonElement>(id) ?? null)?.disabled ?? false;
 
 describe("record", () => {
   it("starts a recording and says it is recording", async () => {
@@ -347,5 +369,80 @@ describe("the live map", () => {
     await click("#record-start");
 
     expect(seen.map?.["events"]).toHaveLength(0);
+  });
+});
+
+describe("a pin belongs to a trip", () => {
+  it("declines taps before any recording has started", async () => {
+    // **The orphan this prevents.** An event dropped while the recorder is `finalized` is written
+    // with no `trackId` and remembered only in `sessionIds` — which the next `start()` clears.
+    // It survives in the store with nothing in this UI able to reach it.
+    const app = await render();
+    expect(app.querySelector("#recorder-status")?.getAttribute("data-status")).toBe("finalized");
+
+    expect(seen.map?.["data-taps"] ?? seen.map?.["onMapTap"]).toBeUndefined();
+    await click('[data-testid="map"]');
+
+    expect(app.querySelector("#app-composer"), "a pin was accepted before any trip").toBeNull();
+  });
+
+  it("declines taps once the trip is under review", async () => {
+    const app = await render();
+    await click("#record-start");
+    await click("#record-stop");
+
+    expect(app.querySelector("#app-map"), "the live map outlived the recording").toBeNull();
+    expect(app.querySelector("#app-composer")).toBeNull();
+  });
+});
+
+describe("finalizing waits for the trip's writes", () => {
+  it("will not stop while a composer is open and unsaved", async () => {
+    // Stopping here would finalize a trip while the user is still describing an event on it, and
+    // the composer would then be composing onto a trip that no longer accepts events.
+    await render();
+    await click("#record-start");
+    expect(disabled("#record-stop")).toBe(false);
+
+    await click('[data-testid="map"]');
+
+    expect(disabled("#record-stop"), "stop was live with an open composer").toBe(true);
+  });
+
+  it("will not stop while a write is still in flight", async () => {
+    // **The race.** `stop()` binds the ids written *so far*; a write that has not landed is not
+    // among them, so a stop that overtook it would publish a review without the event and leave
+    // the event unbound.
+    const release = holdTheWrite();
+    await render();
+    await click("#record-start");
+    await click('[data-testid="map"]');
+    await click('[data-testid="composer"]');
+
+    expect(disabled("#record-stop"), "stop was live during an unsettled write").toBe(true);
+
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+
+    expect(disabled("#record-stop"), "stop never came back after the write settled").toBe(false);
+  });
+
+  it("binds the late write once it settles, rather than losing it", async () => {
+    const release = holdTheWrite();
+    const app = await render();
+    await click("#record-start");
+    await click('[data-testid="map"]');
+    await click('[data-testid="composer"]');
+
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    await click("#record-stop");
+
+    expect(app.querySelector("#recorder-status")?.getAttribute("data-events")).toBe("1");
+    expect((seen.review?.["events"] as MapEvent[])[0]?.trackId).toBe(FINALIZED.id);
   });
 });

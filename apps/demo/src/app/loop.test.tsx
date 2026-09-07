@@ -29,6 +29,11 @@ const seen = vi.hoisted(() => ({
   starts: 0,
   /** When set, `addEvent` blocks on this until the test releases it. */
   holdWrite: undefined as { release: () => void; blocked: Promise<void> } | undefined,
+  /** When set, `addEvent` rejects with it. */
+  rejectWrite: undefined as Error | undefined,
+  /** Blob keys the component asked the store to delete, and keys whose delete fails. */
+  deleted: [] as string[],
+  undeletable: new Set<string>(),
 }));
 
 /** The trip `stop()` resolves. Two points, so it is a track rather than a placeholder. */
@@ -82,6 +87,7 @@ vi.mock("@mapatlas/react", () => ({
       // A real write is not instantaneous. Holding it here is the only way to observe what the
       // component permits *during* the gap between issuing the write and it landing.
       if (seen.holdWrite !== undefined) await seen.holdWrite.blocked;
+      if (seen.rejectWrite !== undefined) throw seen.rejectWrite;
       const written = { ...input, id: `e${String(Date.now())}-${String(Math.random())}` };
       setAll((prior) => [...prior, written]);
       return written;
@@ -146,7 +152,19 @@ let root: Root | undefined;
 let host: HTMLElement | undefined;
 
 const storage = () =>
-  ({ trips: {} as StorageAdapter, assets: {} }) as unknown as Parameters<typeof Loop>[0]["storage"];
+  ({
+    trips: {
+      // The demo owns a handed-off blob the moment `onSave` delivers its key, and the composer
+      // never deletes it again (ADR-0027) — so a rejected event write has to give it back.
+      // Recorded here so a test can see whether it did.
+      deleteBlob: async (key: string) => {
+        if (seen.undeletable.has(key)) throw new Error(`cannot delete ${key}`);
+        seen.deleted.push(key);
+        return Promise.resolve();
+      },
+    } as unknown as StorageAdapter,
+    assets: {},
+  }) as unknown as Parameters<typeof Loop>[0]["storage"];
 
 const render = async (): Promise<HTMLElement> => {
   host = document.createElement("div");
@@ -191,6 +209,9 @@ afterEach(() => {
   seen.starts = 0;
   seen.stops = 0;
   seen.holdWrite = undefined;
+  seen.rejectWrite = undefined;
+  seen.deleted = [];
+  seen.undeletable = new Set();
 });
 
 /** A write the test settles by hand. */
@@ -444,5 +465,77 @@ describe("finalizing waits for the trip's writes", () => {
 
     expect(app.querySelector("#recorder-status")?.getAttribute("data-events")).toBe("1");
     expect((seen.review?.["events"] as MapEvent[])[0]?.trackId).toBe(FINALIZED.id);
+  });
+});
+
+describe("a rejected event write leaves the trip operable", () => {
+  it("frees Stop instead of stranding the trip with no exit", async () => {
+    // **The strand this replaced.** `EventComposer` seals itself *before* invoking `onSave`
+    // (ADR-0027), so a composer left on screen after a failed write can neither retry nor
+    // cancel. Clearing only `inFlight` held `finalizable` false with no control able to change
+    // it — the trip had no way out at all, which is worse than the failed write.
+    seen.rejectWrite = new Error("quota exceeded");
+    const app = await render();
+    await click("#record-start");
+    await click('[data-testid="map"]');
+    await click('[data-testid="composer"]');
+
+    expect(app.querySelector("#app-composer"), "the sealed composer stayed on screen").toBeNull();
+    expect(disabled("#record-stop"), "the trip was left with no exit").toBe(false);
+  });
+
+  it("says the event was not saved, rather than discarding it silently", async () => {
+    // A pin that vanishes with no notice is indistinguishable from one that saved and did not
+    // draw — and the event count below stays at zero either way.
+    seen.rejectWrite = new Error("quota exceeded");
+    const app = await render();
+    await click("#record-start");
+    await click('[data-testid="map"]');
+    await click('[data-testid="composer"]');
+
+    expect(app.querySelector("#event-failure")?.textContent ?? "").toContain("quota exceeded");
+    expect(app.querySelector("#recorder-status")?.getAttribute("data-events")).toBe("0");
+  });
+
+  it("gives back the photo it was handed, which nothing else will collect", async () => {
+    // Ownership transferred at `onSave`; the composer never deletes it again, so a rejected
+    // write with no release leaves bytes in the store referenced by no event.
+    seen.rejectWrite = new Error("quota exceeded");
+    await render();
+    await click("#record-start");
+    await click('[data-testid="map"]');
+    await click('[data-testid="composer"]');
+
+    expect(seen.deleted, "the handed-off blob was orphaned").toStrictEqual(["blob-1"]);
+  });
+
+  it("calls the failed release unconfirmed rather than claiming it cleaned up", async () => {
+    // The bytes may or may not still be there. Saying "deleted" would be a guess, and saying
+    // nothing would hide a leak the consumer is the only one able to act on.
+    seen.rejectWrite = new Error("quota exceeded");
+    seen.undeletable = new Set(["blob-1"]);
+    const app = await render();
+    await click("#record-start");
+    await click('[data-testid="map"]');
+    await click('[data-testid="composer"]');
+
+    expect(app.querySelector("#event-failure")?.textContent ?? "").toContain("unconfirmed");
+    expect(disabled("#record-stop"), "a failed cleanup stranded the trip").toBe(false);
+  });
+
+  it("records a later trip normally, rather than staying in the failed state", async () => {
+    seen.rejectWrite = new Error("quota exceeded");
+    const app = await render();
+    await click("#record-start");
+    await click('[data-testid="map"]');
+    await click('[data-testid="composer"]');
+    expect(app.querySelector("#event-failure")).not.toBeNull();
+
+    seen.rejectWrite = undefined;
+    await click('[data-testid="map"]');
+    await click('[data-testid="composer"]');
+
+    expect(app.querySelector("#event-failure"), "the stale failure outlived the retry").toBeNull();
+    expect(app.querySelector("#recorder-status")?.getAttribute("data-events")).toBe("1");
   });
 });

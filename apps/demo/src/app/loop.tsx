@@ -21,7 +21,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { ReactElement } from "react";
 
 import { noopAnalyzer } from "@mapatlas/core";
-import type { Id, LatLng, MapEvent, TerrainOptions, Track } from "@mapatlas/core";
+import type { Id, LatLng, MapEvent, MediaRef, TerrainOptions, Track } from "@mapatlas/core";
 import {
   EventComposer,
   MapCanvas,
@@ -67,6 +67,8 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
    * composers cannot be open at once today, but a count cannot be wrong if that changes.
    */
   const [inFlight, setInFlight] = useState(0);
+  /** The last event write that failed, surfaced rather than discarded silently. */
+  const [failure, setFailure] = useState<string | undefined>(undefined);
 
   // Bound to the trip under review, and to nothing while recording: `useEventLog(store, undefined)`
   // lists *every* event ever stored, which on the live map would draw previous trips' pins over
@@ -94,20 +96,60 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
     setReviewing(finalized);
   }, [log, recorder, sessionIds]);
 
+  /**
+   * Give back the blobs a failed event was carrying.
+   *
+   * **The composer's contract makes this ours.** "From the instant `onSave` receives the
+   * `blobKey` the consumer owns it, and the composer never deletes it again — unmount included"
+   * (ADR-0027). So when the event write rejects, nothing references those bytes and nothing else
+   * will ever collect them.
+   *
+   * A delete that itself fails is reported as *unconfirmed* rather than swallowed or retried:
+   * the bytes may or may not still be there, and claiming either would be a guess.
+   */
+  const releaseMedia = useCallback(
+    async (media: readonly MediaRef[]): Promise<string | undefined> => {
+      const stranded: string[] = [];
+      for (const item of media) {
+        if (item.blobKey === undefined) continue;
+        try {
+          await storage.trips.deleteBlob(item.blobKey);
+        } catch {
+          stranded.push(item.blobKey);
+        }
+      }
+      return stranded.length === 0
+        ? undefined
+        : `${String(stranded.length)} photo left unconfirmed`;
+    },
+    [storage],
+  );
+
   const save = useCallback(
     async (input: Omit<MapEvent, "id" | "position">, at: LatLng): Promise<void> => {
       setInFlight((n) => n + 1);
       try {
         const written = await log.addEvent({ ...input, position: at });
         setSessionIds((ids) => [...ids, written.id]);
-        setPinAt(undefined);
+        setFailure(undefined);
+      } catch (reason) {
+        // **The composer cannot recover this.** It seals itself *before* invoking `onSave`
+        // (ADR-0027), so the composer still on screen can neither retry nor cancel. Leaving
+        // `pinAt` set would hold `finalizable` false with no control able to clear it — the trip
+        // would have no exit at all, which is worse than the failed write. Closing the
+        // composition is what makes the trip operable again; the notice is what stops that from
+        // being a silent discard.
+        const unconfirmed = await releaseMedia(input.media);
+        const why = reason instanceof Error ? reason.message : String(reason);
+        setFailure(unconfirmed === undefined ? why : `${why} (${unconfirmed})`);
       } finally {
-        // Released in `finally`, so a rejected write re-enables Stop instead of stranding the
-        // trip in a state with no way out.
+        // **Both, and in `finally`.** The success path clears `pinAt` too, and a rejection that
+        // cleared only `inFlight` is exactly the strand this replaced.
+        setPinAt(undefined);
         setInFlight((n) => n - 1);
       }
     },
-    [log],
+    [log, releaseMedia],
   );
 
   const recording = recorder.status === "recording" || recorder.status === "paused";
@@ -128,6 +170,12 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
       <p id="recorder-status" data-status={recorder.status} data-events={String(session.length)}>
         {`Recorder ${recorder.status}. ${String(session.length)} event${session.length === 1 ? "" : "s"} this trip.`}
       </p>
+
+      {failure === undefined ? null : (
+        <p id="event-failure" role="alert" data-failure={failure}>
+          {`The event was not saved: ${failure}`}
+        </p>
+      )}
 
       <div className="app-controls">
         <button id="record-start" type="button" onClick={() => void start()} disabled={recording}>

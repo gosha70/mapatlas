@@ -29,11 +29,16 @@ const TRACK: Track = {
     { id: "s1", startIndex: 0, endIndex: 1, startedAt: 1_000, endedAt: 2_000 },
     { id: "s2", startIndex: 2, endIndex: 2, startedAt: 3_000, endedAt: 3_000 },
   ],
-  laps: [{ startIndex: 0, endIndex: 1, label: "first" }],
+  // **A complete `TrackLap`, and the cast is gone.** The first version wrote `{ startIndex,
+  // endIndex, label }` behind `as unknown as Track`, which compiled and round-tripped — import
+  // copies laps without validating them, so an impossible lap survives a round trip exactly as
+  // a real one does. The test then proved nothing about laps at all. Typechecking the fixture
+  // is what makes the claim mean something.
+  laps: [{ id: "l1", index: 0, startIndex: 0, endIndex: 1, startedAt: 1_000, label: "first" }],
   channels: [{ key: "tempC", label: "Temperature", unit: "°C" }],
   tags: ["survey"],
   meta: { note: "carried through" },
-} as unknown as Track;
+};
 
 const EVENTS: MapEvent[] = [
   {
@@ -109,14 +114,27 @@ describe("the exported document", () => {
   });
 
   it("names the file after the trip, not a constant", () => {
-    // Two exports in one downloads folder must not collide, and a name that sorts is worth more
-    // than one that is merely unique.
+    // A name that sorts is worth more than one that is merely unique, so the start time leads.
     const doc = buildTripExport(TRACK, EVENTS);
 
-    expect(doc.filename).toBe("trip-1970-01-01T00-00-01.geojson");
-    expect(buildTripExport({ ...TRACK, startedAt: 90_000_000 }, EVENTS).filename).not.toBe(
-      doc.filename,
-    );
+    expect(doc.filename).toBe("trip-1970-01-01T00-00-01-trip-1.geojson");
+  });
+
+  it("does not collide for two trips begun in the same second", () => {
+    // **The gap this closes.** The stamp is second-resolution, so the timestamp alone gave two
+    // distinct trips the same name — and a downloads folder resolves that by silently
+    // overwriting or appending `(1)`, neither of which says two different trips were involved.
+    const first = buildTripExport({ ...TRACK, id: "trip-1", startedAt: 1_000 }, []);
+    const second = buildTripExport({ ...TRACK, id: "trip-2", startedAt: 1_999 }, []);
+
+    expect(second.filename).not.toBe(first.filename);
+  });
+
+  it("keeps a filename usable when the id is not", () => {
+    // Ids are opaque to the engine; a consumer's may contain separators a filename cannot hold.
+    const awkward = buildTripExport({ ...TRACK, id: "a/b c:d" }, []);
+
+    expect(awkward.filename).toMatch(/^trip-[\dT-]+-a-b-c-d\.geojson$/);
   });
 
   it("exports the same bytes however the events were ordered", () => {

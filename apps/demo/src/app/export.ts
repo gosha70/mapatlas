@@ -26,7 +26,7 @@ import { trackToGeoJSON } from "@mapatlas/core";
 import type { MapEvent, MediaManifestEntry, Track } from "@mapatlas/core";
 
 export interface TripExport {
-  /** The file's name. Derived from the trip, so two exports do not collide in a downloads folder. */
+  /** The file's name: the start time for sorting, the track id for uniqueness. */
   readonly filename: string;
   /** The file's bytes, as text: a GeoJSON `FeatureCollection`. */
   readonly json: string;
@@ -48,10 +48,24 @@ function stamp(at: number): string {
     .replace(/:/g, "-");
 }
 
+/**
+ * The trip's id, reduced to characters a filename can hold.
+ *
+ * **The timestamp alone is not unique.** It is second-resolution, so two trips begun within the
+ * same second produce the same name — and a downloads folder resolves that by silently
+ * overwriting or by appending `(1)`, neither of which says that two different trips were
+ * involved. The id is what makes the name unique; the timestamp is what makes it sort and what
+ * makes it mean something to a person reading the folder.
+ */
+function slug(id: string): string {
+  const safe = id.replace(/[^A-Za-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  return safe === "" ? "trip" : safe;
+}
+
 export function buildTripExport(track: Track, events: readonly MapEvent[]): TripExport {
   const exported = trackToGeoJSON(track, events);
   return {
-    filename: `trip-${stamp(track.startedAt)}.geojson`,
+    filename: `trip-${stamp(track.startedAt)}-${slug(track.id)}.geojson`,
     // Two-space indented: a portability format a person may open in an editor, and the
     // determinism api.md §10 promises is a property of the value, not of its whitespace.
     json: JSON.stringify(exported.geojson, null, 2),

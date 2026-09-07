@@ -155,11 +155,41 @@ silently.
   build's own standard already demands: ADR-0024 pins the Copernicus release by ETag and size and
   reproduces its archive **byte for byte**. An upstream that moves daily makes "measured, not
   calculated" a moving target — the recorded size is wrong the next morning, and CI's extract
-  differs from the one this plan measured. **BLAKE3 hashes are published per build** (verified
-  with `b3sum`), so the build records version, date and hash the way ADR-0024 records the
-  Copernicus ETag, and **fails if the upstream's hash does not match**. The coverage-snapshot
-  precedent applies: a pinned build ages, so the record carries a date and the increment states
-  what "too old" means rather than leaving it to whoever notices.
+  differs from the one this plan measured. **BLAKE3 hashes are published per build**, so the build
+  records version, date and hash the way ADR-0024 records the Copernicus ETag.
+
+  > **Amended after the round-trip spike (increment 4, first commit).** This bar originally read
+  > that the hashes are "verified with `b3sum`" and that the build "**fails if the upstream's
+  > hash does not match**". That was written for a whole-file download and **cannot be met by a
+  > range read**: verifying the published BLAKE3 means hashing 137 GB to cut 2 MB, which is not a
+  > thing any build here will do. The wording promised an integrity check nobody would implement,
+  > which is worse than a weaker check stated honestly.
+  >
+  > What is enforced instead, and is enforced *before a single tile is read*:
+  > the build metadata row for the pinned key is fetched and its **size, `b3sum` and version**
+  > compared with the recorded pin; every range response's **`Content-Range` total** is checked
+  > against the pinned size, so a different archive served at the same URL fails on the first
+  > read rather than round-tripping perfectly; and the **extract's own SHA-256** is compared with
+  > a recorded constant, which is the byte-for-byte reproducibility ADR-0024 asks for, applied to
+  > the artefact this build actually produces. Comparing a metadata row is **not** source-byte
+  > verification and must not be described as such.
+  >
+  > Not SHA-256 out of preference: no `b3sum` is available in this toolchain and a hand-rolled
+  > BLAKE3 would be worse than none. Over a 1.6 MB artefact the two answer the same question.
+  >
+  > **A size assertion on the extract would be a guard that guards nothing.** `s2-pmtiles` pads
+  > the region before the tile data — header, root directory and JSON metadata — to a multiple of
+  > 16 KiB, so deleting 7.5 KB of metadata leaves the file at exactly the same 1,604,280 bytes.
+  > Measured, not assumed: `1,604,280 − 1,505,976 = 98,304 = 6 × 16,384`.
+
+- **"Too old" is defined by the upstream's retention, not by a local guess.** The build date is in
+  the key (`20260811.pmtiles`), and **the pin has aged out exactly when its row is no longer
+  listed in the build metadata** — which the spike already fails on, by name. Retention is the
+  past week plus the final build of each superseded patch version, so a pin on a *superseded*
+  version's last build is stable while a pin on the current version's daily is not: `20260811`
+  (v4.15.1) is pinnable, `20260907` (v4.15.2, current) is not. This is the coverage-snapshot
+  precedent applied — the record carries a date, and the check is the upstream's own answer
+  rather than an expiry someone has to remember to bump.
 - **Licence handled exactly as Copernicus is** (ADR-0024): decided per *named product* after
   reading its terms, the archive carrying the licence document and attribution strings verbatim
   through the existing `licence.mjs` rule, `offlineLicensed: true` because self-hosted, and

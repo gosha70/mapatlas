@@ -248,3 +248,122 @@ describe("normalisation and divergence", () => {
     expect(divergence("zzz", "nothing alike")).toEqual({ matchedChars: 0, context: "" });
   });
 });
+
+describe("a product declares its own roles and its own documents", () => {
+  const ODBL = "4.4 Share Alike. If you Publicly Use a Derivative Database ... under the ODbL.";
+  const OSM =
+    "You are free to copy our data, as long as you credit OpenStreetMap and its contributors.";
+  const bundle = { "ODbL-1.0": ODBL, "OSM-COPYRIGHT": OSM };
+
+  it("checks each string against the document that backs it", () => {
+    // The basemap's two obligations live in two documents and neither contains the other's
+    // sentence. This is the case a single-text check cannot express.
+    const declared = {
+      credit: { document: "OSM-COPYRIGHT", text: "credit OpenStreetMap and its contributors" },
+      shareAlike: { document: "ODbL-1.0", text: "4.4 Share Alike" },
+    };
+
+    expect(
+      assertStringsBackedByLicence(declared, bundle, "the basemap licence", {
+        requiredRoles: ["credit", "shareAlike"],
+      }),
+    ).toStrictEqual(["credit", "shareAlike"]);
+  });
+
+  it("refuses a string declared against the document that does not contain it", () => {
+    // **The mutation concatenation would hide.** Joining the two texts makes this pass: every
+    // string matches something, and which document backs which obligation stops being checked.
+    const crossed = {
+      credit: { document: "ODbL-1.0", text: "credit OpenStreetMap and its contributors" },
+      shareAlike: { document: "ODbL-1.0", text: "4.4 Share Alike" },
+    };
+
+    expect(() =>
+      assertStringsBackedByLicence(crossed, bundle, "the basemap licence", {
+        requiredRoles: ["credit", "shareAlike"],
+      }),
+    ).toThrow(/attribution "credit" does not occur in ODbL-1\.0/);
+  });
+
+  it("refuses a string naming a document the bundle does not have", () => {
+    expect(() =>
+      assertStringsBackedByLicence(
+        { credit: { document: "CC-BY-4.0", text: "credit OpenStreetMap" } },
+        bundle,
+        "the basemap licence",
+        { requiredRoles: ["credit"] },
+      ),
+    ).toThrow(/names document "CC-BY-4\.0", which is not in/);
+  });
+
+  it("refuses a bare string when more than one document could back it", () => {
+    // Silently checking against whichever came first is how a credit ends up validated by a
+    // document that never required it.
+    expect(() =>
+      assertStringsBackedByLicence({ credit: "credit OpenStreetMap" }, bundle, "the bundle", {
+        requiredRoles: ["credit"],
+      }),
+    ).toThrow(/names no document, but the bundle has 2/);
+  });
+
+  it("refuses an empty document in a bundle, as it does a single empty one", () => {
+    expect(() =>
+      assertStringsBackedByLicence(
+        { credit: { document: "EMPTY", text: "x" } },
+        { EMPTY: "  " },
+        "b",
+        {
+          requiredRoles: ["credit"],
+        },
+      ),
+    ).toThrow(/EMPTY is empty/);
+  });
+
+  it("demands the roles the product declares, not another product's", () => {
+    // The default is Copernicus's four; a product with different obligations says so. Demanding
+    // "derivedWorksNotice" of an ODbL product would be demanding a role its licence has no words
+    // for.
+    expect(() =>
+      assertStringsBackedByLicence(
+        { credit: { document: "OSM-COPYRIGHT", text: "credit OpenStreetMap" } },
+        bundle,
+        "the basemap licence",
+        { requiredRoles: ["credit", "shareAlike"] },
+      ),
+    ).toThrow(/missing "shareAlike"/);
+  });
+
+  it("still demands the Copernicus four when no roles are given", () => {
+    // The default is the existing behaviour, not a new one.
+    expect(() => assertStringsBackedByLicence({ credit: "x" }, "x")).toThrow(
+      /missing "derivedWorksNotice"/,
+    );
+  });
+
+  it("carries a document-qualified string into the archive check unchanged", () => {
+    // `assertArchiveCarriesAttribution` is role-agnostic and stays so; it only had to learn to
+    // read the text out of the new form.
+    const archive = {
+      entries: () => [
+        { path: "LICENSE", text: ODBL },
+        { path: "ATTRIBUTION", text: "credit OpenStreetMap and its contributors" },
+      ],
+    };
+
+    expect(() =>
+      assertArchiveCarriesAttribution(archive, {
+        credit: { document: "OSM-COPYRIGHT", text: "credit OpenStreetMap and its contributors" },
+      }),
+    ).not.toThrow();
+  });
+
+  it("still catches a document-qualified string that never reaches the archive", () => {
+    const archive = { entries: () => [{ path: "LICENSE", text: ODBL }] };
+
+    expect(() =>
+      assertArchiveCarriesAttribution(archive, {
+        credit: { document: "OSM-COPYRIGHT", text: "credit OpenStreetMap and its contributors" },
+      }),
+    ).toThrow(/never reaches the archive/);
+  });
+});

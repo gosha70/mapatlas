@@ -100,23 +100,74 @@ export function divergence(needle, haystack) {
  * @param {string} [licenceSource]
  * @returns {string[]} the roles checked, in declaration order
  */
-export function assertStringsBackedByLicence(declared, licenceText, licenceSource = "the licence") {
+export function declaredText(value) {
+  return typeof value === "string" ? value : (value?.text ?? undefined);
+}
+
+/**
+ * Which document backs a declared string.
+ *
+ * A plain string names no document and is backed by the bundle's only one — the single-document
+ * form every existing product uses. A `{ document, text }` pair names it, which is what a product
+ * whose obligations come from **two** sources needs: the basemap's credit line is required by
+ * OpenStreetMap's copyright page and its share-alike wording is in ODbL §4.4, and neither
+ * document contains the other's sentence. Concatenating them would let every string match
+ * something and check nothing.
+ */
+function documentFor(role, value, documents, licenceSource) {
+  const ids = Object.keys(documents);
+  if (typeof value === "string") {
+    if (ids.length === 1) return { id: ids[0], text: documents[ids[0]] };
+    throw new LicenceError(
+      `attribution "${role}" names no document, but ${licenceSource} has ${String(ids.length)} ` +
+        `(${ids.join(", ")}) — with more than one, a string must say which backs it, or it would ` +
+        `be checked against whichever happened to be first`,
+    );
+  }
+  const id = value?.document;
+  if (typeof id !== "string" || !Object.hasOwn(documents, id)) {
+    throw new LicenceError(
+      `attribution "${role}" names document ${JSON.stringify(id)}, which is not in ` +
+        `${licenceSource} (${ids.join(", ") || "none"})`,
+    );
+  }
+  return { id, text: documents[id] };
+}
+
+export function assertStringsBackedByLicence(
+  declared,
+  licenceText,
+  licenceSource = "the licence",
+  options = {},
+) {
+  const { requiredRoles = REQUIRED_ROLES } = options;
   if (declared === null || typeof declared !== "object" || Array.isArray(declared)) {
     throw new LicenceError("attribution declaration must be an object of role to string");
   }
-  const licence = normaliseWhitespace(licenceText);
-  if (licence === "") {
-    throw new LicenceError(
-      `${licenceSource} is empty, so every string would "match" it vacuously — a check with ` +
-        `nothing to check against passes for the wrong reason`,
-    );
+
+  /**
+   * One text, or several keyed by id.
+   *
+   * The single-string form is not a legacy shim: a product with one licence document has nothing
+   * to disambiguate, and requiring it to invent an id would be ceremony. Both forms run the same
+   * check.
+   */
+  const documents =
+    typeof licenceText === "string" ? { [licenceSource]: licenceText } : { ...licenceText };
+  for (const [id, text] of Object.entries(documents)) {
+    if (normaliseWhitespace(text ?? "") === "") {
+      throw new LicenceError(
+        `${typeof licenceText === "string" ? licenceSource : id} is empty, so every string would ` +
+          `"match" it vacuously — a check with nothing to check against passes for the wrong reason`,
+      );
+    }
   }
 
-  for (const role of REQUIRED_ROLES) {
+  for (const role of requiredRoles) {
     if (!Object.hasOwn(declared, role)) {
       throw new LicenceError(
         `attribution declaration is missing "${role}" — the ADR requires all of ` +
-          `${REQUIRED_ROLES.join(", ")}, and a missing one is an unmet obligation rather than ` +
+          `${requiredRoles.join(", ")}, and a missing one is an unmet obligation rather than ` +
           `an omitted nicety`,
       );
     }
@@ -124,15 +175,17 @@ export function assertStringsBackedByLicence(declared, licenceText, licenceSourc
 
   const roles = Object.keys(declared);
   for (const role of roles) {
-    const value = declared[role];
-    if (typeof value !== "string" || normaliseWhitespace(value) === "") {
+    const text = declaredText(declared[role]);
+    if (typeof text !== "string" || normaliseWhitespace(text) === "") {
       throw new LicenceError(`attribution "${role}" must be a non-empty string`);
     }
-    const needle = normaliseWhitespace(value);
-    if (!licence.includes(needle)) {
-      const { matchedChars, context } = divergence(needle, licence);
+    const backing = documentFor(role, declared[role], documents, licenceSource);
+    const haystack = normaliseWhitespace(backing.text);
+    const needle = normaliseWhitespace(text);
+    if (!haystack.includes(needle)) {
+      const { matchedChars, context } = divergence(needle, haystack);
       throw new LicenceError(
-        `attribution "${role}" does not occur in ${licenceSource}: it diverges after ` +
+        `attribution "${role}" does not occur in ${typeof licenceText === "string" ? licenceSource : backing.id}: it diverges after ` +
           `${String(matchedChars)} characters` +
           (context === "" ? "" : `, at "...${context}"`) +
           ` — a paraphrased credit is not attribution`,
@@ -175,7 +228,7 @@ export function assertArchiveCarriesAttribution(
     carrying.length === 0 ? `(only ${licencePath})` : carrying.map((e) => e.path).join(", ");
 
   for (const role of Object.keys(declared)) {
-    const needle = normaliseWhitespace(declared[role]);
+    const needle = normaliseWhitespace(declaredText(declared[role]) ?? "");
     if (emitted.includes(needle)) continue;
     const { matchedChars, context } = divergence(needle, emitted);
     throw new LicenceError(

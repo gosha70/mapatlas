@@ -23,6 +23,7 @@ import type { EventPresentation, MapController } from "@mapatlas/maplibre";
 import { createMapController } from "@mapatlas/maplibre";
 import { createWebTrackRecorder } from "@mapatlas/recorder-web";
 
+import { FIXTURE_ATTRIBUTION } from "../attribution.js";
 import { FIXTURE_REGION, generateFixtureEvents, generateFixtureTrack } from "./fixture-track.js";
 import { LAB_SAMPLING, createReplayGeolocation } from "./simulated-geolocation.js";
 
@@ -206,8 +207,7 @@ export function labTileSources(sources: LabSources): TileSource[] {
       offlineLicensed: true,
       // Rendered verbatim, and required: the archive is a derived work of Copernicus DEM
       // GLO-30 Public, whose licence the build already checks into every archive.
-      attribution:
-        "Contains modified Copernicus DEM GLO-30 Public data © DLR e.V. and Airbus DS GmbH",
+      attribution: FIXTURE_ATTRIBUTION,
       // **Hillshade, not terrain, is the role that draws.** A `terrain` source contributes no
       // drawable layer at all — `TerrainOptions` points at it — so declaring only that would
       // leave the DEM unrequested and the required terrain-plus-hillshade stack absent. One DEM
@@ -251,8 +251,7 @@ export function labTileSources(sources: LabSources): TileSource[] {
       // a source whose terms permit redistribution, so it is self-hosted in the sense §8
       // means (ADR-0033). Absence would refuse it.
       offlineLicensed: true,
-      attribution:
-        "Contains modified Copernicus DEM GLO-30 Public data © DLR e.V. and Airbus DS GmbH",
+      attribution: FIXTURE_ATTRIBUTION,
       styleLayers: [
         {
           id: "fixture-contour-lines",

@@ -101,6 +101,8 @@ type PublishedMapCanvas = (props: {
   style?: string | JSONValue;
   terrain?: TerrainOptions | null;
   presentation?: EventPresentation;
+  /** Construction-only; not tracked (ADR-0037). */
+  initialCamera?: { center?: LatLng; zoom?: number };
   track?: Track;
   events?: MapEvent[];
   livePoint?: TrackPoint;

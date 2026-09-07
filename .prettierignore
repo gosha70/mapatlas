@@ -6,3 +6,8 @@ coverage
 # Prose is hand-authored: line breaks in specs/ and the root docs are deliberate,
 # and reflowing them would bury real spec changes in formatting churn.
 **/*.md
+
+# Machine-local agent settings, not repo source: Claude Code rewrites this file
+# whenever a permission is granted, in its own formatting, so checking it makes
+# format:check fail for a change nobody made to the repository.
+.claude/

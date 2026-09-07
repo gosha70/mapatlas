@@ -1165,3 +1165,45 @@ against something the real protocol does differently. Single-instancing the brow
 literal per call registers exactly once too; recorded because a mutation of it survives, and a
 surviving mutation with no defect behind it should be documented rather than defended with a
 test that asserts an implementation detail.
+
+## ADR-0037 — `MapCanvas` takes an initial camera, not a controller handle
+**Context.** T7.1's demo app is the first consumer to assemble a map from `@mapatlas/react`
+rather than from `@mapatlas/maplibre` directly, and it could not open one anywhere. `MapCanvas`
+published no camera prop, so the map opened at MapLibre's world view while the archives cover
+0.08° of Mont Blanc. Nothing failed: the canvas mounted, the attribution control carried the
+archives' licence line, the status reported two sources, and the archive server logged exactly
+two requests — both header reads, no tile range behind either. `MapControllerOptions` has
+carried `center` and `zoom` since T5.2; only the binding above it did not.
+
+**Decision.** `MapCanvasProps` gains one optional prop, `initialCamera?: { center?, zoom? }`,
+spread into the constructor options one key at a time. It is **construction-only**: it is not in
+the construction effect's dependency array, nothing reconciles it, and later changes to it do
+nothing. The name says so.
+
+**Why not a tracked camera.** Every other prop on this component maps to a controller mutator,
+which is what makes reconciliation safe: `setSources` is idempotent against the applied value.
+A camera is not that. `recenter` moves a map the *user* is also moving, and a component that
+called it whenever the prop's identity changed would fire on every parent re-render that built a
+fresh object literal — dragging the view out from under a pan, with no way for the consumer to
+distinguish "the parent re-rendered" from "the consumer asked to move". A tracked camera needs a
+controlled/uncontrolled contract and an "is this the user or the prop" answer, and no consumer
+has asked for one. This is the first consumer, and what it needed was to open a map somewhere.
+
+**Why not a controller ref.** The obvious alternative — hand the caller the `MapController` —
+answers this and every future camera question at once, and that is the objection. `MapCanvas`
+exists to *hide* the controller: it owns construction, teardown, the recreation boundary and the
+re-application of state across it. A published handle lets a consumer call `destroy()` on a
+controller React still believes it owns, or `setSources` behind the reconciler's back, and the
+component's applied-state comparison would then be quietly wrong. Exposing the whole controller
+to solve one initial value trades the component's only invariant for convenience.
+
+**Consequences.** A `style` change recreates the controller and re-reads `initialCamera`, so the
+map re-opens at it. That is a widening of behaviour that already existed and was worse: before
+this prop, a style change dropped the camera to the world view. Consumers who need to move a map
+after it opens still have `createMapController` directly — the binding is a convenience over the
+renderer, not a wall in front of it.
+
+Fixing this is also what made T7.1's browser evidence honest. The pixel differential it replaced
+compared a map declaring two archives against one declaring none, and passed on the attribution
+control's text alone — zero tiles drawn either way. The claim now rests on range reads past each
+archive's header, which nothing but the archive can produce.

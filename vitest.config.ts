@@ -3,7 +3,13 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts", "scripts/**/*.test.mjs"],
+    // `.tsx` as well as `.ts`: the demo app is React, and a `*.test.tsx` outside this glob is
+    // not a skipped test — it is a file nobody runs and nobody is told about.
+    include: [
+      "packages/*/src/**/*.test.ts",
+      "apps/*/src/**/*.test.ts?(x)",
+      "scripts/**/*.test.mjs",
+    ],
     // The browser lane is Playwright's; `npm test` stays browser-free and fast.
     exclude: ["**/node_modules/**", "**/dist/**", "e2e/**"],
     environment: "node",

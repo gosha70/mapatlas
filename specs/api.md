@@ -1218,6 +1218,13 @@ export interface FieldSpec {
 export function MapCanvas(props: {
   sources: TileSource[]; style?: string | JSONValue; terrain?: TerrainOptions | null;
   presentation?: EventPresentation;
+  /** Where the map opens. **Read once, at construction, and not tracked** — later changes to
+   *  it do nothing, which is what "initial" names. Every other prop here reconciles through a
+   *  controller mutator; this one would have to call `recenter` on each new object literal a
+   *  parent renders, dragging the camera out from under a user mid-pan. Absent leaves the
+   *  controller's default standing, and each key is omitted independently rather than passed
+   *  as `undefined`. A `style` change recreates the controller and re-opens at it. (ADR-0037) */
+  initialCamera?: { center?: LatLng; zoom?: number };
   track?: Track; events?: MapEvent[]; livePoint?: TrackPoint;
   draft?: DraftTrackPoint[]; drawMode?: boolean; onDraw?: DrawModeHandlers;
   onMapTap?(at: LatLng): void; onEventClick?(id: Id): void;

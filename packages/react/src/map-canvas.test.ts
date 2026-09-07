@@ -205,6 +205,72 @@ describe("MapCanvas — construction boundary", () => {
     await harness.unmount();
   });
 
+  it("opens at the camera it was given", async () => {
+    // **The prop the first consumer needed.** Without it the map opens at MapLibre's world
+    // view, so an app over a regional archive draws a grey box while every "a canvas exists"
+    // assertion still passes — which is how this arrived: T7.1's shell, over real archives,
+    // fetched two headers and not one tile.
+    const { create, created } = fakeControllers();
+    const harness = await mount({
+      create,
+      sources: SOURCES,
+      initialCamera: { center: { lat: 45.84, lng: 6.865 }, zoom: 12 },
+    });
+
+    expect(created[0]?.options.center).toEqual({ lat: 45.84, lng: 6.865 });
+    expect(created[0]?.options.zoom).toBe(12);
+    await harness.unmount();
+  });
+
+  it("passes neither key when no camera is given, so the controller's default stands", async () => {
+    // Absent, not `undefined`. Under `exactOptionalPropertyTypes` the two are different values,
+    // and a controller reading `"zoom" in options` would take an explicit `undefined` for a
+    // caller's choice — which is how a default silently stops applying.
+    const { create, created } = fakeControllers();
+    const harness = await mount({ create, sources: SOURCES });
+
+    expect(created[0]?.options).not.toHaveProperty("center");
+    expect(created[0]?.options).not.toHaveProperty("zoom");
+    await harness.unmount();
+  });
+
+  it("takes half a camera as half a camera", async () => {
+    const { create, created } = fakeControllers();
+    const harness = await mount({ create, sources: SOURCES, initialCamera: { zoom: 9 } });
+
+    expect(created[0]?.options.zoom).toBe(9);
+    expect(
+      created[0]?.options,
+      "a centre was invented for a caller who named none",
+    ).not.toHaveProperty("center");
+    await harness.unmount();
+  });
+
+  it("does not move the map when the camera prop changes, and never rebuilds for it", async () => {
+    // **Construction-only is the claim, so this is the test that says so.** A parent that
+    // re-renders with a fresh object literal — the ordinary React case — must not drag the
+    // camera out from under a user mid-pan, and must not churn a live WebGL context either.
+    const { create, created } = fakeControllers();
+    const harness = await mount({
+      create,
+      sources: SOURCES,
+      initialCamera: { center: { lat: 1, lng: 2 }, zoom: 5 },
+    });
+
+    await harness.rerender({
+      create,
+      sources: SOURCES,
+      initialCamera: { center: { lat: 50, lng: 50 }, zoom: 15 },
+    });
+
+    expect(created, "a camera change rebuilt the controller").toHaveLength(1);
+    expect(
+      created[0]?.controller.calls.filter((call) => call.startsWith("recenter")),
+      "the camera prop moved a map it does not track",
+    ).toEqual([]);
+    await harness.unmount();
+  });
+
   it("destroys and recreates only when style changes, restoring the whole current state", async () => {
     // **The plan's recreation test: every other prop held constant.** The replacement must
     // carry the entire current state, and "carry" means logically present — sources, terrain

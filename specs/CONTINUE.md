@@ -231,8 +231,8 @@ throughout**, so it will meet this again on its first offline round-trip test.
 - **Label verification honestly.** Gate runs and mutations you ran yourself are *author
   verification*. Say so. Independent adjudication is worth a lot more and should be marked.
 - Every source file needs `// SPDX-License-Identifier: Apache-2.0`; commits use `-s`.
-- Gates: `npm run verify` (build, typecheck, lint, coverage, isolation scan, SPDX scan, prettier)
-  and `npm run test:browser`. Check the **exit code**, not the printed output.
+- Gates: `npm run verify` (build, typecheck, lint, coverage, isolation scan, SPDX scan, prettier,
+  packaging check) and `npm run test:browser`. Check the **exit code**, not the printed output.
 
 ---
 

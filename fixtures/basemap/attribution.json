@@ -1,0 +1,10 @@
+{
+  "credit": {
+    "document": "OSMF-ATTRIBUTION-GUIDELINES",
+    "text": "© OpenStreetMap contributors"
+  },
+  "openDataNotice": {
+    "document": "OSM-COPYRIGHT",
+    "text": "OpenStreetMap is open data, licensed under the Open Data Commons Open Database License (ODbL) by the OpenStreetMap Foundation (OSMF)"
+  }
+}

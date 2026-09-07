@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -17,6 +18,7 @@ import Pbf from "pbf";
 import { PMTiles } from "pmtiles";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { writeArchive } from "./archive.mjs";
 import { buildFixture, DEFAULT_PATHS } from "./build-fixture.mjs";
 import { buildCog } from "./cog-fixture.mjs";
 import { rangeFetcher } from "./deps.mjs";
@@ -46,6 +48,8 @@ const REGION = {
   contourIntervalJustification: "100 m across the synthetic ramp gives several levels",
 };
 const SPACING = 1 / 3600;
+/** The synthetic basemap extract's SHA-256, recorded rather than derived at run time. */
+const SYNTHETIC_EXTRACT_SHA256 = "42b0a1f51416c484cb37e206a180c6b7be4996496ba10a225669ed567b404826";
 /**
  * Well clear of the floor, and varying enough to carry contours.
  *
@@ -150,6 +154,102 @@ function openArchive(path) {
   });
 }
 
+/**
+ * A synthetic Protomaps upstream: a real PMTiles archive over a fake `fetch`.
+ *
+ * **The point is that CI reaches the stage.** The pin lives in `fixtures/basemap/pin.json` rather
+ * than in the module precisely so a test can point the same shipped code at an archive of its own
+ * size and hash — a stage only a live run can reach is a stage CI never runs, and one reached
+ * through a different code path proves something about that path instead.
+ */
+let syntheticBasemapSeq = 0;
+async function syntheticBasemap(dir) {
+  // **A fresh path per call.** The sink appends and refuses nothing, so reusing one name made
+  // each call extend the previous test's upstream — the archive differed per test and its hash
+  // was a function of call order rather than of the inputs. A recorded hash cannot mean anything
+  // against a fixture that is not the same twice.
+  const seq = (syntheticBasemapSeq += 1);
+  const bounds = REGION.bounds;
+  const minZoom = 14;
+  const maxZoom = 14;
+  const tiles = [...tilesInRange(bounds, minZoom, maxZoom)].map(({ z, x, y }) => ({
+    z,
+    x,
+    y,
+    // Distinct per tile, so a stage that wrote one tile everywhere would fail the byte comparison
+    // rather than pass a count.
+    bytes: Uint8Array.from([z, x & 0xff, y & 0xff, 7]),
+  }));
+  const upstreamPath = join(dir, `upstream-${String(seq)}.pmtiles`);
+  await writeArchive(
+    upstreamPath,
+    tiles,
+    { bounds, minzoom: minZoom, maxzoom: maxZoom, name: "synthetic" },
+    {
+      tileType: "mvt",
+      compression: "none",
+    },
+  );
+  const object = readFileSync(upstreamPath);
+
+  const pin = {
+    product: "Synthetic Basemap",
+    key: "synthetic.pmtiles",
+    url: "https://upstream.invalid/synthetic.pmtiles",
+    version: "0.0.1",
+    size: object.length,
+    blake3: "0".repeat(64),
+    metadataUrl: "https://upstream.invalid/builds.json",
+    minZoom,
+    maxZoom,
+    // **Recorded, not learned.** An earlier version of the positive test built once, hashed
+    // whatever that run produced and then blessed it — which any deterministic defect passes
+    // twice, because the oracle is the implementation's own output. This value was taken once
+    // and written down; a change in the stage, the metadata or the tiles moves it and the test
+    // says so.
+    extractSha256: SYNTHETIC_EXTRACT_SHA256,
+  };
+  const pinPath = join(dir, `pin-${String(seq)}.json`);
+  writeFileSync(pinPath, JSON.stringify(pin));
+
+  const fetchImpl = (url, init) => {
+    if (url === pin.metadataUrl) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve([
+            { key: pin.key, size: pin.size, b3sum: pin.blake3, version: pin.version },
+          ]),
+      });
+    }
+    const range = /bytes=(\d+)-(\d+)/.exec(init.headers.Range);
+    const start = Number(range[1]);
+    const end = Math.min(Number(range[2]), object.length - 1);
+    const slice = object.subarray(start, end + 1);
+    return Promise.resolve({
+      status: 206,
+      headers: {
+        get: (n) => (n === "Content-Range" ? `bytes ${start}-${end}/${object.length}` : null),
+      },
+      arrayBuffer: () =>
+        Promise.resolve(slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength)),
+    });
+  };
+  return { pin, pinPath, fetchImpl, tiles };
+}
+
+/** The basemap paths a synthetic run needs, in one place rather than five. */
+const withBasemap = (base, basemap, archivePath) => ({
+  ...base,
+  basemapArchivePath: archivePath,
+  basemapPinPath: basemap.pinPath,
+  basemapAttributionPath: DEFAULT_PATHS.basemapAttributionPath,
+  basemapNoticePath: DEFAULT_PATHS.basemapNoticePath,
+  basemapRoles: DEFAULT_PATHS.basemapRoles,
+  basemapLicenceDocuments: DEFAULT_PATHS.basemapLicenceDocuments,
+});
+
 describe("the committed entry point produces an archive", () => {
   // What this establishes and what it does not. It proves the **assembled, committed path**
   // works — every stage, in order, through the real writer onto a real filesystem — with no
@@ -170,6 +270,222 @@ describe("the committed entry point produces an archive", () => {
       expect(statSync(archive.path).size).toBe(archive.bytes);
       expect(archive.tiles).toBeGreaterThan(0);
     }
+  });
+
+  it("builds the basemap through the committed entry point, with no network", async () => {
+    // **The stage CI reaches.** Every assertion here is about the shipped code driven against a
+    // synthetic upstream: the pin is confirmed before a tile is read, the tiles are the region's,
+    // and what the archive carries is what ODbL §4.3 asks for.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+
+    const report = await buildFixture({
+      paths: {
+        ...paths,
+        basemapArchivePath: join(dir, "out", "basemap.pmtiles"),
+        basemapPinPath: basemap.pinPath,
+        basemapAttributionPath: DEFAULT_PATHS.basemapAttributionPath,
+        basemapNoticePath: DEFAULT_PATHS.basemapNoticePath,
+        basemapRoles: DEFAULT_PATHS.basemapRoles,
+        basemapLicenceDocuments: DEFAULT_PATHS.basemapLicenceDocuments,
+      },
+      fetchImpl,
+    });
+
+    expect(report.archives.map((a) => a.kind)).toEqual(["terrain", "contours", "basemap"]);
+    expect(report.basemap.pin).toBe("synthetic.pmtiles");
+    expect(report.basemap.tiles).toBe(basemap.tiles.length);
+    expect(report.basemap.absent).toBe(0);
+    // Range reads, not a whole-object fetch: the source refuses anything but 206, so a count
+    // greater than zero here is a count of ranges.
+    expect(report.basemap.rangeRequests).toBeGreaterThan(0);
+  });
+
+  it("carries the ODbL §4.3 notice, and does not carry the licence documents", async () => {
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+    const out = join(dir, "out", "basemap-notice.pmtiles");
+
+    await buildFixture({
+      paths: {
+        ...paths,
+        basemapArchivePath: out,
+        basemapPinPath: basemap.pinPath,
+        basemapAttributionPath: DEFAULT_PATHS.basemapAttributionPath,
+        basemapNoticePath: DEFAULT_PATHS.basemapNoticePath,
+        basemapRoles: DEFAULT_PATHS.basemapRoles,
+        basemapLicenceDocuments: DEFAULT_PATHS.basemapLicenceDocuments,
+      },
+      fetchImpl,
+    });
+
+    const metadata = await openArchive(out).getMetadata();
+
+    // PMTiles defines `attribution` as a string; a role map there would be the wrong type for
+    // every reader of the format.
+    expect(typeof metadata.attribution).toBe("string");
+    expect(metadata.attribution).toContain("© OpenStreetMap contributors");
+    expect(metadata.attribution).toContain("https://opendatacommons.org/licenses/odbl/1-0/");
+    expect(metadata.attribution).toContain("https://www.openstreetmap.org/copyright");
+
+    // **The documents are provenance, not payload** (ADR-0038): §4.2's "a copy of this License"
+    // belongs to conveying a Database, and this extract is a Produced Work. Carrying 25 KB of
+    // ODbL here would also hang the writer.
+    expect(Object.keys(metadata).filter((k) => /license/i.test(k))).toEqual([]);
+    expect(JSON.stringify(metadata)).not.toContain(
+      "Open Data Commons Open Database License (ODbL)".repeat(1) + " Text",
+    );
+  });
+
+  it("refuses an extract that does not hash to the pin, and leaves nothing behind", async () => {
+    // **The integrity signal for what this build makes.** The pin's BLAKE3 identifies the
+    // upstream; this is the check on the artefact. A wrong hash must fail *before* promotion, or
+    // the failure ships an archive nobody vouched for.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    writeFileSync(
+      basemap.pinPath,
+      JSON.stringify({ ...basemap.pin, extractSha256: "0".repeat(64) }),
+    );
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+    const out = join(dir, "out", "basemap-badhash.pmtiles");
+
+    await expect(
+      buildFixture({
+        paths: {
+          ...paths,
+          basemapArchivePath: out,
+          basemapPinPath: basemap.pinPath,
+          basemapAttributionPath: DEFAULT_PATHS.basemapAttributionPath,
+          basemapNoticePath: DEFAULT_PATHS.basemapNoticePath,
+          basemapRoles: DEFAULT_PATHS.basemapRoles,
+          basemapLicenceDocuments: DEFAULT_PATHS.basemapLicenceDocuments,
+        },
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/not the one this build is pinned to reproduce/);
+
+    // Neither the promoted archive nor the partial survives: a failed build that left either
+    // would be indistinguishable from a successful one to anything reading the path.
+    expect(existsSync(out), "a failed build promoted its archive").toBe(false);
+    expect(existsSync(`${out}.partial`), "the partial outlived the failure").toBe(false);
+  });
+
+  it("accepts the extract when it hashes to the recorded value", async () => {
+    // The positive half, against a hash **written down** rather than learned from a first run of
+    // the same implementation — otherwise a deterministic defect satisfies its own oracle.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+    const out = join(dir, "out", "basemap-hash-ok.pmtiles");
+
+    await expect(
+      buildFixture({ paths: withBasemap(paths, basemap, out), fetchImpl }),
+    ).resolves.toBeDefined();
+
+    expect(createHash("sha256").update(readFileSync(out)).digest("hex")).toBe(
+      SYNTHETIC_EXTRACT_SHA256,
+    );
+  });
+
+  it("refuses a distributable pin that records no extract hash at all", async () => {
+    // **The bypass this closes.** While the check was conditional on the field being present, a
+    // pin could switch integrity off by omitting it — an assertion that silently stops holding.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    const withoutHash = { ...basemap.pin };
+    delete withoutHash.extractSha256;
+    writeFileSync(basemap.pinPath, JSON.stringify(withoutHash));
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+
+    await expect(
+      buildFixture({
+        paths: withBasemap(paths, basemap, join(dir, "out", "basemap-nohash.pmtiles")),
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/must declare the bytes it is pinned to reproduce/);
+  });
+
+  it("builds all three development archives, with the marker and no notice", async () => {
+    // `--not-for-distribution` is a supported command, and it crashed: the production notice was
+    // built unconditionally while being deliberately absent in this mode. A development archive
+    // trades the licence notices for the marker; labelling it with a production credit would say
+    // an unpublishable archive was ready to publish.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+    const out = join(dir, "out", "dev-basemap.pmtiles");
+
+    const report = await buildFixture({
+      paths: withBasemap(paths, basemap, out),
+      distributable: false,
+      fetchImpl,
+    });
+
+    expect(report.distributable).toBe(false);
+    expect(report.archives.map((a) => a.kind)).toEqual(["terrain", "contours", "basemap"]);
+    for (const archive of report.archives) {
+      expect(archive.path.endsWith(".dev"), `${archive.kind} is not a .dev archive`).toBe(true);
+      expect(existsSync(archive.path)).toBe(true);
+    }
+
+    const metadata = await openArchive(`${out}.dev`).getMetadata();
+    expect(metadata["NOT-FOR-DISTRIBUTION"]).toBeDefined();
+    expect(
+      metadata.attribution,
+      "a development archive carried a production credit",
+    ).toBeUndefined();
+    expect(metadata["mapatlas:notice"]).toBeUndefined();
+  });
+
+  it("refuses an upstream that is not the pinned build", async () => {
+    // The identity check, before a single tile is read: a different archive at the same URL is
+    // exactly the failure a passing round-trip would otherwise hide.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    const wrongSize = (url, init) => {
+      if (url === basemap.pin.metadataUrl) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve([
+              {
+                key: basemap.pin.key,
+                size: basemap.pin.size + 1,
+                b3sum: basemap.pin.blake3,
+                version: basemap.pin.version,
+              },
+            ]),
+        });
+      }
+      return basemap.fetchImpl(url, init);
+    };
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? wrongSize(url, init) : cog(url, init);
+
+    await expect(
+      buildFixture({
+        paths: {
+          ...paths,
+          basemapArchivePath: join(dir, "out", "basemap-wrong.pmtiles"),
+          basemapPinPath: basemap.pinPath,
+          basemapAttributionPath: DEFAULT_PATHS.basemapAttributionPath,
+          basemapNoticePath: DEFAULT_PATHS.basemapNoticePath,
+          basemapRoles: DEFAULT_PATHS.basemapRoles,
+          basemapLicenceDocuments: DEFAULT_PATHS.basemapLicenceDocuments,
+        },
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/no longer matches the pin/);
   });
 
   it("creates the output directory rather than requiring one to exist", async () => {

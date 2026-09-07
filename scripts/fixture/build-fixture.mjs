@@ -23,7 +23,12 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { runBuild } from "./build.mjs";
-import { createArchiveWriter, createSourceDeps, encodeRasterTile } from "./deps.mjs";
+import {
+  createArchiveWriter,
+  createBasemapReader,
+  createSourceDeps,
+  encodeRasterTile,
+} from "./deps.mjs";
 
 /** Where the checked-in inputs live, relative to the repository root. */
 export const DEFAULT_PATHS = Object.freeze({
@@ -35,6 +40,27 @@ export const DEFAULT_PATHS = Object.freeze({
   // (ADR-0025). A renderer wants them as two sources in any case.
   terrainArchivePath: "build/fixture/terrain.pmtiles",
   contourArchivePath: "build/fixture/contours.pmtiles",
+
+  // The basemap (ADR-0038). A third archive rather than a layer in either of the others: it is
+  // vector where terrain is raster, and it is a different product under a different licence.
+  basemapArchivePath: "build/fixture/basemap.pmtiles",
+  basemapPinPath: "fixtures/basemap/pin.json",
+  basemapAttributionPath: "fixtures/basemap/attribution.json",
+  basemapRoles: ["credit", "openDataNotice"],
+  // The compact notice the archive carries (ADR-0038, ODbL §4.3). The licence documents are
+  // **not** archive payload: §4.2's "a copy of this License or its URI" belongs to the clause
+  // about conveying a Database, and this extract is a Produced Work.
+  basemapNoticePath: "fixtures/basemap/notice.json",
+  // Provenance for the declaration, read to check the strings verbatim and never written into
+  // the archive — which is why no entry path appears here.
+  basemapLicenceDocuments: [
+    { id: "ODbL-1.0", path: "fixtures/basemap/licence/ODbL-1.0.txt" },
+    { id: "OSM-COPYRIGHT", path: "fixtures/basemap/licence/OSM-COPYRIGHT.txt" },
+    {
+      id: "OSMF-ATTRIBUTION-GUIDELINES",
+      path: "fixtures/basemap/licence/OSMF-ATTRIBUTION-GUIDELINES.txt",
+    },
+  ],
 });
 
 /**
@@ -58,7 +84,11 @@ export async function buildFixture(options = {}) {
     now = () => new Date(),
   } = options;
 
-  for (const path of [paths.terrainArchivePath, paths.contourArchivePath]) {
+  for (const path of [
+    paths.terrainArchivePath,
+    paths.contourArchivePath,
+    paths.basemapArchivePath,
+  ].filter((p) => p !== undefined)) {
     io.mkdirSync(dirname(path), { recursive: true });
   }
   const source = createSourceDeps({ fetchImpl });
@@ -70,6 +100,7 @@ export async function buildFixture(options = {}) {
       io,
       probe: source.probe,
       readTile: source.readTile,
+      readBasemapRegion: createBasemapReader({ fetchImpl }),
       encodeRasterTile,
       // The build chooses each archive's payload type and compression per call; the writer holds
       // no opinion about which archives exist.
@@ -125,6 +156,7 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
           envelope: report.envelope.map((v) => Number(v.toFixed(6))),
           lowestM: Number(report.lowest.elevationM.toFixed(3)),
           archives: report.archives,
+          basemap: report.basemap,
           totalBytes: report.archives.reduce((n, a) => n + a.bytes, 0),
           distributable: report.distributable,
         },

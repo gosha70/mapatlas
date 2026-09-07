@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { BUILD_STAGES, BuildError, runBuild } from "./build.mjs";
 import { CoverageError, requiredTiles } from "./coverage.mjs";
 import { clipBoundsToTile, encodeRasterTile } from "./deps.mjs";
-import { LICENCE_ENTRY_PATH } from "./licence.mjs";
 import { productionEnvelope, tilesInRange } from "./mercator.mjs";
 import { ElevationFloorError } from "./region.mjs";
 import { SOURCE_SAMPLE_SPACING_DEG as SPACING } from "./source.mjs";
@@ -178,11 +177,17 @@ function harness(overrides = {}) {
             m.distributable
               ? [
                   { path: "LICENSE", text: m.licenceText },
-                  { path: "metadata.json", text: JSON.stringify({ ...m, licenceText: undefined }) },
+                  {
+                    path: "metadata.json",
+                    text: JSON.stringify({ ...m, licenceText: undefined }),
+                  },
                 ]
               : [
                   { path: "NOT-FOR-DISTRIBUTION", text: "dev" },
-                  { path: "metadata.json", text: JSON.stringify({ ...m, licenceText: undefined }) },
+                  {
+                    path: "metadata.json",
+                    text: JSON.stringify({ ...m, licenceText: undefined }),
+                  },
                 ],
         }))
       )(path, tiles, meta);
@@ -940,7 +945,9 @@ describe("the archive must carry what it was built under", () => {
     // is checked against the licence and then dropped, leaving recipients no attribution while
     // every earlier check passes. Only an assertion over what the archive *emits* catches it.
     const { deps } = harness({
-      writeArchive: (_p, _t, m) => ({ entries: () => [{ path: "LICENSE", text: m.licenceText }] }),
+      writeArchive: (_p, _t, m) => ({
+        entries: () => [{ path: "LICENSE", text: m.licenceText }],
+      }),
     });
     withSnapshot(deps, ["N45E006"]);
 
@@ -1047,7 +1054,7 @@ describe("the archive must carry what it was built under", () => {
     const { deps } = harness({
       writeArchive: (_p, _t, m) => ({
         entries: () => [
-          { path: LICENCE_ENTRY_PATH, text: m.licenceText },
+          { path: "LICENSE", text: m.licenceText },
           { path: "meta", text: Object.values(m.attribution).join(" ") },
         ],
       }),

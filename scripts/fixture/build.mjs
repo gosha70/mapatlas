@@ -3,6 +3,7 @@
 import { assertCoverage, assertSnapshotFresh, loadCoverageSnapshot } from "./coverage.mjs";
 import {
   LICENCE_ENTRY_PATH,
+  declaredText,
   assertArchiveCarriesAttribution,
   assertNotForDistribution,
   assertArchiveCarriesLicence,
@@ -135,20 +136,48 @@ async function at(stage, work) {
  */
 export async function runBuild(paths, deps, options = {}) {
   const distributable = options.distributable ?? true;
-  let licenceText = "";
-  let attribution = {};
-  let roles = [];
-  if (distributable) {
-    licenceText = await at("licence", () => deps.readText(paths.licencePath));
-    attribution = await at("licence", () => deps.readJson(paths.attributionPath));
-    roles = await at("licence", () =>
+
+  /**
+   * Load one product's licence bundle: its documents, its declaration, its roles.
+   *
+   * **Per product, because obligations are per product** (ADR-0038). Copernicus declares four
+   * roles against one document; the basemap declares three against three, and none of
+   * Copernicus's four applies to it because ODbL has no words for them. A single shared pair of
+   * paths could only ever express one of the two.
+   */
+  const loadBundle = async (spec) => {
+    const documents = [];
+    for (const doc of spec.documents) {
+      documents.push({
+        id: doc.id,
+        entryPath: doc.entryPath,
+        text: await at("licence", () => deps.readText(doc.path)),
+      });
+    }
+    const declared = await at("licence", () => deps.readJson(spec.attributionPath));
+    const texts = Object.fromEntries(documents.map((d) => [d.id, d.text]));
+    const roles = await at("licence", () =>
       assertStringsBackedByLicence(
-        /** @type {Record<string, string>} */ (attribution),
-        licenceText,
-        paths.licencePath,
+        /** @type {Record<string, unknown>} */ (declared),
+        // One document keeps the single-text form, so its error messages still name the file
+        // rather than an id the reader has never seen.
+        documents.length === 1 ? documents[0].text : texts,
+        documents.length === 1 ? documents[0].id : spec.name,
+        spec.requiredRoles === undefined ? {} : { requiredRoles: spec.requiredRoles },
       ),
     );
-  }
+    return { name: spec.name, documents, declared, roles };
+  };
+
+  const copernicus = distributable
+    ? await loadBundle({
+        name: "the Copernicus licence",
+        documents: [
+          { id: paths.licencePath, path: paths.licencePath, entryPath: LICENCE_ENTRY_PATH },
+        ],
+        attributionPath: paths.attributionPath,
+      })
+    : undefined;
 
   // `parseRegionDeclaration` rather than `loadRegionDeclaration`: the latter reads the file
   // itself, which would put I/O inside a stage this module promises to keep injectable. Reading
@@ -197,6 +226,62 @@ export async function runBuild(paths, deps, options = {}) {
   );
 
   const addresses = [...tilesInRange(declaration.bounds, declaration.minZoom, declaration.maxZoom)];
+
+  /**
+   * The basemap, when the caller asked for one.
+   *
+   * **Optional, and absent is not a degraded build.** The terrain fixture predates it and its
+   * tests declare no basemap paths; a stage that ran unconditionally would put a network read
+   * into every one of them. `build-fixture.mjs` supplies the paths, so the committed entry point
+   * always builds it and the suite reaches the same code through a synthetic upstream.
+   */
+  const basemap =
+    paths.basemapArchivePath === undefined
+      ? undefined
+      : await at("basemap", async () => {
+          const pin = deps.readJson(paths.basemapPinPath);
+          /**
+           * A distributable basemap **must** record the hash of the extract it produces.
+           *
+           * Checked here, before the read, for two reasons. It is the cheap check — refusing a
+           * misdeclared pin after a two-megabyte range read wastes the read and says nothing
+           * extra. And it must not be *optional*: an integrity check that a pin can switch off
+           * by omitting a field is one that silently stops holding, which is the failure it
+           * exists to prevent rather than a lenient version of it.
+           */
+          if (distributable && !/^[0-9a-f]{64}$/.test(String(pin.extractSha256 ?? ""))) {
+            throw new Error(
+              `the basemap pin records extractSha256 ${JSON.stringify(pin.extractSha256)}, which ` +
+                `is not a SHA-256 — a distributable extract must declare the bytes it is pinned ` +
+                `to reproduce, and a pin that omits it would publish unchecked`,
+            );
+          }
+          const region = await deps.readBasemapRegion(pin, declaration.bounds);
+          return { pin, ...region };
+        });
+
+  const basemapLicence =
+    basemap === undefined || !distributable
+      ? undefined
+      : await loadBundle({
+          name: "the basemap licence bundle",
+          documents: paths.basemapLicenceDocuments,
+          attributionPath: paths.basemapAttributionPath,
+          requiredRoles: paths.basemapRoles,
+        });
+
+  /**
+   * The notice the extract carries — ODbL §4.3, not §4.2 (ADR-0038).
+   *
+   * The licence documents back the declaration and are **not** archive payload: §4.2's "a copy of
+   * this License or its URI" belongs to the clause about conveying a Database, and this extract is
+   * a Produced Work. What §4.3 requires is a notice naming the source and the licence, which is
+   * what this is.
+   */
+  const basemapNotice =
+    basemap === undefined || !distributable
+      ? undefined
+      : await at("licence", () => deps.readJson(paths.basemapNoticePath));
 
   const { surface, rasterTiles } = await at("tiles", () => {
     for (const crop of crops) {
@@ -271,6 +356,7 @@ export async function runBuild(paths, deps, options = {}) {
   const outputs = [
     {
       kind: "terrain",
+      licence: copernicus,
       path: distributable ? paths.terrainArchivePath : `${paths.terrainArchivePath}.dev`,
       tiles: rasterTiles,
       tileType: "png",
@@ -279,6 +365,7 @@ export async function runBuild(paths, deps, options = {}) {
     },
     {
       kind: "contours",
+      licence: copernicus,
       path: distributable ? paths.contourArchivePath : `${paths.contourArchivePath}.dev`,
       tiles: contours.tiles,
       tileType: "mvt",
@@ -286,6 +373,68 @@ export async function runBuild(paths, deps, options = {}) {
       // share an archive even setting the tile type aside.
       compression: "gzip",
     },
+    ...(basemap === undefined
+      ? []
+      : [
+          {
+            kind: "basemap",
+            licence: basemapLicence,
+            carriesDocuments: false,
+            path: distributable ? paths.basemapArchivePath : `${paths.basemapArchivePath}.dev`,
+            tiles: basemap.tiles,
+            tileType: "mvt",
+            // **Uncompressed, which is what was proved.** `getZxy` hands back the tile already
+            // decompressed, and `basemap-roundtrip.mjs` established byte identity through a
+            // `compression: "none"` write. Re-gzipping would be smaller and is not what the
+            // round-trip measured, so it is a change to make against a fresh proof rather than
+            // on the way past.
+            compression: "none",
+            // Upstream's whole metadata document travels: `vector_layers` is the v4 schema 4b's
+            // style layers are written against, `attribution` is a licence obligation, and the
+            // `planetiler:*` keys say which OSM replication these tiles came from. An extract
+            // that dropped them would render identically and be untraceable (ADR-0038).
+            // **`attribution` is a string.** PMTiles defines it as one, and upstream's is
+            // `<a …>© OpenStreetMap</a>` — which omits "contributors" and so satisfies nothing
+            // declared. Ours supersedes it and carries the §4.3 notice in one line; the
+            // structured evidence lives under `mapatlas:` keys, where a role map belongs.
+            //
+            // **Only in a distributable build.** A development archive carries no licence
+            // notice, exactly as it carries no licence: it trades those for the
+            // NOT-FOR-DISTRIBUTION marker, and constructing a production notice for it both
+            // crashed (`basemapNotice` is deliberately absent) and would have labelled an
+            // archive nobody may publish as though it were publishable.
+            ...(distributable
+              ? {
+                  attribution:
+                    `${basemapNotice.credit} — data available under the ` +
+                    `${basemapNotice.licence}, ${basemapNotice.licenceUri} — source ` +
+                    `${basemapNotice.sourceUri}`,
+                }
+              : {}),
+            // The recorded hash belongs to the distributable extract. A `.dev` archive is
+            // intentionally a different artefact, so enforcing the production hash against it
+            // would fail every development build for being what it is meant to be.
+            ...(distributable ? { expectedSha256: basemap.pin.extractSha256 } : {}),
+            extraMetadata: {
+              ...basemap.metadata,
+              ...(distributable ? { "mapatlas:notice": basemapNotice } : {}),
+              "mapatlas:attribution": Object.fromEntries(
+                Object.entries(basemapLicence?.declared ?? {}).map(([role, value]) => [
+                  role,
+                  declaredText(value),
+                ]),
+              ),
+              "mapatlas:source": {
+                product: basemap.pin.product,
+                key: basemap.pin.key,
+                url: basemap.pin.url,
+                version: basemap.pin.version,
+                size: basemap.pin.size,
+                blake3: basemap.pin.blake3,
+              },
+            },
+          },
+        ]),
   ].map((output) => ({ ...output, partialPath: `${output.path}.partial` }));
 
   /**
@@ -312,37 +461,91 @@ export async function runBuild(paths, deps, options = {}) {
           // implementation detail of how complete tiles were produced, and publishing it would
           // invite requests for tiles outside the region.
           bounds: declaration.bounds,
-          minzoom: declaration.minZoom,
-          maxzoom: declaration.maxZoom,
+          ...(output.extraMetadata ?? {}),
+          minzoom: output.kind === "basemap" ? basemap.pin.minZoom : declaration.minZoom,
+          maxzoom: output.kind === "basemap" ? basemap.pin.maxZoom : declaration.maxZoom,
           tileType: output.tileType,
           compression: output.compression,
           // Passed rather than inferred from an empty licence: a writer guessing the mode from
           // whether a string is blank would put a development archive one truthiness bug away
           // from looking distributable.
           distributable,
-          licenceText,
-          attribution,
+          // The licence document is archive payload only for a product whose terms require it
+          // (Copernicus, one document). The basemap carries a §4.3 notice instead, so it passes
+          // none — and the writer takes one or none, never a list.
+          licenceText:
+            output.carriesDocuments === false ? undefined : output.licence?.documents[0]?.text,
+          // Flattened for the archive: a consumer reads role → text. The document each string is
+          // backed by is a property of the *declaration*, checked above, and is not something a
+          // recipient needs in order to display a credit.
+          attribution:
+            output.attribution ??
+            Object.fromEntries(
+              Object.entries(output.licence?.declared ?? {}).map(([role, value]) => [
+                role,
+                declaredText(value),
+              ]),
+            ),
         }),
       );
-      // **Both archives are derived works**, so both carry the notices. Checking only the one
+      // **Both Copernicus archives are derived works**, so both carry the notices. Checking only the one
       // that happens to hold the elevation data would ship contours traced from the same source
       // with no attribution at all.
       if (distributable) {
-        await at("archive", () =>
-          assertArchiveCarriesLicence(archive, licenceText, LICENCE_ENTRY_PATH),
-        );
-        // The second half of obligation 1: the strings were checked against the document above,
+        if (output.carriesDocuments !== false) {
+          // **One document, the one its terms require.** Copernicus's licence must travel with
+          // its archive; the basemap's do not, because ODbL §4.3 asks a Produced Work for a
+          // notice rather than the licence (ADR-0038). A bundle's other documents are validation
+          // evidence for the declaration and are never payload.
+          const [doc] = output.licence.documents;
+          await at("archive", () => assertArchiveCarriesLicence(archive, doc.text, doc.entryPath));
+        }
+        // The second half of obligation 1: the strings were checked against the documents above,
         // and this is where they are confirmed to have reached the archive rather than stopping
-        // at the validation.
+        // at the validation. **Every document is excluded**, or a string is found inside the very
+        // document it was drawn from and the check passes with nothing emitted.
         await at("archive", () =>
           assertArchiveCarriesAttribution(
             archive,
-            /** @type {Record<string, string>} */ (attribution),
-            LICENCE_ENTRY_PATH,
+            /** @type {Record<string, unknown>} */ (output.licence.declared),
+            output.carriesDocuments === false
+              ? []
+              : output.licence.documents.map((d) => d.entryPath),
           ),
         );
       } else {
         await at("archive", () => assertNotForDistribution(archive));
+      }
+
+      /**
+       * The extract must hash to what the pin records — **before promotion**, so a mismatch
+       * promotes no new archive. A previous build's finalised pair is left as it was: rollback
+       * removes what *this* build published, and before promotion begins there is nothing of
+       * this build's to remove.
+       *
+       * This is the integrity signal for what this build makes. The pin's BLAKE3 identifies the
+       * 137 GB upstream and is checked against its published metadata row, which is not
+       * source-byte verification; this is. A change in the upstream's tiles, in the tile set, or
+       * in what the metadata carries all move it, and none of them announces itself otherwise —
+       * the archive is still a valid archive and still renders.
+       *
+       * **Present for every distributable basemap**, because the pin is required to declare a
+       * well-formed one before the read — including the suite's synthetic fixture, which records
+       * its own. Absent only for development output, which is intentionally a different artefact
+       * and would fail a production hash for being exactly what it is meant to be.
+       */
+      if (output.expectedSha256 !== undefined) {
+        // Reached for every distributable basemap: the pin was required to declare this above,
+        // so the branch is not a way to skip the check but the place it runs.
+        await at("archive", () => {
+          const actual = deps.io.sha256(deps.io.readFileSync(output.partialPath));
+          if (actual !== output.expectedSha256) {
+            throw new Error(
+              `${output.kind} hashed ${actual}, but the pin records ${output.expectedSha256} — ` +
+                `the extract is not the one this build is pinned to reproduce`,
+            );
+          }
+        });
       }
     }
     // Promotion is a sequence of renames, and a filesystem offers no way to make several of them
@@ -405,13 +608,28 @@ export async function runBuild(paths, deps, options = {}) {
   }
 
   return {
-    roles,
+    // The roles each product's declaration carried. Reported per product now that a build can
+    // ship archives under different licences — a flat list would have said which obligations were
+    // checked without saying whose.
+    roles: copernicus?.roles ?? [],
     distributable,
     region: declaration.id,
     envelope,
     sourceCells,
     contourLevels: contours.levels,
     archives: outputs.map(({ kind, path, tiles }) => ({ kind, path, tiles: tiles.length })),
+    ...(basemap === undefined
+      ? {}
+      : {
+          basemap: {
+            pin: basemap.pin.key,
+            version: basemap.pin.version,
+            tiles: basemap.tiles.length,
+            absent: basemap.absent.length,
+            rangeRequests: basemap.read.requests,
+            rangeBytes: basemap.read.bytes,
+          },
+        }),
     lowest,
   };
 }

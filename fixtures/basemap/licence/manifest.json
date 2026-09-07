@@ -1,0 +1,41 @@
+{
+  "why": "Three named sources, three obligations. ODbL 1.0 is the licence the Protomaps basemap carries as a Produced Work; osm.org/copyright is where OpenStreetMap states that its data is ODbL and that credit is required; and the OSMF Attribution Guidelines, which that page defers to, is where the credit's actual wording is mandated. The copyright page names the requirement but not the notice — its only example of the notice is an image — so a credit line declared from it alone would be the requirement sentence standing in for the credit.",
+  "documents": [
+    {
+      "id": "ODbL-1.0",
+      "title": "ODC Open Database License (ODbL) v1.0",
+      "sourceUrl": "https://opendatacommons.org/licenses/odbl/odbl-10.txt",
+      "retrievedAt": "2026-09-07",
+      "textFile": "ODbL-1.0.txt",
+      "textBytes": 25278,
+      "textSha256": "607680718977f6f6c9607972afd98f208573f19251315ed1362a8589b51beaf5",
+      "extraction": "none — the source is served as text/plain and is stored byte for byte"
+    },
+    {
+      "id": "OSM-COPYRIGHT",
+      "title": "OpenStreetMap copyright and licence",
+      "sourceUrl": "https://www.openstreetmap.org/copyright",
+      "retrievedAt": "2026-09-07",
+      "sourceHtmlBytes": 21344,
+      "sourceHtmlSha256": "364e84c2170d3fda5cf6492a62a2450a5e3c8da704b354d683ec8fc2bef073fc",
+      "textFile": "OSM-COPYRIGHT.txt",
+      "textBytes": 5676,
+      "textSha256": "6566d45e36997a7c4bf407c1022ac9d610e4b09c66f1b0da91dd48105e6b3d7d",
+      "extraction": "script/style elements dropped, tags replaced with a space, HTML entities unescaped, runs of spaces and blank lines collapsed. The raw HTML's hash is recorded above so the extraction can be repeated and compared against the same bytes."
+    },
+    {
+      "id": "OSMF-ATTRIBUTION-GUIDELINES",
+      "title": "OpenStreetMap Foundation — Licence/Attribution Guidelines",
+      "sourceUrl": "https://osmfoundation.org/wiki/Licence/Attribution_Guidelines",
+      "permanentUrl": "https://osmfoundation.org/w/index.php?title=Licence/Attribution_Guidelines&oldid=9351",
+      "pageRevision": "oldid=9351, last edited 16 March 2022",
+      "retrievedAt": "2026-09-07",
+      "sourceHtmlBytes": 51358,
+      "sourceHtmlSha256": "67d8236ae61675932e7aacc584a18fe6ffc0bf35d41b3874f0da0566c1f52ed1",
+      "textFile": "OSMF-ATTRIBUTION-GUIDELINES.txt",
+      "textBytes": 13389,
+      "textSha256": "70180c5374adec7cbc34a20feeaf5e6d8fe6343cefa9bc096c16989a465bbcab",
+      "extraction": "script/style elements dropped, tags replaced with a space, HTML entities unescaped, runs of spaces and blank lines collapsed. The raw HTML's hash is recorded above so the extraction can be repeated against the same bytes."
+    }
+  ]
+}

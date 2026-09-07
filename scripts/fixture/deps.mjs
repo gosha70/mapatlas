@@ -21,6 +21,7 @@ import { LICENCE_ENTRY_PATH, NOT_FOR_DISTRIBUTION_PATH } from "./licence.mjs";
 import { TILE_SIZE } from "./mercator.mjs";
 import { encodePng } from "./png.mjs";
 import { renderTerrariumTile } from "./resample.mjs";
+import { readBasemapRegion } from "./basemap.mjs";
 import { cogUrl, readTerrariumCrop } from "./source.mjs";
 import { decodeElevation } from "./terrarium.mjs";
 
@@ -258,6 +259,18 @@ export const METADATA_ENTRY_PATH = "metadata.json";
 export function createArchiveWriter() {
   return async (path, tiles, meta) => {
     const { licenceText, attribution, distributable, tileType, compression, ...rest } = meta;
+    /**
+     * Whether this archive carries a licence document at all.
+     *
+     * **One document or none — never a list.** An earlier version took an array of documents and
+     * wrote one metadata key and one entry per member, built for a design that required the
+     * basemap to carry three. That design was overturned: ODbL §4.3 asks a Produced Work for a
+     * *notice*, not the licence (ADR-0038), so the basemap carries none and Copernicus carries
+     * exactly the one its terms require. The generalisation outlived its reason, and a writer
+     * able to embed arbitrary documents is also a writer able to embed 25 KB of them — which is
+     * how the metadata comes to exceed the root-directory budget `s2-pmtiles` hangs on.
+     */
+    const carriesLicence = licenceText !== undefined;
     // A development archive carries the marker **in the archive**, not merely in its filename.
     // The `.dev` suffix is a naming convention and a rename away from being nothing; a key
     // inside the metadata travels with the bytes. That is the obligation a non-distributable
@@ -271,14 +284,14 @@ export function createArchiveWriter() {
     await writeArchive(
       path,
       tiles,
-      distributable ? { ...metadata, license: licenceText } : metadata,
+      distributable && carriesLicence ? { ...metadata, license: licenceText } : metadata,
       { tileType, compression },
     );
     return {
       entries: () =>
         distributable
           ? [
-              { path: LICENCE_ENTRY_PATH, text: licenceText },
+              ...(carriesLicence ? [{ path: LICENCE_ENTRY_PATH, text: licenceText }] : []),
               { path: METADATA_ENTRY_PATH, text: JSON.stringify(metadata) },
             ]
           : [
@@ -287,4 +300,15 @@ export function createArchiveWriter() {
             ],
     };
   };
+}
+
+/**
+ * The real basemap reader, bound to `fetch`.
+ *
+ * Its own function for the same reason `createSourceDeps` is: the build's tests never want a
+ * network read, and this wants tests the build's suite cannot give it. The stage itself takes
+ * `fetchImpl`, so the suite drives the identical code against a synthetic archive.
+ */
+export function createBasemapReader({ fetchImpl = globalThis.fetch } = {}) {
+  return (pin, bounds) => readBasemapRegion(pin, bounds, fetchImpl);
 }

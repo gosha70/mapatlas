@@ -250,6 +250,62 @@ describe("archives are installed before the map exists", () => {
     expect(statusOf(app).dataset["status"]).toBe("ready");
   });
 
+  it("publishes no stored-state reading until the region store has actually been read", async () => {
+    /**
+     * **The placeholder must not be published as a measurement.** `offlineStatus` starts as
+     * `NOTHING_STORED` — zero regions, no sources — because nothing has looked in the store yet.
+     * The panel treats what it is handed as a reading and marks it confirmed, so rendering it
+     * during startup told a returning user "No region downloaded" with `data-regions="0"`, about
+     * a store that turned out to hold a region.
+     *
+     * The read below therefore **resolves to a region**: a deferred read that ended up empty
+     * would make the eager zero accidentally correct, and this would pass with the gate removed.
+     */
+    let finishListing: (() => void) | undefined;
+    const offline = (): DemoOffline =>
+      ({
+        store: {
+          download: async () => {
+            throw new Error("this test does not download");
+          },
+          list: () =>
+            new Promise((settle) => {
+              finishListing = () => {
+                settle([{ id: "r1", sizeBytes: 4096, sourceIds: ["demo-terrain"] }]);
+              };
+            }),
+          delete: async () => undefined,
+          estimateSize: async () => 4096,
+        },
+        assets: {},
+      }) as unknown as DemoOffline;
+
+    const app = await render(
+      url("?terrain=http://archives.invalid/terrain.pmtiles"),
+      storage(),
+      offline,
+    );
+
+    expect(finishListing, "the region store was never read").toBeDefined();
+    expect(statusOf(app).dataset["status"]).toBe("starting");
+    expect(
+      app.querySelector("#offline-status"),
+      "an unread placeholder was published as a stored-state reading",
+    ).toBeNull();
+
+    await act(async () => {
+      finishListing?.();
+      await Promise.resolve();
+    });
+
+    // And once the read has landed, the panel reports what it found — confirmed, because now
+    // there is something behind the number.
+    const line = app.querySelector("#offline-status");
+    expect(line?.getAttribute("data-confirmed")).toBe("true");
+    expect(line?.getAttribute("data-regions")).toBe("1");
+    expect(line?.getAttribute("data-stored")).toBe("demo-terrain");
+  });
+
   it("reports nothing served on a first visit, which is not a failure", async () => {
     const app = await render(url(), storage());
 
@@ -289,6 +345,15 @@ describe("a failed installation is reported, not sat in", () => {
     expect(
       app.querySelector('[data-testid="map"]'),
       "a map mounted over a failed install",
+    ).toBeNull();
+
+    // **And no stored-state reading either.** This path produced one no more than `starting` did:
+    // the read is what rejected. Publishing the placeholder here would tell someone whose region
+    // store would not open that they have no region, which is a different and unfounded claim
+    // from the one the shell's own status line is making.
+    expect(
+      app.querySelector("#offline-status"),
+      "a failed read published a stored-state reading anyway",
     ).toBeNull();
   });
 });

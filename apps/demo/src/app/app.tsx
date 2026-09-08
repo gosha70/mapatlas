@@ -157,12 +157,23 @@ export function App({ here, storage, makeOffline }: AppProps): ReactElement {
         />
       ) : null}
 
-      <OfflinePanel
-        offline={offline}
-        sources={sources}
-        status={offlineStatus}
-        onChanged={setOfflineStatus}
-      />
+      {/* **Also gated, and for the panel's own contract rather than the map's.** `offlineStatus`
+          starts as `NOTHING_STORED`, which is a placeholder and not a reading: until the effect
+          above resolves, nothing has looked in the region store. The panel treats the status it is
+          given as measured — it publishes `data-regions` and reports "No region downloaded" — so
+          rendering it before the read lands tells a returning user their region is gone, and marks
+          that claim confirmed. The read is what makes the number true, so the panel waits for it.
+
+          `failed` keeps it hidden too: that path never produced a reading either, and the shell's
+          own status line is what reports the failure. */}
+      {status === "ready" ? (
+        <OfflinePanel
+          offline={offline}
+          sources={sources}
+          status={offlineStatus}
+          onChanged={setOfflineStatus}
+        />
+      ) : null}
 
       <PersistencePanel />
       <InstallPanel />

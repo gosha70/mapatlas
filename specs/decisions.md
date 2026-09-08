@@ -1405,11 +1405,22 @@ has already satisfied — Playwright does not expose those to `browserContext.ro
 here needs it to: the worker declines every url outside its inventory, so a missing asset is
 requested by the browser rather than by the worker, and that is the request the route aborts. The
 mutation that omits the MapLibre worker chunk from the precache is what establishes this, and it is
-the reason the claim is not resting on a documented behaviour that would not apply. Because a working run makes *no* requests to either origin, the cut leaves no
-trace of itself — so each origin is probed from inside the page, with `no-cors`: the archive host
-sends no `Access-Control-Allow-Origin`, and a default `cors` probe rejects whether the request was
-aborted or answered, which made the probe report "unreachable" for a live server. Under `no-cors` a
-reply is an opaque response and resolves; only a refusal rejects.
+the reason the claim is not resting on a documented behaviour that would not apply.
+
+**The cut leaves no trace of itself, so it is probed.** A working run makes *no* requests to either
+origin — the shell comes from the worker and the archives from the store — so a route that had been
+removed would show up nowhere, and every offline assertion would be satisfied by a network that was
+never cut. Each origin is therefore asked, from inside the page, for a path that does not exist.
+
+**The probe is `no-cors`, and the reason is narrower than it first reads.** The archive server
+answers an unknown path with a bare `404` *before* it reaches the branch that sets
+`Access-Control-Allow-Origin`; its successful responses do carry that header, which is how the map
+reads archives cross-origin at all. So a default `cors` probe rejects on the CORS check for a live
+host and on the abort for a cut one, and cannot tell the two apart — it reported "unreachable" for a
+server that was replying. Under `no-cors` a reply is an opaque response and resolves whatever its
+status or headers; only a refused request rejects. Recorded at this width because the first wording
+said the archive host sends no `Access-Control-Allow-Origin` at all, which is broader than the
+server does and would send a reader looking for a missing header rather than at the 404 path.
 
 **Registration is production-only**, because `sw.js` is generated from the bundle and does not exist
 under the dev server. The demo's other scenarios are unaffected, and `npm run demo` is unchanged.

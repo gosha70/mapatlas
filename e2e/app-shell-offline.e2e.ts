@@ -70,12 +70,16 @@ async function cut(context: BrowserContext, origin: string, refused: string[]): 
  * for a path nothing precaches and nothing stores: aborted it rejects, and served (a plain 404
  * from either server) it resolves. The difference between those two is exactly the premise.
  *
- * **`no-cors`, and that is what makes the probe honest.** The archive host sends no
- * `Access-Control-Allow-Origin`, so a default `cors` fetch to it rejects whether the request was
- * aborted or answered — the probe returned "unreachable" for a server that was replying, and the
- * mutation that removes this route survived it. Under `no-cors` a reply is an opaque response,
- * which resolves; only a refused request rejects. Found by running that mutation: it was caught
- * by an unrelated console assertion, which is not the same as being caught.
+ * **`no-cors`, and that is what makes the probe honest.** The path asked for does not exist, and
+ * the archive server answers an unknown path with a bare `404` before it reaches the branch that
+ * sets `Access-Control-Allow-Origin` (`e2e/fixtures/serve-lab-archives.mjs`) — its *successful*
+ * responses do carry that header, which is how the map reads archives cross-origin at all. So a
+ * default `cors` fetch rejects on the CORS check for a live host and on the abort for a cut one,
+ * and cannot tell them apart: the probe returned "unreachable" for a server that was replying, and
+ * the mutation that removes this route survived it. Under `no-cors` a reply is an opaque response,
+ * which resolves whatever its status or headers; only a refused request rejects. Found by running
+ * that mutation: it was caught by an unrelated console assertion, which is not the same as being
+ * caught.
  */
 async function unreachable(page: Page, origin: string): Promise<boolean> {
   return page.evaluate(

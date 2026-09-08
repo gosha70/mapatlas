@@ -18,13 +18,19 @@ import type { OfflineStatus } from "./offline.js";
  * counts and source ids, and these tests read them.
  */
 
-const installed = vi.hoisted(() => ({ calls: 0, storedSourceIds: ["demo-basemap"] }));
+const installed = vi.hoisted(() => ({
+  calls: 0,
+  storedSourceIds: ["demo-basemap"],
+  /** Reject *after* `download()` has stored the archives — the second half of `doDownload`. */
+  rejects: false,
+}));
 vi.mock("./offline.js", async () => {
   const actual = await vi.importActual<Record<string, unknown>>("./offline.js");
   return {
     ...actual,
     installDownloadedRegions: async (offline: { store: { list: () => Promise<unknown[]> } }) => {
       installed.calls += 1;
+      if (installed.rejects) throw new Error("the archive could not be registered");
       const regions = await offline.store.list();
       return regions.length === 0
         ? { regions: 0, storedSourceIds: [], bytes: 0 }
@@ -39,7 +45,11 @@ const SOURCES = [{ id: "demo-basemap" }, { id: "demo-terrain" }] as unknown as T
 
 /** A store whose contents a test controls. */
 function store(
-  over: { download?: () => Promise<OfflineRegion>; delete?: () => Promise<void> } = {},
+  over: {
+    download?: () => Promise<OfflineRegion>;
+    /** Given the id and the held list, so an override can remove some regions and then fail. */
+    delete?: (id: string, held: OfflineRegion[]) => Promise<void>;
+  } = {},
 ) {
   const held: OfflineRegion[] = [];
   const spy = { downloads: 0, deletes: 0 };
@@ -59,7 +69,7 @@ function store(
         list: async () => [...held],
         delete: async (id: string) => {
           spy.deletes += 1;
-          if (over.delete !== undefined) return over.delete();
+          if (over.delete !== undefined) return over.delete(id, held);
           const at = held.findIndex((region) => region.id === id);
           if (at >= 0) held.splice(at, 1);
           return undefined;
@@ -146,9 +156,117 @@ afterEach(() => {
   host?.remove();
   document.body.innerHTML = "";
   installed.calls = 0;
+  installed.rejects = false;
 });
 
 describe("downloading a region", () => {
+  it("restores the confirmed reading once a download succeeds", async () => {
+    // The positive half of the invalidation below: if the state were never restored, the panel
+    // would report nothing for ever and the tests that assert absence would all pass.
+    const { offline } = store();
+
+    await render(offline);
+    await click("#offline-download");
+
+    const line = host?.querySelector("#offline-status");
+    expect(line?.getAttribute("data-confirmed")).toBe("true");
+    expect(line?.getAttribute("data-regions")).toBe("1");
+    expect(line?.getAttribute("data-stored")).toBe("demo-basemap");
+  });
+
+  it("invalidates the reading as soon as an attempt starts, before it can have failed", async () => {
+    /**
+     * **Invalidation belongs to the start of the mutation, not to its failure**, and the two are
+     * only distinguishable here — on a *first* attempt, where no failure has happened yet. From
+     * the moment `download()` is called the store may be changing, so the numbers beside it have
+     * stopped being a reading of it. A version that invalidated only in the `catch` passes every
+     * retry assertion, because after a failure the state is already invalid and simply stays that
+     * way; this is the case that tells them apart.
+     */
+    let release: ((region: OfflineRegion) => void) | undefined;
+    const { offline, held } = store({
+      download: async () =>
+        new Promise<OfflineRegion>((settle) => {
+          release = (region) => {
+            held.push(region);
+            settle(region);
+          };
+        }),
+    });
+
+    await render(offline);
+    await click("#offline-download");
+
+    expect(release, "the download never reached the store").toBeDefined();
+    expect(host?.querySelector("#offline-failure"), "this case is before any failure").toBeNull();
+    const inFlight = host?.querySelector("#offline-status");
+    expect(inFlight?.getAttribute("data-busy")).toBe("downloading");
+    expect(inFlight?.getAttribute("data-confirmed")).toBe("false");
+    expect(
+      inFlight?.hasAttribute("data-regions"),
+      "the previous reading was still published while the store was being written",
+    ).toBe(false);
+
+    await act(async () => {
+      release?.({ id: "r1", sizeBytes: 4096 } as OfflineRegion);
+    });
+    expect(host?.querySelector("#offline-status")?.getAttribute("data-confirmed")).toBe("true");
+  });
+
+  it("does not republish the stale reading when a retry starts", async () => {
+    /**
+     * **The window this closes.** Confirmation was derived from `failure`, and both handlers clear
+     * `failure` as they begin — so pressing Download again after a failure re-published the
+     * pre-failure numbers as `data-confirmed="true"` the instant the retry started, before it had
+     * established anything at all. The reading is invalidated when the mutation *starts*, so the
+     * assertion below is taken **while the retry is still in flight**.
+     */
+    let release: ((region: OfflineRegion) => void) | undefined;
+    let firstCall = true;
+    const { offline, held } = store({
+      download: async () => {
+        if (firstCall) {
+          firstCall = false;
+          throw new Error("quota exceeded");
+        }
+        // A download that has not settled: the panel is mid-retry for as long as this is pending.
+        return new Promise<OfflineRegion>((settle) => {
+          release = (region) => {
+            held.push(region);
+            settle(region);
+          };
+        });
+      },
+    });
+
+    await render(offline);
+    await click("#offline-download");
+    expect(host?.querySelector("#offline-status")?.getAttribute("data-confirmed")).toBe("false");
+
+    await click("#offline-download");
+
+    // Mid-flight: the failure notice is gone, because the retry cleared it, and that is exactly
+    // the moment the old derivation published the stale numbers again.
+    expect(host?.querySelector("#offline-failure"), "the retry never started").toBeNull();
+    expect(release, "the retry never reached the store").toBeDefined();
+    const inFlight = host?.querySelector("#offline-status");
+    expect(inFlight?.getAttribute("data-busy")).toBe("downloading");
+    expect(inFlight?.getAttribute("data-confirmed")).toBe("false");
+    expect(
+      inFlight?.hasAttribute("data-regions"),
+      "the pre-failure reading came back the moment the retry began",
+    ).toBe(false);
+
+    // And it comes back only when the retry has produced a reading of its own.
+    await act(async () => {
+      release?.({ id: "r1", sizeBytes: 4096 } as OfflineRegion);
+    });
+
+    const settled = host?.querySelector("#offline-status");
+    expect(settled?.getAttribute("data-confirmed")).toBe("true");
+    expect(settled?.getAttribute("data-regions")).toBe("1");
+  });
+
   it("reports what the store holds afterwards, not that a button was pressed", async () => {
     // Read back from the store rather than from the operation's own return: a download that
     // resolved while storing nothing would otherwise report success.
@@ -173,6 +291,52 @@ describe("downloading a region", () => {
     await click("#offline-download");
 
     expect(host?.querySelector("#offline-failure")?.textContent ?? "").toContain("quota exceeded");
+  });
+
+  it("does not say nothing was stored when the archives were stored and the install failed", async () => {
+    /**
+     * **`doDownload` is two operations, and only the first one stores.** `download()` copies the
+     * archives; `installDownloadedRegions` then re-lists and registers them. A rejection from the
+     * second arrives with the bytes already in the store — so the notice this once carried,
+     * *"The region was not stored"*, was exactly false, and it invited the reader to press
+     * Download again and copy everything a second time.
+     */
+    const { offline, held } = store();
+    installed.rejects = true;
+
+    await render(offline);
+    await click("#offline-download");
+
+    // The premise: the archives really are stored. Without this the assertion below would hold
+    // for a run in which the download had failed too, which is a different case entirely.
+    expect(held, "nothing was stored, so this is not the case under test").toHaveLength(1);
+
+    const notice = host?.querySelector("#offline-failure");
+    expect(notice?.textContent ?? "").toContain("the archive could not be registered");
+    expect(notice?.getAttribute("data-attempt")).toBe("download");
+    expect(
+      notice?.textContent ?? "",
+      "the notice claimed nothing was stored while the archives were in the store",
+    ).not.toContain("not stored");
+
+    /**
+     * **And the status line stops reporting too.** `status` only advances on success, so it still
+     * holds the pre-download reading — zero regions — while the archives are in the store and the
+     * hook has already enabled Delete against them. The attributes are gone rather than zeroed: a
+     * `0` here is indistinguishable from a measured zero.
+     */
+    const line = host?.querySelector("#offline-status");
+    expect(line?.getAttribute("data-confirmed")).toBe("false");
+    expect(line?.hasAttribute("data-regions"), "a stale region count survived the failure").toBe(
+      false,
+    );
+    expect(line?.hasAttribute("data-stored")).toBe(false);
+    expect(line?.hasAttribute("data-bytes")).toBe(false);
+    expect(line?.textContent ?? "").not.toContain("No region downloaded");
+
+    // The contradiction made concrete: this button is enabled off the hook's own re-list, so the
+    // line above cannot be allowed to say there is nothing there.
+    expect(host?.querySelector<HTMLButtonElement>("#offline-delete")?.disabled).toBe(false);
   });
 });
 
@@ -212,6 +376,101 @@ describe("deleting a region", () => {
 
     await click("#offline-download");
     expect(host?.querySelector<HTMLButtonElement>("#offline-delete")?.disabled).toBe(false);
+  });
+
+  it("reports neither a wrong claim nor a stale count when a delete is partial", async () => {
+    /**
+     * **Genuinely partial, because that is the case both defects hide in.** `doDelete` removes
+     * regions in a loop, so a rejection part-way through leaves *some* gone. The notice this once
+     * carried — "the region was not stored" — was the opposite of the truth for a region that had
+     * been stored and not removed; and the status line went on displaying the pre-delete count for
+     * a store that no longer matched it.
+     *
+     * Nothing below asserts what the store now holds. The panel did not read it, and inferring it
+     * from which button was pressed is the mistake being closed.
+     */
+    let attempts = 0;
+    const { offline, held } = store({
+      delete: async (id, kept) => {
+        attempts += 1;
+        if (attempts > 1) throw new Error("the store went away");
+        kept.splice(
+          kept.findIndex((region) => region.id === id),
+          1,
+        );
+      },
+    });
+
+    await render(offline);
+    await click("#offline-download");
+    await click("#offline-download");
+    expect(host?.querySelector("#offline-status")?.getAttribute("data-regions")).toBe("2");
+
+    await click("#offline-delete");
+
+    // The premise: one region really was removed and one really was not. Without it this would
+    // pass for a delete that failed on its first call, which is a different case.
+    expect(attempts, "the loop stopped before it could be partial").toBeGreaterThan(1);
+    expect(held, "the deletion was not partial, so this is not the case under test").toHaveLength(
+      1,
+    );
+
+    const notice = host?.querySelector("#offline-failure");
+    expect(notice?.textContent ?? "").toContain("the store went away");
+    expect(notice?.getAttribute("data-attempt")).toBe("delete");
+    expect(
+      notice?.textContent ?? "",
+      "a failed delete reported that the region had not been stored",
+    ).not.toContain("not stored");
+
+    const line = host?.querySelector("#offline-status");
+    expect(line?.getAttribute("data-confirmed")).toBe("false");
+    expect(
+      line?.getAttribute("data-regions"),
+      "the pre-delete count survived a deletion that changed the store",
+    ).toBeNull();
+    expect(line?.textContent ?? "").not.toContain("2 region");
+  });
+
+  it("invalidates the reading while a deletion is in flight", async () => {
+    // The same rule on the other button: from the first `remove()` the count beside it has
+    // stopped being a reading of the store, whether or not the loop goes on to fail.
+    let release: (() => void) | undefined;
+    const { offline } = store({
+      delete: async (id, kept) =>
+        new Promise<void>((settle) => {
+          release = () => {
+            kept.splice(
+              kept.findIndex((region) => region.id === id),
+              1,
+            );
+            settle();
+          };
+        }),
+    });
+
+    await render(offline);
+    await click("#offline-download");
+    expect(host?.querySelector("#offline-status")?.getAttribute("data-regions")).toBe("1");
+
+    await click("#offline-delete");
+
+    expect(release, "the deletion never reached the store").toBeDefined();
+    expect(host?.querySelector("#offline-failure"), "this case is before any failure").toBeNull();
+    const inFlight = host?.querySelector("#offline-status");
+    expect(inFlight?.getAttribute("data-busy")).toBe("deleting");
+    expect(inFlight?.getAttribute("data-confirmed")).toBe("false");
+    expect(
+      inFlight?.hasAttribute("data-regions"),
+      "the pre-delete count was still published while the store was being emptied",
+    ).toBe(false);
+
+    await act(async () => {
+      release?.();
+    });
+    const settled = host?.querySelector("#offline-status");
+    expect(settled?.getAttribute("data-confirmed")).toBe("true");
+    expect(settled?.getAttribute("data-regions")).toBe("0");
   });
 
   it("removes every stored region and reports none left", async () => {

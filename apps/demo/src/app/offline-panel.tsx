@@ -37,6 +37,29 @@ export interface OfflinePanelProps {
 
 type Busy = "idle" | "downloading" | "deleting";
 
+/** Which button's work failed, so the notice can name it without describing the store. */
+type Attempt = "download" | "delete";
+
+/**
+ * A failed attempt, reported **without claiming what is stored**.
+ *
+ * The first version of this notice read *"The region was not stored: …"* for every failure, and
+ * that sentence is false in two of the three ways it can be reached. A rejected **delete** leaves
+ * the region exactly where it was. And `doDownload` does two things: `download()` copies the
+ * archives, then `installDownloadedRegions` re-lists and registers them — so a rejection from the
+ * second arrives *after* the bytes are stored. In both cases the panel asserted a durable state
+ * that was the opposite of the truth, and in the download case it invited the reader to download
+ * everything again.
+ *
+ * Neither replacement sentence claims a state either. "The region could not be deleted" would be
+ * its own version of the same mistake: `doDelete` removes regions in a loop, so a rejection on the
+ * third leaves the first two gone. What this can honestly report is which attempt failed and why.
+ */
+interface Failure {
+  readonly attempt: Attempt;
+  readonly why: string;
+}
+
 export function OfflinePanel({
   offline,
   sources,
@@ -45,8 +68,23 @@ export function OfflinePanel({
 }: OfflinePanelProps): ReactElement {
   const { regions, download, remove } = useOfflineRegions(offline.store);
   const [busy, setBusy] = useState<Busy>("idle");
-  const [failure, setFailure] = useState<string | undefined>(undefined);
+  const [failure, setFailure] = useState<Failure | undefined>(undefined);
   const [deleted, setDeleted] = useState(false);
+  /**
+   * Whether `status` is still a reading of the store.
+   *
+   * **Its own state, deliberately not derived from `failure`.** It was derived, and both handlers
+   * clear `failure` as they start — so pressing either button after a failure immediately
+   * re-published the stale snapshot as confirmed, before the retry had established anything. The
+   * two answer different questions: `failure` is what to tell the reader about the last attempt,
+   * this is whether the numbers beside it still mean something.
+   *
+   * Invalidated when a mutation *starts*, because from that moment the store may be changing
+   * under the last reading; restored only after a successful path has produced a new one. A
+   * failure leaves it invalid, which is the same thing said in the other direction: nothing here
+   * infers a store state from which button was pressed.
+   */
+  const [confirmed, setConfirmed] = useState(true);
 
   /**
    * **Nothing declared, nothing to download.**
@@ -63,11 +101,17 @@ export function OfflinePanel({
     setBusy("downloading");
     setFailure(undefined);
     setDeleted(false);
+    setConfirmed(false);
     try {
       await download(demoRegionRequest(sources));
       onChanged(await installDownloadedRegions(offline, sources));
+      // Last, and only here: the reading it publishes is what makes the numbers true again.
+      setConfirmed(true);
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : String(error));
+      setFailure({
+        attempt: "download",
+        why: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setBusy("idle");
     }
@@ -76,6 +120,7 @@ export function OfflinePanel({
   const doDelete = useCallback(async () => {
     setBusy("deleting");
     setFailure(undefined);
+    setConfirmed(false);
     try {
       for (const region of regions) await remove(region.id);
       /**
@@ -90,8 +135,13 @@ export function OfflinePanel({
       // Storage-scoped and therefore true: the manifests and blobs are gone. Nothing here
       // claims anything about this realm's registrations, which outlive the delete.
       onChanged({ regions: 0, storedSourceIds: [], bytes: 0 });
+      // Every region was removed, so the emptiness above is established rather than assumed.
+      setConfirmed(true);
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : String(error));
+      setFailure({
+        attempt: "delete",
+        why: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setBusy("idle");
     }
@@ -100,24 +150,58 @@ export function OfflinePanel({
   return (
     <section className="app-offline" id="offline">
       <h2>Offline map</h2>
-      <p
-        id="offline-status"
-        data-regions={String(status.regions)}
-        data-stored={status.storedSourceIds.join(",")}
-        data-bytes={String(status.bytes)}
-        data-busy={busy}
-        data-downloadable={String(downloadable)}
-      >
-        {!downloadable
-          ? "No map archives are configured, so there is nothing to store."
-          : status.regions === 0
-            ? "No region downloaded. The map needs the network."
-            : `${String(status.regions)} region stored, ${String(status.bytes)} bytes, naming ${
-                status.storedSourceIds.length === 0
-                  ? "no sources"
-                  : status.storedSourceIds.join(", ")
-              }.`}
-      </p>
+      {/**
+       * **While an attempt is unresolved this reports nothing, rather than the last thing it
+       * knew.** `status` only advances on success, so a download that stored the archives and
+       * then failed to install them left this line saying "No region downloaded" with
+       * `data-regions="0"` — beside a Delete button the hook had already enabled, because
+       * `useOfflineRegions` re-lists on every mutation and had seen the region. A partial delete
+       * does the same with the pre-delete count. Both are a stale snapshot presented as current.
+       *
+       * The numeric and source attributes are **removed**, not zeroed: a `0` is a reading, and a
+       * reader — human or scenario — cannot tell a measured zero from a missing one. Nothing here
+       * infers what the attempt did to the store; it says the reading is not current, and a
+       * successful operation restores it.
+       *
+       * **The wording claims no cause.** It read "could not be read", which is true of only one
+       * of the routes here: `installDownloadedRegions` can list the store perfectly and then fail
+       * while registering, a download can fail before any read is attempted, and a deletion fails
+       * while mutating rather than while reading. What is known is that the attempt did not
+       * complete and the snapshot is no longer confirmed.
+       */}
+      {confirmed ? (
+        <p
+          id="offline-status"
+          data-confirmed="true"
+          data-regions={String(status.regions)}
+          data-stored={status.storedSourceIds.join(",")}
+          data-bytes={String(status.bytes)}
+          data-busy={busy}
+          data-downloadable={String(downloadable)}
+        >
+          {!downloadable
+            ? "No map archives are configured, so there is nothing to store."
+            : status.regions === 0
+              ? "No region downloaded. The map needs the network."
+              : `${String(status.regions)} region stored, ${String(status.bytes)} bytes, naming ${
+                  status.storedSourceIds.length === 0
+                    ? "no sources"
+                    : status.storedSourceIds.join(", ")
+                }.`}
+        </p>
+      ) : (
+        <p
+          id="offline-status"
+          data-confirmed="false"
+          data-busy={busy}
+          data-downloadable={String(downloadable)}
+        >
+          {failure === undefined
+            ? "What is stored is not confirmed while this attempt is running."
+            : "The last attempt did not complete, so what is stored is no longer confirmed. " +
+              "Reload to read it again."}
+        </p>
+      )}
       {deleted ? (
         <p id="offline-deleted">
           Deleted from offline storage. Reload to reset this map&rsquo;s installed archives and
@@ -141,7 +225,9 @@ export function OfflinePanel({
         Delete downloaded region
       </button>
       {failure === undefined ? null : (
-        <p id="offline-failure" role="alert">{`The region was not stored: ${failure}`}</p>
+        <p id="offline-failure" role="alert" data-attempt={failure.attempt}>
+          {`The ${failure.attempt === "download" ? "download" : "deletion"} did not complete: ${failure.why}`}
+        </p>
       )}
     </section>
   );

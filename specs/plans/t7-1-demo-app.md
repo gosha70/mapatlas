@@ -272,6 +272,15 @@ silently.
     bytes: a worker that cached an archive would make the offline scenario pass for the wrong
     reason, which `What will be got wrong` names.
 
+  > **Amended after increment 5c.** This bar said what the worker's cache must *not* contain and
+  > left unsaid what the worker must be built from and what it must be tested against. Both turned
+  > out to decide whether the claim means anything. The demo had no pinned production build, so
+  > every browser scenario ran against the dev server's module graph — a worker precaching that
+  > graph would be precaching files that never ship. 5c therefore also pins the production output,
+  > generates the worker from the tree the build actually emitted, and serves that tree on a fourth
+  > origin; and the cache-list assertion is read **after the map has drawn**, because a worker that
+  > caches archives at runtime has not run its fetch path immediately after installation. ADR-0039.
+
 ## What will be got wrong
 
 **"The demo renders, therefore the loop works."** A screenshot of a map with a track on it is

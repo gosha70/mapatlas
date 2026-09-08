@@ -1334,3 +1334,82 @@ addition to the existing DEM attribution, never as a replacement — two derived
 notices. Style layers are written against **the extract's own `vector_layers`**, which is how the
 v3/v4 question is settled structurally rather than by reading documentation.
 
+
+## ADR-0039 — The demo's app shell is precached by a worker generated from the emitted build
+
+**Status.** Accepted (T7.1 increment 5c).
+
+**Context.** ADR-0035 makes the *map* recoverable offline: a downloaded archive is served from
+`MapAssetStore` under its own url. That says nothing about the application itself — with the app's
+origin unavailable there is no document to run the code that would read the store. App-shell
+offline is a separate claim that fails independently (`specs/plans/t7-1-demo-app.md`, *"Offline has
+three meanings here"*), and it is the one the demo did not have.
+
+**Decision.**
+
+**The demo has a pinned production build, and the shell claim is made against it.** `vite build`
+already has a default; what the repository did not have was that default written down, so every
+browser scenario ran against the dev server's module graph — a different set of files under a
+different set of urls. A worker precaching that graph would demonstrate nothing about what ships.
+The Playwright lane gains a fourth server that builds the bundle, generates the worker, and serves
+the emitted tree with `vite preview`, never reusing an already-running one: an incumbent preview
+serves whatever it started with, and the claim here is a claim about *this* build's files.
+
+**The output directory is `build/demo/`, not `apps/demo/dist/`.** `apps/demo/tsconfig.json` already
+claims `dist` for `tsc --build`. Sharing it is not untidiness: `emptyOutDir` would delete the
+compiler's output while `tsconfig.tsbuildinfo` still records it as current, so the next
+`tsc --build` emits nothing and the build gate passes over a hole; in the other order the
+compiler's `.js`, `.d.ts` and `.map` files land inside the bundle, and the worker's inventory and
+build digest would be taken from them. `build/` is where this repository already puts generated,
+uncommitted artefacts.
+
+**The precache inventory is the emitted tree, read from the filesystem.** Not a hand-maintained
+list, which is wrong the moment a chunk is renamed and says so only offline. Not vite's
+`build.manifest`, which maps inputs to outputs and has to be recursed correctly to reach things
+like the `?worker&url` MapLibre chunk. The directory answers *"what did this build ship?"* directly,
+and it is the same tree `vite preview` serves.
+
+**The worker is generated, with the url list and a digest of the emitted bytes embedded in it.**
+Both halves are load-bearing. A static `sw.js` that fetched a changing precache manifest at install
+time would be byte-for-byte identical across builds — and a browser that sees an unchanged worker
+script has no reason to install a new precache set, so it would go on serving a shell that no
+longer exists. Embedding the urls makes a renamed chunk change the worker; hashing the emitted
+bytes into the cache name makes a changed `index.html`, whose name never changes, do the same.
+
+**Precache only, and the root route only.** No `cache.put` outside install, no revalidation, no
+runtime caching, and no archive handling: cross-origin requests are declined outright. A navigation
+to `/` is normalised so the demo's archive-naming query string still resolves to the cached
+document; `/lab` is left to the network rather than turned into an offline SPA fallback, and the
+registration sits in `main.ts`'s root branch for the same reason — `/lab` is T4.6's fixture and the
+subject of five merged scenarios, and it does not acquire service-worker lifecycle behaviour
+because the app did.
+
+**Consequences.**
+
+**The two offline claims stay separable, and the boundary is asserted rather than described.** The
+shell is the worker's; the archives are `MapAssetStore`'s. A worker that also cached archives would
+make the map's offline claim pass for the worker's reason, so the scenario enumerates every Cache
+Storage cache and requires no entry naming an archive — read **after the map has drawn**, because a
+worker that caches at *runtime* has not run its fetch path immediately after installation and the
+mutation would survive there.
+
+**The network is cut with `context.route`, which is also what removes the browser's HTTP cache from
+the argument.** Playwright disables the ordinary cache when routing is enabled, and a request the
+worker answers never becomes a network request at all — so a document that loads with the app
+origin aborted cannot have come from the cache, cannot have come from the server, and can only have
+come from Cache Storage.
+
+**What the routing does and does not have to do, said precisely.** It kills network fallthrough and
+removes the http cache from the argument. It is *not* relied on to intercept requests the worker
+has already satisfied — Playwright does not expose those to `browserContext.route()`, and nothing
+here needs it to: the worker declines every url outside its inventory, so a missing asset is
+requested by the browser rather than by the worker, and that is the request the route aborts. The
+mutation that omits the MapLibre worker chunk from the precache is what establishes this, and it is
+the reason the claim is not resting on a documented behaviour that would not apply. Because a working run makes *no* requests to either origin, the cut leaves no
+trace of itself — so each origin is probed from inside the page, with `no-cors`: the archive host
+sends no `Access-Control-Allow-Origin`, and a default `cors` probe rejects whether the request was
+aborted or answered, which made the probe report "unreachable" for a live server. Under `no-cors` a
+reply is an opaque response and resolves; only a refusal rejects.
+
+**Registration is production-only**, because `sw.js` is generated from the bundle and does not exist
+under the dev server. The demo's other scenarios are unaffected, and `npm run demo` is unchanged.

@@ -59,5 +59,21 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 120_000,
     },
+    {
+      // **The production artefact, on its own origin** (T7.1 increment 5c). The demo's service
+      // worker precaches what `vite build` emitted, so a scenario served by the dev server would
+      // be testing vite's development module graph — a different set of files, under a different
+      // set of urls, with no `sw.js` at all. `demo:build` runs the build and then generates the
+      // worker from the emitted tree; `vite preview` serves exactly that tree.
+      command:
+        "npm run demo:build && npx vite preview --config apps/demo/vite.config.ts " +
+        "--port 5177 --strictPort",
+      url: "http://127.0.0.1:5177/",
+      // **Never reused**, for the archive server's reason: an already-running preview serves
+      // whatever `build/demo` held when it started, so a rerun would test yesterday's bundle —
+      // and the offline claim here is precisely a claim about *this* build's files.
+      reuseExistingServer: false,
+      timeout: 180_000,
+    },
   ],
 });

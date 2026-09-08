@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
 import { consoleFor, watchConsole } from "./fixtures/browser.js";
-import { countColour } from "./fixtures/pixels.js";
+import { DEMO_WATER_FILL, countColour } from "./fixtures/pixels.js";
 import { settleRender } from "./fixtures/rendered.js";
 
 /**
@@ -30,9 +30,6 @@ const DEMO = "http://127.0.0.1:5175";
 const ARCHIVES = "http://127.0.0.1:5176";
 const ARCHIVE_FILES = ["terrain.pmtiles", "contours.pmtiles", "basemap.pmtiles"] as const;
 type Archive = (typeof ARCHIVE_FILES)[number];
-
-/** The demo's own water fill — `apps/demo/src/app/sources.ts` paints the basemap's `water` with it. */
-const WATER_FILL: readonly [number, number, number] = [0xb3, 0xcd, 0xe0];
 
 const url = () =>
   `${DEMO}/?terrain=${encodeURIComponent(`${ARCHIVES}/terrain.pmtiles`)}` +
@@ -126,7 +123,7 @@ async function open(page: Page): Promise<void> {
 
 const waterPixels = async (page: Page): Promise<number> => {
   await settleRender(appMap(page));
-  return countColour(await appMap(page).locator("canvas").screenshot(), WATER_FILL);
+  return countColour(await appMap(page).locator("canvas").screenshot(), DEMO_WATER_FILL);
 };
 
 test("a downloaded region draws with the archive host cut, and a deleted one does not", async ({

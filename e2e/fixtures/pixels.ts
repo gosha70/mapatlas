@@ -289,3 +289,14 @@ export function countColour(
   }
   return found;
 }
+
+/**
+ * The demo's basemap water fill — `apps/demo/src/app/sources.ts` paints the extract's `water`
+ * layer with it, and nothing else on that map paints it.
+ *
+ * **One copy, because two scenarios attribute a render to it.** The offline claims of T7.1 turn
+ * on this exact colour appearing: a second copy that was edited while the style was not would
+ * make its scenario assert a colour the map never paints, which fails, or — worse, if the style
+ * moved and only one copy followed — pass against the wrong layer.
+ */
+export const DEMO_WATER_FILL: readonly [number, number, number] = [0xb3, 0xcd, 0xe0];

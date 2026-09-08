@@ -161,6 +161,10 @@ build/fixture/
 *.mbtiles
 /tmp/
 
+# The demo's production bundle and its generated service worker. Built on demand by
+# `npm run demo:build`; never committed, for the same reason `build/fixture/` is not.
+/build/demo/
+
 # Playwright
 /test-results/
 /playwright-report/

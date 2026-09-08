@@ -261,3 +261,42 @@ export function changedMask(a: Raster, b: Raster): Uint8Array {
   }
   return mask;
 }
+
+/**
+ * How many pixels sit within `tolerance` of a colour, per channel.
+ *
+ * **For attributing a render to a specific layer.** Comparing two renders and requiring them to
+ * differ is satisfied by antialiasing noise between page loads — a diff-based oracle survived
+ * every mutation it was written to catch. A named colour that nothing else on the map paints is
+ * attributable: its presence is that layer having found geometry, and its absence is that layer
+ * drawing nothing.
+ */
+export function countColour(
+  png: Buffer,
+  rgb: readonly [number, number, number],
+  tolerance = 12,
+): number {
+  const raster = decodePng(png);
+  let found = 0;
+  for (let i = 0; i < raster.data.length; i += 4) {
+    if (
+      Math.abs((raster.data[i] ?? 0) - rgb[0]) <= tolerance &&
+      Math.abs((raster.data[i + 1] ?? 0) - rgb[1]) <= tolerance &&
+      Math.abs((raster.data[i + 2] ?? 0) - rgb[2]) <= tolerance
+    ) {
+      found += 1;
+    }
+  }
+  return found;
+}
+
+/**
+ * The demo's basemap water fill — `apps/demo/src/app/sources.ts` paints the extract's `water`
+ * layer with it, and nothing else on that map paints it.
+ *
+ * **One copy, because two scenarios attribute a render to it.** The offline claims of T7.1 turn
+ * on this exact colour appearing: a second copy that was edited while the style was not would
+ * make its scenario assert a colour the map never paints, which fails, or — worse, if the style
+ * moved and only one copy followed — pass against the wrong layer.
+ */
+export const DEMO_WATER_FILL: readonly [number, number, number] = [0xb3, 0xcd, 0xe0];

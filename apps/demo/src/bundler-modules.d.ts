@@ -16,3 +16,18 @@ declare module "*?worker&url" {
   const url: string;
   export default url;
 }
+
+/**
+ * The build-time constant the root route reads.
+ *
+ * `import.meta.env` is vite's, replaced at build time; the full `vite/client` types are not
+ * pulled in because this is a consumer's app and it uses exactly this much of them.
+ */
+interface ImportMetaEnv {
+  /** True in a `vite build` bundle, false under the dev server. */
+  readonly PROD: boolean;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}

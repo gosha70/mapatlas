@@ -11,8 +11,8 @@
  *
  * **What this file owns.** Opening the two stores and reporting honestly whether they opened,
  * resolving the tile stack from the URL, and carrying T6.2's settings panels. The
- * record → pin → photo → review loop is `loop.tsx`'s (increment 2); export is not built yet
- * (increment 3). The status line below reports what *this* file can claim — that storage is open
+ * record → pin → photo → review loop and the GeoJSON export are `loop.tsx`'s. The status line
+ * below reports what *this* file can claim — that storage is open
  * and how many sources were declared — and deliberately says nothing about the loop, which has
  * its own status line and its own observables.
  */
@@ -20,7 +20,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactElement } from "react";
 
+import type { TileSource } from "@mapatlas/core";
+
 import { Loop } from "./loop.js";
+import { OfflinePanel } from "./offline-panel.js";
+import { createDemoOffline, installDownloadedRegions } from "./offline.js";
+import type { DemoOffline, OfflineStatus } from "./offline.js";
 import { InstallPanel, PersistencePanel } from "./panels.js";
 import {
   BLANK_STYLE,
@@ -47,6 +52,11 @@ export interface AppProps {
    * T6.2's `null`-sentinel lesson, applied before it can bite twice.
    */
   readonly storage: DemoStorage;
+  /**
+   * How the region store is built, injected on the same terms as `storage` and for the same
+   * reason: a test must be able to supply one that touches no IndexedDB.
+   */
+  readonly makeOffline: (sources: TileSource[], assets: DemoStorage["assets"]) => DemoOffline;
 }
 
 /**
@@ -62,33 +72,60 @@ async function openStores(storage: DemoStorage): Promise<void> {
   await storage.assets.list();
 }
 
-export function App({ here, storage }: AppProps): ReactElement {
+/** Nothing downloaded — a first visit, and a valid state rather than a degraded one. */
+const NOTHING_STORED: OfflineStatus = { regions: 0, storedSourceIds: [], bytes: 0 };
+
+export function App({ here, storage, makeOffline }: AppProps): ReactElement {
   const [status, setStatus] = useState<ShellStatus>("starting");
   const [failure, setFailure] = useState<string | undefined>(undefined);
+  const [offlineStatus, setOfflineStatus] = useState<OfflineStatus>(NOTHING_STORED);
 
   // Stable across renders: `MapCanvas` treats a new `sources` array as a new stack, and rebuilding
   // it every render would churn the source stack on every keystroke elsewhere in the app.
   const sources = useMemo(() => demoTileSources(readDemoSources(here)), [here]);
   const terrain = useMemo(() => demoTerrain(readDemoSources(here)), [here]);
 
+  /**
+   * The region store, built once from the declared stack.
+   *
+   * Held beside the trip storage rather than inside it: map bytes are a different database with a
+   * different lifecycle (ADR-0016), and a wipe of one must not be able to reach the other.
+   */
+  const offline = useMemo<DemoOffline>(
+    () => makeOffline(sources, storage.assets),
+    [makeOffline, sources, storage],
+  );
+
   useEffect(() => {
     let live = true;
-    openStores(storage).then(
-      () => {
-        if (live) setStatus("ready");
-      },
-      (error: unknown) => {
-        if (!live) return;
-        setFailure(error instanceof Error ? error.message : String(error));
-        setStatus("failed");
-      },
-    );
+    /**
+     * **Archives are installed before the map exists, not beside it.**
+     *
+     * The renderer registers its PMTiles protocol lazily, so an archive installed after MapLibre
+     * has already asked for a tile from that url is not retroactively served (ADR-0036). The map
+     * is therefore rendered only once this resolves — which is what makes "offline" a property of
+     * the load rather than a race against it.
+     */
+    openStores(storage)
+      .then(() => installDownloadedRegions(offline, sources))
+      .then(
+        (installed) => {
+          if (!live) return;
+          setOfflineStatus(installed);
+          setStatus("ready");
+        },
+        (error: unknown) => {
+          if (!live) return;
+          setFailure(error instanceof Error ? error.message : String(error));
+          setStatus("failed");
+        },
+      );
     return () => {
       // React 19 StrictMode mounts, unmounts and remounts effects in development, and a resolved
       // promise from the first pass must not report into the second.
       live = false;
     };
-  }, [storage]);
+  }, [offline, sources, storage]);
 
   return (
     <main className="app">
@@ -106,13 +143,37 @@ export function App({ here, storage }: AppProps): ReactElement {
             : "Opening storage…"}
       </p>
 
-      <Loop
-        storage={storage}
-        sources={sources}
-        style={BLANK_STYLE}
-        terrain={terrain}
-        initialCamera={DEMO_CAMERA}
-      />
+      {/* **Rendered only once the archives are installed.** Mounting the map first would let
+          MapLibre ask for a tile before the stored archive was registered, and that request is
+          not retroactively served (ADR-0036) — the map would go to the network for bytes that
+          were already on disk, and offline would fail for a reason nothing reported. */}
+      {status === "ready" ? (
+        <Loop
+          storage={storage}
+          sources={sources}
+          style={BLANK_STYLE}
+          terrain={terrain}
+          initialCamera={DEMO_CAMERA}
+        />
+      ) : null}
+
+      {/* **Also gated, and for the panel's own contract rather than the map's.** `offlineStatus`
+          starts as `NOTHING_STORED`, which is a placeholder and not a reading: until the effect
+          above resolves, nothing has looked in the region store. The panel treats the status it is
+          given as measured — it publishes `data-regions` and reports "No region downloaded" — so
+          rendering it before the read lands tells a returning user their region is gone, and marks
+          that claim confirmed. The read is what makes the number true, so the panel waits for it.
+
+          `failed` keeps it hidden too: that path never produced a reading either, and the shell's
+          own status line is what reports the failure. */}
+      {status === "ready" ? (
+        <OfflinePanel
+          offline={offline}
+          sources={sources}
+          status={offlineStatus}
+          onChanged={setOfflineStatus}
+        />
+      ) : null}
 
       <PersistencePanel />
       <InstallPanel />
@@ -126,5 +187,5 @@ export function App({ here, storage }: AppProps): ReactElement {
 
 /** What `main.ts` mounts. Storage is constructed here, once, outside React's lifecycle. */
 export function createApp(here: URL): ReactElement {
-  return <App here={here} storage={createDemoStorage()} />;
+  return <App here={here} storage={createDemoStorage()} makeOffline={createDemoOffline} />;
 }

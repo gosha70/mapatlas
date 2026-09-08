@@ -10,6 +10,7 @@ import type { MapAssetStore, StorageAdapter } from "@mapatlas/core";
 
 import { App } from "./app.js";
 import { DEMO_CAMERA } from "./sources.js";
+import type { DemoOffline } from "./offline.js";
 import type { DemoStorage } from "./storage.js";
 
 /**
@@ -61,15 +62,49 @@ function storage(
   return doubles;
 }
 
+/**
+ * A region store that holds nothing, for the shell's own tests.
+ *
+ * The shell's job is to install what is stored **before** the map mounts; whether an archive is
+ * served is `offline.test.tsx`'s. An empty store is the first-visit state and is what these
+ * tests want: the map should still render.
+ */
+const emptyOffline = (): DemoOffline =>
+  ({
+    store: {
+      download: async () => {
+        throw new Error("the shell's tests do not download");
+      },
+      list: async () => [],
+      delete: async () => undefined,
+      estimateSize: async () => 0,
+    },
+    assets: {},
+  }) as unknown as DemoOffline;
+
 let root: Root | undefined;
 let host: HTMLElement | undefined;
 
-const render = async (here: URL, stores: DemoStorage): Promise<HTMLElement> => {
+const render = async (
+  here: URL,
+  stores: DemoStorage,
+  makeOffline = emptyOffline,
+): Promise<HTMLElement> => {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
   await act(async () => {
-    root?.render(createElement(StrictMode, null, createElement(App, { here, storage: stores })));
+    root?.render(
+      createElement(
+        StrictMode,
+        null,
+        createElement(App, {
+          here,
+          storage: stores,
+          makeOffline,
+        }),
+      ),
+    );
   });
   return host;
 };
@@ -169,5 +204,156 @@ describe("the settings panels are the app's own", () => {
 
     expect(app.querySelectorAll("#persistence"), "the control outlived the app").toHaveLength(0);
     expect(app.querySelectorAll("#install-guidance")).toHaveLength(0);
+  });
+});
+
+describe("archives are installed before the map exists", () => {
+  it("does not mount the map while the store is still being read", async () => {
+    // **The ordering ADR-0036 requires, observed rather than assumed.** The renderer registers
+    // its PMTiles protocol lazily and does not retroactively serve an archive installed after
+    // MapLibre has already asked for a tile — so a map mounted first goes to the network for
+    // bytes that were already on disk, and offline fails for a reason nothing reports.
+    let finishListing: () => void = () => undefined;
+    const pending = new Promise<void>((settle) => {
+      finishListing = settle;
+    });
+    const offline = (): DemoOffline =>
+      ({
+        store: {
+          download: async () => {
+            throw new Error("not used");
+          },
+          list: async () => {
+            await pending;
+            return [];
+          },
+          delete: async () => undefined,
+          estimateSize: async () => 0,
+        },
+        assets: {},
+      }) as unknown as DemoOffline;
+
+    const app = await render(url(), storage(), offline);
+
+    expect(
+      app.querySelector('[data-testid="map"]'),
+      "the map mounted before the store was read",
+    ).toBeNull();
+    expect(statusOf(app).dataset["status"]).toBe("starting");
+
+    await act(async () => {
+      finishListing();
+      await Promise.resolve();
+    });
+
+    expect(app.querySelector('[data-testid="map"]')).not.toBeNull();
+    expect(statusOf(app).dataset["status"]).toBe("ready");
+  });
+
+  it("publishes no stored-state reading until the region store has actually been read", async () => {
+    /**
+     * **The placeholder must not be published as a measurement.** `offlineStatus` starts as
+     * `NOTHING_STORED` — zero regions, no sources — because nothing has looked in the store yet.
+     * The panel treats what it is handed as a reading and marks it confirmed, so rendering it
+     * during startup told a returning user "No region downloaded" with `data-regions="0"`, about
+     * a store that turned out to hold a region.
+     *
+     * The read below therefore **resolves to a region**: a deferred read that ended up empty
+     * would make the eager zero accidentally correct, and this would pass with the gate removed.
+     */
+    let finishListing: (() => void) | undefined;
+    const offline = (): DemoOffline =>
+      ({
+        store: {
+          download: async () => {
+            throw new Error("this test does not download");
+          },
+          list: () =>
+            new Promise((settle) => {
+              finishListing = () => {
+                settle([{ id: "r1", sizeBytes: 4096, sourceIds: ["demo-terrain"] }]);
+              };
+            }),
+          delete: async () => undefined,
+          estimateSize: async () => 4096,
+        },
+        assets: {},
+      }) as unknown as DemoOffline;
+
+    const app = await render(
+      url("?terrain=http://archives.invalid/terrain.pmtiles"),
+      storage(),
+      offline,
+    );
+
+    expect(finishListing, "the region store was never read").toBeDefined();
+    expect(statusOf(app).dataset["status"]).toBe("starting");
+    expect(
+      app.querySelector("#offline-status"),
+      "an unread placeholder was published as a stored-state reading",
+    ).toBeNull();
+
+    await act(async () => {
+      finishListing?.();
+      await Promise.resolve();
+    });
+
+    // And once the read has landed, the panel reports what it found — confirmed, because now
+    // there is something behind the number.
+    const line = app.querySelector("#offline-status");
+    expect(line?.getAttribute("data-confirmed")).toBe("true");
+    expect(line?.getAttribute("data-regions")).toBe("1");
+    expect(line?.getAttribute("data-stored")).toBe("demo-terrain");
+  });
+
+  it("reports nothing served on a first visit, which is not a failure", async () => {
+    const app = await render(url(), storage());
+
+    expect(app.querySelector("#offline-status")?.getAttribute("data-regions")).toBe("0");
+    expect(app.querySelector("#offline-status")?.getAttribute("data-stored")).toBe("");
+    expect(statusOf(app).dataset["status"], "an empty store was treated as a failure").toBe(
+      "ready",
+    );
+  });
+});
+
+describe("a failed installation is reported, not sat in", () => {
+  it("shows a failure and mounts no map when reading the region store rejects", async () => {
+    // **The gate's own failure mode.** Installation now blocks the map, so an install that
+    // rejects and is swallowed turns a storage or protocol error into a permanently blank page
+    // stuck at "starting" — worse than the network trip the gate exists to prevent, because
+    // nothing reports it.
+    const offline = (): DemoOffline =>
+      ({
+        store: {
+          download: async () => {
+            throw new Error("not used");
+          },
+          list: async () => {
+            throw new Error("the region store would not open");
+          },
+          delete: async () => undefined,
+          estimateSize: async () => 0,
+        },
+        assets: {},
+      }) as unknown as DemoOffline;
+
+    const app = await render(url(), storage(), offline);
+
+    expect(statusOf(app).dataset["status"], "the app sat in starting forever").toBe("failed");
+    expect(app.textContent ?? "").toContain("the region store would not open");
+    expect(
+      app.querySelector('[data-testid="map"]'),
+      "a map mounted over a failed install",
+    ).toBeNull();
+
+    // **And no stored-state reading either.** This path produced one no more than `starting` did:
+    // the read is what rejected. Publishing the placeholder here would tell someone whose region
+    // store would not open that they have no region, which is a different and unfounded claim
+    // from the one the shell's own status line is making.
+    expect(
+      app.querySelector("#offline-status"),
+      "a failed read published a stored-state reading anyway",
+    ).toBeNull();
   });
 });

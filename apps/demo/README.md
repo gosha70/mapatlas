@@ -28,10 +28,29 @@ two unrelated licences.
 Then the loop: **Start recording** (the browser will ask for your location), tap the map to drop
 an event, attach a photo, **Stop and review**, and **Export GeoJSON**.
 
+## Offline
+
+Two different things, which fail independently:
+
+- **The map's data.** **Download region** copies the three archives into IndexedDB, and the map
+  then draws from them with the archive server unreachable; **Delete region** puts it back. This
+  is the development runner's behaviour too, so the panel works under `npm run demo` (both servers
+  it starts live in one process, so there is no way to stop only the archive one by hand — the
+  browser lane is what actually cuts the host).
+- **The application itself.** A service worker precaches the built shell, so a reload with the
+  app's own server down still boots the real application rather than a browser error page. This
+  exists **in a production build only** — see *What it is not* below.
+
+Both are checked rather than claimed: `e2e/app-offline.e2e.ts` renders from a downloaded region
+with the archive host cut, and `e2e/app-shell-offline.e2e.ts` boots the built application with its
+own origin cut, on the production bundle rather than the development one. ADR-0035 and ADR-0039.
+
 ## What it is not
 
-- **Not offline yet.** Downloading a region for offline use, and the app working with no network,
-  are the next increment. Everything above needs the servers `npm run demo` starts.
+- **Not a production server.** `npm run demo` is the *development* runner, and it deliberately
+  registers no service worker — running ordinary local development under an active worker helps
+  nobody. So the offline shell described above is not what this command demonstrates; the
+  production browser lane is where that claim is made and checked.
 - **Not a global basemap.** The archives cover one small region; pan far and the map runs out.
   That is the point — they are cut locally rather than served from anyone's tile host.
 - **No map tiles are in this repository.** `npm run demo` cuts them into `build/fixture/`, which

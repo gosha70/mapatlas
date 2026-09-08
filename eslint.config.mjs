@@ -22,7 +22,9 @@ const DOM_GLOBALS = [
 ];
 
 export default tseslint.config(
-  { ignores: ["**/dist/**", "**/node_modules/**", "**/*.d.ts"] },
+  // `build/` is generated output — the demo's bundle and its generated service worker
+  // land there, and linting a minified chunk reports on the bundler, not on this repository.
+  { ignores: ["**/dist/**", "build/**", "**/node_modules/**", "**/*.d.ts"] },
 
   js.configs.recommended,
   ...tseslint.configs.recommended,

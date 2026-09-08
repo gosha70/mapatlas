@@ -8,22 +8,41 @@ specific failure modes are cheap to avoid once named.
 
 ## Where the work is
 
-**T7.1 — the demo app.** `tasks.md` has its scope and acceptance criteria, and `roadmap.md` has
-Phase 7's exit. **Survey both before planning anything**; nothing here pre-plans it, deliberately,
-because the survey is the next session's and it should meet the task on its own terms.
+**T7.1b — authoring and list flows.** `tasks.md` has its scope and acceptance criteria, and
+`roadmap.md` has Phase 7's exit. **Survey both before planning anything**; nothing here pre-plans
+it, deliberately, because the survey is the next session's and it should meet the task on its own
+terms.
 
 Two things it will inherit and should know before it starts, neither of them scope:
 
-- **"Offline" is narrowed to *map data* offline** (ADR-0035, and Phase 6's exit in `roadmap.md`).
-  The app shell is still served from its own origin, and **T7.1's own criterion is the one that
-  says the full loop works offline and survives reload** — so app-shell offline is work T7.1 has
-  to do, not work Phase 6 already did. A plan that assumes otherwise is assuming something no
-  gate has ever checked.
+- **The demo app has no trip list, and that is T7.1b's first observable.** Durability is already
+  settled and does not need re-proving: `e2e/app-loop.e2e.ts` finalizes a trip with an event and a
+  photo, reloads for real, and reads all three back out of the app's own stores. What does not
+  exist is any way for a *person* to find that trip again — `listTrackSummaries()` reaches no
+  screen. Build the surface; the storage claim underneath it is already green, and a T7.1b test
+  that merely re-asserts persistence is testing what T7.1 closed.
 - **Eviction-aware re-download, quota UI and download resume remain unbuilt and unowned.** T6.1
-  fenced them out, T6.2's survey answered them as questions rather than scope, and
+  fenced them out, T6.2's survey answered them as questions rather than scope,
   `architecture.md`'s claim that the store "supports eviction-aware re-download" was removed
-  because nothing implements it. If T7.1 needs any of them, that is a decision to take, not a
-  commitment to inherit.
+  because nothing implements it, and T7.1 did not take any of them on. If T7.1b needs one, that
+  is a decision to take, not a commitment to inherit.
+
+### T7.1 is closed (2026-09-08)
+
+The demo app ships: the loop over published bindings, GeoJSON export, a consumer
+`EventPresentation`, a self-hosted OpenStreetMap basemap over the Copernicus DEM, a downloadable
+region, and an application shell that survives a reload with its own origin unreachable.
+`tasks.md` carries the authoritative Done record with the criterion-by-criterion evidence;
+`specs/plans/t7-1-demo-app.md` is history now, not a work plan. PRs #26, #28, #29, #31 and #32 are
+merged; the offline slice (`c050a48`, `026f028`, `de6133b`) lands with `codex/t7-1-offline`.
+
+**"Offline" now means two things in this repository, and they fail independently.** Map data
+offline is Phase 6's and ADR-0035's: an archive is served from `MapAssetStore` under its own url.
+App-shell offline is T7.1's and ADR-0039's: the built shell is precached by a worker generated
+from the emitted bundle, which owns the shell and never a map archive. A test that establishes one
+establishes nothing about the other — and **user-data offline was never a network concern at all**,
+since recording has always written to IndexedDB, so cutting the network and watching a recording
+succeed asserts something that was already true.
 
 Phases 0–6 are complete and merged: core, persistence, the web recorder, the MapLibre renderer,
 and the whole React surface `api.md` §9 publishes (`MapCanvas`, `EventComposer`, `TripReview`,

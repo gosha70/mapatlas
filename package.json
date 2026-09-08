@@ -29,7 +29,8 @@
     "test:browser": "playwright test",
     "test:browser:install": "playwright install --with-deps chromium",
     "fixture:build": "node scripts/fixture/build-fixture.mjs",
-    "demo": "node scripts/demo.mjs"
+    "demo": "node scripts/demo.mjs",
+    "demo:build": "npm run build && vite build --config apps/demo/vite.config.ts && node scripts/generate-service-worker.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

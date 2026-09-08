@@ -15,6 +15,30 @@ import { defineConfig } from "vite";
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   server: { host: "127.0.0.1" },
+  preview: { host: "127.0.0.1" },
+  /**
+   * The production build, pinned as a repository contract rather than left to a default.
+   *
+   * **Not `dist`, which is already taken.** `apps/demo/tsconfig.json` sets `"outDir": "dist"`,
+   * so `tsc --build` emits the demo's `.js` and `.d.ts` there — and this directory carried a
+   * stale `assets/` from an unpinned `vite build` alongside them. Pointing the bundle at the
+   * same place is not merely untidy: `emptyOutDir` would delete the compiler's output while
+   * `tsconfig.tsbuildinfo` still records it as current, so the next `tsc --build` would emit
+   * nothing and the build gate would pass over a hole. In the other order the compiler's
+   * `.js`/`.d.ts`/`.map` files land *inside* the bundle, and the service worker generated from
+   * that tree would precache them and take its build digest from them.
+   *
+   * `build/` is where this repository already puts generated, uncommitted artefacts
+   * (`build/fixture/` holds the map archives), and nothing else writes to `build/demo/`.
+   *
+   * `emptyOutDir` is explicit because the directory is outside `root`: vite refuses to clear
+   * such a directory silently, and a bundle accumulating the previous build's hashed chunks
+   * would give the worker an inventory of files the application no longer loads.
+   */
+  build: {
+    outDir: fileURLToPath(new URL("../../build/demo", import.meta.url)),
+    emptyOutDir: true,
+  },
   resolve: {
     alias: {
       "@mapatlas/core": fileURLToPath(

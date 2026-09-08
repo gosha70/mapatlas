@@ -23,6 +23,10 @@ import { consoleFor, fixturePng, watchConsole } from "./fixtures/browser.js";
  * step can produce — a recorder state the page reports, a composer that opened where the tap
  * landed, a preview that decoded the chosen bytes, and a photo visible *in the review* after the
  * trip was finalized.
+ *
+ * The last scenario carries the criterion's other clause — **persists across reload**. It is here
+ * rather than in a file of its own because it needs this file's whole flow: what has to survive a
+ * reload is a *finalized track with an event carrying a photo*, and nothing shorter produces one.
  */
 
 test.use({
@@ -185,4 +189,128 @@ test("the exported file parses, and round-trips the trip that produced it", asyn
   // The photo travels by reference: a key into the store, and no bytes in the file.
   expect(back.events[0]?.media[0]?.blobKey).toBeDefined();
   expect(text, "the photo bytes were inlined").not.toContain("base64");
+});
+
+/**
+ * What the demo's own stores hold, read through the demo's own factory.
+ *
+ * **Not a hand-written database name.** `createDemoStorage()` is exactly what `app.tsx` calls, so
+ * this reads whatever the app writes to — if the demo changed adapters or names tomorrow, this
+ * probe would follow it rather than silently reading a database nobody uses any more. It opens a
+ * second connection to the same databases, which IndexedDB permits and which is read-only here.
+ *
+ * Injected as a module rather than run through `page.evaluate`, because the specifier has to be
+ * resolved by the dev server the app is served from, not by this file's compiler.
+ */
+const PROBE = `
+import { createDemoStorage } from "/src/app/storage.js";
+
+const storage = createDemoStorage();
+
+const tracks = [];
+for (const summary of await storage.trips.listTrackSummaries()) {
+  const track = await storage.trips.getTrack(summary.id);
+  tracks.push({ id: summary.id, points: track === undefined ? -1 : track.points.length });
+}
+
+const events = [];
+for (const event of await storage.trips.listEvents()) {
+  events.push({
+    id: event.id,
+    trackId: event.trackId,
+    blobKeys: event.media.map((item) => item.blobKey).filter((key) => key !== undefined),
+  });
+}
+
+const blobs = [];
+for (const key of events.flatMap((event) => event.blobKeys)) {
+  const blob = await storage.trips.getBlob(key);
+  blobs.push(blob === undefined ? null : [...new Uint8Array(await blob.arrayBuffer())]);
+}
+
+window.__demoPersisted = { tracks, events, blobs };
+`;
+
+interface Persisted {
+  readonly tracks: { id: string; points: number }[];
+  readonly events: { id: string; trackId?: string; blobKeys: string[] }[];
+  /** The bytes behind each `blobKey`, in order; `null` where the key resolved to nothing. */
+  readonly blobs: (number[] | null)[];
+}
+
+async function readPersisted(page: Page): Promise<Persisted> {
+  await page.addScriptTag({ type: "module", content: PROBE });
+  await page.waitForFunction(() => "__demoPersisted" in window);
+  return page.evaluate(() => (window as unknown as { __demoPersisted: Persisted }).__demoPersisted);
+}
+
+test("a finalized trip, its event and its photo survive a real reload", async ({ page }) => {
+  /**
+   * **The acceptance criterion's "persists across reload", observed on the demo's own state.**
+   *
+   * `e2e/recorder.e2e.ts` already carries a real reload — it recovers an interrupted recording and
+   * goes on recording into it — but that is the *recorder's* autosave, over the harness route. It
+   * says nothing about whether a trip this app finalized, with the event and photo hung off it, is
+   * still there in a new document. Those are separate claims: one is crash recovery, the other is
+   * that what the loop wrote is durable.
+   *
+   * **No UI is asserted, deliberately.** The demo has no trip list and no reopen affordance — that
+   * surface is T7.1b's — so the claim is made against storage rather than against a screen the
+   * task does not own. Reading through `createDemoStorage()` keeps it the app's storage and not a
+   * database this test happens to know the name of.
+   */
+  watchConsole(page);
+  await page.goto(withArchives);
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+
+  // **The probe reports absence before it reports presence.** Otherwise a probe that answered with
+  // a fixed shape, or that read some other origin's data, would satisfy every assertion below and
+  // the reload would be doing none of the work.
+  const empty = await readPersisted(page);
+  expect(empty.tracks).toStrictEqual([]);
+  expect(empty.events).toStrictEqual([]);
+
+  await recordTwoFixes(page);
+  await pinOnMap(page);
+  const chooser = page.waitForEvent("filechooser");
+  await page.locator(".mapatlas-composer-photo").click();
+  await (await chooser).setFiles(PHOTO);
+  await expect(page.locator(".mapatlas-composer-preview")).toBeVisible();
+  await page.locator(".mapatlas-composer-save").click();
+  await expect(page.locator("#recorder-status")).toHaveAttribute("data-events", "1");
+
+  await page.locator("#record-stop").click();
+  await expect(page.locator("#app-review")).toBeVisible();
+
+  const before = await readPersisted(page);
+  expect(before.tracks).toHaveLength(1);
+
+  // A genuinely new document: the realm, the React tree and both database connections are gone,
+  // so nothing below can be answered from anything the previous document was still holding.
+  await page.reload();
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+
+  const after = await readPersisted(page);
+
+  // The finalized track, and **the same one** — not merely "a track exists", which the reloaded
+  // app could have created by itself.
+  expect(after.tracks.map((track) => track.id)).toStrictEqual(
+    before.tracks.map((track) => track.id),
+  );
+  expect(
+    after.tracks[0]?.points,
+    "the track survived as an id with no geometry behind it",
+  ).toBeGreaterThan(1);
+
+  // Its event, still bound to it. The binding is what `loop.tsx` writes at finalize, and an event
+  // that survived unbound would be unreachable from the trip for ever (ADR-0026).
+  expect(after.events).toHaveLength(1);
+  expect(after.events[0]?.trackId).toBe(after.tracks[0]?.id);
+  expect(after.events[0]?.blobKeys).toHaveLength(1);
+
+  // And the `blobKey` still resolves — to the bytes the picker was handed, not merely to
+  // something. A key that resolved to an empty or different blob is a photo that did not survive.
+  expect(after.blobs[0]).toStrictEqual([...PHOTO.buffer]);
+
+  expect(consoleFor(page).problems()).toStrictEqual([]);
 });

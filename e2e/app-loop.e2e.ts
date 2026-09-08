@@ -315,3 +315,62 @@ test("a finalized trip, its event and its photo survive a real reload", async ({
 
   expect(consoleFor(page).problems()).toStrictEqual([]);
 });
+
+test("a trip recorded here is listed by a later document, and reopens as itself", async ({
+  page,
+}) => {
+  /**
+   * **The listing claim, which only this lane can make** (T7.1b increment 1).
+   *
+   * `trips.test.tsx` renders rows from summaries it was handed, and `loop.test.tsx` proves the
+   * rows come from the binding rather than from what this document recorded. Neither can show
+   * that a trip *stored by the app* reaches a list drawn by a **new document** — that needs a
+   * real reload, and it is the assertion a list built from React state passes right up until the
+   * page is refreshed.
+   *
+   * The reopened trip is identified by its **distance**, read from the review's own stats panel
+   * and compared with the distance the same trip reported before the reload. A row appearing is
+   * satisfied by any row; a review appearing is satisfied by any review — `TripReview` renders
+   * happily for an empty track, which this file has been caught by once already.
+   */
+  watchConsole(page);
+  await page.goto(withArchives);
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+
+  // Nothing stored yet, and the list says so rather than saying nothing.
+  await expect(page.locator("#trip-list")).toHaveAttribute("data-count", "0");
+  await expect(page.locator("#trip-list-empty")).toBeVisible();
+
+  await recordTwoFixes(page);
+  await page.locator("#record-stop").click();
+  await expect(page.locator("#app-review")).toBeVisible();
+
+  const recordedKm = await distanceKm(page);
+  expect(
+    recordedKm,
+    "the recording kept no distance, so nothing below is attributable",
+  ).toBeGreaterThan(0);
+  // Listed as soon as it exists — the refresh after finalize, not only on the next load.
+  await expect(page.locator("#trip-list")).toHaveAttribute("data-count", "1");
+
+  // A genuinely new document: React state, the recorder and the event log are all gone, and only
+  // what reached the store can answer.
+  await page.reload();
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+
+  await expect(page.locator("#trip-list")).toHaveAttribute("data-count", "1");
+  const row = page.locator(".trip-open").first();
+  await expect(row).toHaveAttribute("data-origin", "recorded");
+  await expect(row).toHaveAttribute("data-points", /[2-9]|\d{2,}/);
+
+  await row.click();
+
+  await expect(page.locator("#app-review")).toBeVisible();
+  await expect(row).toHaveAttribute("data-open", "true");
+  expect(await distanceKm(page), "the reopened trip is not the one that was recorded").toBeCloseTo(
+    recordedKm,
+    2,
+  );
+
+  expect(consoleFor(page).problems()).toStrictEqual([]);
+});

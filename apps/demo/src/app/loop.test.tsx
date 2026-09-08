@@ -6,7 +6,7 @@ import type { Root } from "react-dom/client";
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Id, LatLng, MapEvent, StorageAdapter, Track } from "@mapatlas/core";
+import type { Id, LatLng, MapEvent, StorageAdapter, Track, TrackSummary } from "@mapatlas/core";
 
 /**
  * The loop, wired.
@@ -38,6 +38,13 @@ const seen = vi.hoisted(() => ({
   /** Blob keys the component asked the store to delete, and keys whose delete fails. */
   deleted: [] as string[],
   undeletable: new Set<string>(),
+  /** What the store reports it holds — deliberately not what this document recorded. */
+  stored: [] as TrackSummary[],
+  listLoading: false,
+  refreshes: 0,
+  /** Tracks `getTrack` will hydrate, by id. A missing id resolves `undefined`, as the real one does. */
+  hydratable: new Map<string, Track>(),
+  hydrated: [] as string[],
 }));
 
 /** The trip `stop()` resolves. Two points, so it is a track rather than a placeholder. */
@@ -151,6 +158,20 @@ vi.mock("@mapatlas/react", () => ({
     seen.review = props;
     return createElement("div", { "data-testid": "review" });
   },
+
+  // **A list whose contents this document cannot influence.** It answers with whatever
+  // `seen.stored` holds, never with what was recorded here — so a component that rendered the
+  // trips it had just finalized, rather than the ones the store reported, is visible as a
+  // difference rather than hidden by the two happening to agree.
+  useTrackList: () => ({
+    tracks: seen.stored,
+    loading: seen.listLoading,
+    refresh: async () => {
+      seen.refreshes += 1;
+      return Promise.resolve();
+    },
+    remove: async () => Promise.resolve(),
+  }),
 }));
 
 const { Loop } = await import("./loop.js");
@@ -169,6 +190,10 @@ const storage = () =>
         if (seen.undeletable.has(key)) throw new Error(`cannot delete ${key}`);
         seen.deleted.push(key);
         return Promise.resolve();
+      },
+      getTrack: async (id: string) => {
+        seen.hydrated.push(id);
+        return Promise.resolve(seen.hydratable.get(id));
       },
     } as unknown as StorageAdapter,
     assets: {},
@@ -222,7 +247,23 @@ afterEach(() => {
   seen.staleList = false;
   seen.deleted = [];
   seen.undeletable = new Set();
+  seen.stored = [];
+  seen.listLoading = false;
+  seen.refreshes = 0;
+  seen.hydratable = new Map();
+  seen.hydrated = [];
 });
+
+/** A stored summary, as the adapter would report it. */
+const summary = (over: Partial<TrackSummary> = {}): TrackSummary =>
+  ({
+    id: "trip-9",
+    startedAt: 1_000,
+    status: "finalized",
+    origin: "recorded",
+    pointCount: 2,
+    ...over,
+  }) as TrackSummary;
 
 /** A write the test settles by hand. */
 const holdTheWrite = (): (() => void) => {
@@ -673,5 +714,83 @@ describe("a trip's export is that trip's", () => {
 
     const reviewed = (seen.review?.["events"] as MapEvent[]).map((e) => e.trackId);
     expect(reviewed).toStrictEqual([FINALIZED.id]);
+  });
+});
+
+describe("the stored trips are listed from the store", () => {
+  it("lists what the store reports, not what this document recorded", async () => {
+    /**
+     * **The mutation this closes.** A list built from the trips this session finalized renders
+     * identically for as long as the page stays open, and loses every one of them on reload —
+     * which is the whole thing a trip list exists to prevent. Here the store reports a trip this
+     * document never recorded, and the recorded one is absent from what it reports; a component
+     * rendering its own history would show the opposite of both.
+     */
+    seen.stored = [summary({ id: "from-the-store" })];
+    await render();
+
+    await click("#record-start");
+    await click("#record-stop");
+
+    const rows = [...(host?.querySelectorAll<HTMLElement>(".trip-open") ?? [])];
+    expect(rows.map((row) => row.dataset["trackId"])).toStrictEqual(["from-the-store"]);
+    expect(
+      rows.map((row) => row.dataset["trackId"]),
+      "the trip finalized in this document was listed from its own state",
+    ).not.toContain(FINALIZED.id);
+  });
+
+  it("asks the store again once a trip is finalized", async () => {
+    // The binding lists on mount and when the store is replaced; a trip finalized afterwards is
+    // in the store and absent from the rendered list until something asks again.
+    await render();
+    const before = seen.refreshes;
+
+    await click("#record-start");
+    await click("#record-stop");
+
+    expect(seen.refreshes, "the list was never re-read after a trip was finalized").toBe(
+      before + 1,
+    );
+  });
+
+  it("hydrates a listed trip once, and reviews the track the store returned", async () => {
+    // The list holds summaries with no points (ADR-0014), so opening is where `getTrack` runs —
+    // and the review must be of what it returned, not of a summary dressed up as a track.
+    const stored: Track = { ...FINALIZED, id: "trip-9" };
+    seen.stored = [summary({ id: "trip-9" })];
+    seen.hydratable = new Map([["trip-9", stored]]);
+    await render();
+
+    await click('[data-track-id="trip-9"]');
+
+    expect(seen.hydrated, "the row was rendered by hydrating its track").toStrictEqual(["trip-9"]);
+    expect(host?.querySelector('[data-testid="review"]')).not.toBeNull();
+    expect(seen.review?.["track"]).toBe(stored);
+    expect(host?.querySelector<HTMLElement>('[data-track-id="trip-9"]')?.dataset["open"]).toBe(
+      "true",
+    );
+  });
+
+  it("reports a listed trip whose track has gone, rather than doing nothing", async () => {
+    // The list is a snapshot; anything that removes a trip between the render and the click
+    // produces this. A button that silently did nothing would read as broken.
+    seen.stored = [summary({ id: "vanished" })];
+    seen.hydratable = new Map();
+    await render();
+
+    await click('[data-track-id="vanished"]');
+
+    expect(host?.querySelector("#trip-failure")?.textContent ?? "").toContain("vanished");
+    expect(host?.querySelector('[data-testid="review"]'), "a review opened on nothing").toBeNull();
+    expect(seen.refreshes, "the stale list was left standing").toBeGreaterThan(0);
+  });
+
+  it("separates an unread list from an empty one", async () => {
+    seen.listLoading = true;
+    await render();
+
+    expect(host?.querySelector("#trip-list-empty")?.textContent ?? "").toContain("Reading");
+    expect(host?.querySelector("#trip-list")?.getAttribute("data-loading")).toBe("true");
   });
 });

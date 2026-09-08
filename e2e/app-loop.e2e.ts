@@ -303,7 +303,8 @@ test("a finalized trip, its event and its photo survive a real reload", async ({
   ).toBeGreaterThan(1);
 
   // Its event, still bound to it. The binding is what `loop.tsx` writes at finalize, and an event
-  // that survived unbound would be unreachable from the trip for ever (ADR-0026).
+  // that survived unbound would be unreachable from the trip for ever — the reason is in that
+  // file's header, which is the only place it is recorded.
   expect(after.events).toHaveLength(1);
   expect(after.events[0]?.trackId).toBe(after.tracks[0]?.id);
   expect(after.events[0]?.blobKeys).toHaveLength(1);

@@ -1197,8 +1197,9 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
     none of them. `e2e/app-loop.e2e.ts`'s second scenario is the control that the review is of the
     trip just recorded rather than of an empty one. Unit: `apps/demo/src/app/loop.test.tsx` covers
     the ordering the seams force — events are stored unbound and bound at finalize, because
-    `useTrackRecorder` publishes `track` only after `stop()` resolves (ADR-0026), and finalizing
-    waits for every write to settle so a stop cannot overtake one.
+    `useTrackRecorder` publishes `track` only after `stop()` resolves, and finalizing waits for
+    every write to settle so a stop cannot overtake one. That decision and its reasoning are in
+    the header of `apps/demo/src/app/loop.tsx`, which is the only place they are recorded.
   - *Exports valid GeoJSON.* Unit: `apps/demo/src/app/export.test.ts` — the document parses as a
     `FeatureCollection`, round-trips the track and the events including fields the engine assigns
     no meaning to, references photos rather than inlining them, and names the file with an
@@ -1246,8 +1247,9 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
     `createDemoStorage()` — the same factory `app.tsx` calls, so it follows the app rather than
     naming a database. It asserts the finalized track is **the same id** as before the reload and
     still has its geometry, that its event survived **still bound to it** (the binding `loop.tsx`
-    writes at finalize, without which the event is unreachable from the trip for ever, ADR-0026),
-    and that the event's `blobKey` still resolves to **the exact bytes the picker was handed**.
+    writes at finalize, without which the event is unreachable from the trip for ever — see that
+    file's header), and that the event's `blobKey` still resolves to **the exact bytes the picker
+    was handed**.
     The probe reports the empty database before it reports the populated one, so a probe answering
     with a fixed shape could not satisfy it.
 

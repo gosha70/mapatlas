@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
 import { consoleFor, watchConsole } from "./fixtures/browser.js";
-import { decodePng } from "./fixtures/pixels.js";
+import { countColour, decodePng } from "./fixtures/pixels.js";
 import { settleRender } from "./fixtures/rendered.js";
 
 /**
@@ -283,22 +283,6 @@ test("the app never reaches the fixture route", async ({ page }) => {
  * nothing.
  */
 const WATER_FILL: readonly [number, number, number] = [0xb3, 0xcd, 0xe0];
-
-/** Pixels within `tolerance` of a colour, per channel. */
-function countColour(png: Buffer, rgb: readonly [number, number, number], tolerance = 12): number {
-  const raster = decodePng(png);
-  let found = 0;
-  for (let i = 0; i < raster.data.length; i += 4) {
-    if (
-      Math.abs((raster.data[i] ?? 0) - rgb[0]) <= tolerance &&
-      Math.abs((raster.data[i + 1] ?? 0) - rgb[1]) <= tolerance &&
-      Math.abs((raster.data[i + 2] ?? 0) - rgb[2]) <= tolerance
-    ) {
-      found += 1;
-    }
-  }
-  return found;
-}
 
 test("the root route draws the basemap from its own archive", async ({ page }) => {
   /**

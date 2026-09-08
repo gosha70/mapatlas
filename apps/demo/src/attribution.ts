@@ -16,3 +16,23 @@
  */
 export const FIXTURE_ATTRIBUTION =
   "Contains modified Copernicus DEM GLO-30 Public data © DLR e.V. and Airbus DS GmbH";
+
+/**
+ * The line the self-hosted basemap extract carries (ADR-0038).
+ *
+ * **A second line, never a replacement.** The map draws two derived works from two unrelated
+ * sources: the Copernicus DEM above and the OpenStreetMap extract here. Each carries its own
+ * obligation, and a control showing one of them is in breach for the other — so both are declared
+ * and MapLibre renders both.
+ *
+ * **Verbatim, and the same words the archive carries.** The OSMF attribution guidelines mandate
+ * attribution to "OpenStreetMap" and accept `© OpenStreetMap contributors`; ODbL §4.3 requires
+ * the notice to say the content is available under this License. Composed here exactly as
+ * `runBuild` composes the archive's own `attribution`, from the same checked-in
+ * `fixtures/basemap/notice.json` — and `attribution.test.ts` compares this string against that
+ * file, so the map and the archive cannot come to say different things.
+ */
+export const BASEMAP_ATTRIBUTION =
+  "© OpenStreetMap contributors — data available under the " +
+  "Open Database License (ODbL) 1.0, https://opendatacommons.org/licenses/odbl/1-0/ — " +
+  "source https://www.openstreetmap.org/copyright";

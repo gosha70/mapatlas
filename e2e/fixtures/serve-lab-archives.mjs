@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Builds the synthetic archive pair and serves it over HTTP with range support (T4.6).
+ * Builds the synthetic archives and serves them over HTTP with range support (T4.6).
+ *
+ * Three archives, and only two of them are `/lab`'s: terrain and contours are what its route and
+ * scenarios read, and the basemap is the root route's for the online third-source test. The
+ * server does not distinguish them — it serves the directory — so this is one host for both
+ * consumers rather than a second one to stand up.
  *
  * **One process, not a setup step plus a server.** The archives live in a temporary directory
  * whose name is chosen at build time, so splitting the two would need the name passed between
@@ -85,6 +90,7 @@ server.listen(PORT, "127.0.0.1", () => {
       dir: built.dir,
       terrain: `http://127.0.0.1:${String(PORT)}/terrain.pmtiles`,
       contours: `http://127.0.0.1:${String(PORT)}/contours.pmtiles`,
+      basemap: `http://127.0.0.1:${String(PORT)}/basemap.pmtiles`,
       terrainTiles: built.terrainTiles,
       contourTiles: built.contourTiles,
     })}\n`,

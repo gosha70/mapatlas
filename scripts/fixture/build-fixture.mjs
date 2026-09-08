@@ -51,6 +51,8 @@ export const DEFAULT_PATHS = Object.freeze({
   // **not** archive payload: §4.2's "a copy of this License or its URI" belongs to the clause
   // about conveying a Database, and this extract is a Produced Work.
   basemapNoticePath: "fixtures/basemap/notice.json",
+  // The layer schema the demo's style is written against, asserted against the archive.
+  basemapSchemaPath: "fixtures/basemap/schema.json",
   // Provenance for the declaration, read to check the strings verbatim and never written into
   // the archive — which is why no entry path appears here.
   basemapLicenceDocuments: [

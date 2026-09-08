@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Cuts the synthetic archive pair the browser scenario renders (T4.6).
+ * Cuts the synthetic archives the browser scenarios render (T4.6; basemap added by T7.1 4b).
+ *
+ * **Three files, two consumers.** The terrain/contour pair is `/lab`'s and is unchanged — its
+ * route, stack and scenarios still see exactly those two. The basemap is the *root route's*, for
+ * the online test that the demo declares and draws a third source; `/lab` neither declares nor
+ * reads it. These files are lab-named because they predate the demo having archives of its own.
  *
  * **The real pipeline, minus the network.** Every stage downstream of the source is the one the
  * production build uses — `stitchSurface`'s output shape, `renderTerrariumTile`, `encodePng`,
@@ -16,8 +21,17 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import geojsonvt from "geojson-vt";
+import vtpbf from "vt-pbf";
+
 import { writeArchive } from "../../scripts/fixture/archive.mjs";
-import { contourTiles, levelsFor, traceContours } from "../../scripts/fixture/contour.mjs";
+import {
+  BUFFER,
+  EXTENT,
+  contourTiles,
+  levelsFor,
+  traceContours,
+} from "../../scripts/fixture/contour.mjs";
 import { TILE_SIZE, productionEnvelope, tilesInRange } from "../../scripts/fixture/mercator.mjs";
 import { encodePng } from "../../scripts/fixture/png.mjs";
 import { renderTerrariumTile } from "../../scripts/fixture/resample.mjs";
@@ -53,10 +67,14 @@ function syntheticSurface(envelope) {
 }
 
 /**
- * Build both archives.
+ * Build the archives: `/lab`'s terrain and contour pair, and the root route's basemap.
  *
  * @param {{ bounds: number[], minZoom: number, maxZoom: number, contourIntervalM: number }} region
- * @returns {Promise<{ dir: string, terrainPath: string, contourPath: string, terrainTiles: number, contourTiles: number }>}
+ * @returns {Promise<{
+ *   dir: string,
+ *   terrainPath: string, contourPath: string, basemapPath: string,
+ *   terrainTiles: number, contourTiles: number, basemapTiles: number,
+ * }>}
  */
 export async function buildLabArchives(region) {
   const dir = mkdtempSync(join(tmpdir(), "mapatlas-lab-"));
@@ -101,13 +119,114 @@ export async function buildLabArchives(region) {
   await writeArchive(terrainPath, rasterTiles, metadata, { tileType: "png", compression: "none" });
   await writeArchive(contourPath, vectorTiles, metadata, { tileType: "mvt", compression: "gzip" });
 
+  const basemapPath = join(dir, "basemap.pmtiles");
+  const basemapTiles = syntheticBasemapTiles(region, addresses);
+  await writeArchive(basemapPath, basemapTiles, metadata, {
+    tileType: "mvt",
+    compression: "none",
+  });
+
   // A manifest beside them, so the scenario reads paths rather than recomputing a temp name.
-  writeFileSync(join(dir, "manifest.json"), JSON.stringify({ terrainPath, contourPath }, null, 2));
+  writeFileSync(
+    join(dir, "manifest.json"),
+    JSON.stringify({ terrainPath, contourPath, basemapPath }, null, 2),
+  );
   return {
     dir,
     terrainPath,
     contourPath,
+    basemapPath,
     terrainTiles: rasterTiles.length,
     contourTiles: vectorTiles.length,
+    basemapTiles: basemapTiles.length,
   };
+}
+
+/**
+ * A synthetic basemap, cut with the same tooling the contour layer uses.
+ *
+ * **Not the real extract, and deliberately so.** `build/fixture/basemap.pmtiles` is cut from a
+ * 137 GB pinned upstream over the network; a browser lane that needed it could not run in CI.
+ * What the lane has to prove is that the *demo* declares the source, that MapLibre parses the
+ * archive and asks for its tiles, and that something is drawn from them — none of which depends
+ * on the tiles being Protomaps'.
+ *
+ * **The layer names are the contract.** They are the ones `sources.ts` writes `source-layer`
+ * against, so a demo that renamed a layer would draw nothing here. Geometry is trivial: a filled
+ * rectangle over the region for `earth` and `landuse`, a smaller one for `water`, and a diagonal
+ * for `roads` — enough that each declared layer has something to render, which is what
+ * distinguishes "the source was declared" from "the source drew".
+ */
+function syntheticBasemapTiles(region, addresses) {
+  const [west, south, east, north] = region.bounds;
+  const inset = (f) => [
+    west + (east - west) * f,
+    south + (north - south) * f,
+    east - (east - west) * f,
+    north - (north - south) * f,
+  ];
+  const box = (bounds) => {
+    const [w, s, e, n] = bounds;
+    return {
+      type: "Feature",
+      properties: { kind: "synthetic" },
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [w, s],
+            [e, s],
+            [e, n],
+            [w, n],
+            [w, s],
+          ],
+        ],
+      },
+    };
+  };
+  const layers = {
+    earth: [box(region.bounds)],
+    landuse: [box(inset(0.1))],
+    water: [box(inset(0.3))],
+    roads: [
+      {
+        type: "Feature",
+        properties: { kind: "synthetic" },
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [west, south],
+            [east, north],
+          ],
+        },
+      },
+    ],
+  };
+
+  const wanted = [...addresses];
+  const maxZoom = Math.max(...wanted.map((a) => a.z));
+  const indexes = Object.fromEntries(
+    Object.entries(layers).map(([name, features]) => [
+      name,
+      geojsonvt(
+        { type: "FeatureCollection", features },
+        { extent: EXTENT, buffer: BUFFER, tolerance: 3, maxZoom, indexMaxZoom: maxZoom },
+      ),
+    ]),
+  );
+
+  const tiles = [];
+  for (const { z, x, y } of wanted) {
+    const cut = {};
+    for (const [name, index] of Object.entries(indexes)) {
+      const tile = index.getTile(z, x, y);
+      if (tile !== null && tile.features.length > 0) cut[name] = tile;
+    }
+    if (Object.keys(cut).length === 0) continue;
+    tiles.push({ z, x, y, bytes: new Uint8Array(vtpbf.fromGeojsonVt(cut, { version: 2 })) });
+  }
+  if (tiles.length === 0) {
+    throw new Error("the synthetic basemap produced no tiles, so the layers would be empty");
+  }
+  return tiles;
 }

@@ -23,10 +23,10 @@ import { settleRender } from "./fixtures/rendered.js";
  * separate "the archives reached the canvas" from "a control mentioned them", so the claim below
  * rests on range reads past each archive's header, which nothing but the archive can produce.
  *
- * **What this file does not claim.** No recording, no event, no photo, no review, no export. The
- * loop is `app-loop.e2e.ts`'s and export is not built yet (increment 3); a shell test that
- * implied otherwise would be the "the map rendered, therefore the loop works" trap the plan names
- * by name. The split is deliberate: this file must still fail for a shell reason alone, so that a
+ * **What this file does not claim.** No recording, no event, no photo, no review, no export — all
+ * of those are `app-loop.e2e.ts`'s, export included, since increment 3 is merged. A shell test
+ * implying otherwise would be the "the map rendered, therefore the loop works" trap the plan
+ * names by name. The split is deliberate: this file must still fail for a shell reason alone, so that a
  * broken loop and a broken shell are two different red tests rather than one.
  */
 
@@ -37,6 +37,7 @@ const ARCHIVES = "http://127.0.0.1:5176";
 
 const TERRAIN = `${ARCHIVES}/terrain.pmtiles`;
 const CONTOURS = `${ARCHIVES}/contours.pmtiles`;
+const BASEMAP = `${ARCHIVES}/basemap.pmtiles`;
 
 /** The app's map element. **Not** `mapOf`, which names `/lab`'s `#map` — the two routes are
  *  different pages and sharing a locator would have this file capture the wrong one, or nothing. */
@@ -45,7 +46,7 @@ const appMap = (page: Page): ReturnType<Page["locator"]> => page.locator("#app-m
 const withArchives =
   `${DEMO}/?terrain=${encodeURIComponent(TERRAIN)}` + `&contours=${encodeURIComponent(CONTOURS)}`;
 
-type Archive = "terrain" | "contours";
+type Archive = "terrain" | "contours" | "basemap";
 
 /**
  * What the wire saw for one archive, **split by where in the file it was reading**.
@@ -73,6 +74,7 @@ interface ArchiveReads {
 function archiveOf(url: string): Archive | undefined {
   if (url.startsWith(TERRAIN)) return "terrain";
   if (url.startsWith(CONTOURS)) return "contours";
+  if (url.startsWith(BASEMAP)) return "basemap";
   return undefined;
 }
 
@@ -97,6 +99,7 @@ async function watchArchives(page: Page): Promise<Record<Archive, ArchiveReads>>
   const reads: Record<Archive, ArchiveReads> = {
     terrain: { header: 0, beyondHeader: 0, plain: 0 },
     contours: { header: 0, beyondHeader: 0, plain: 0 },
+    basemap: { header: 0, beyondHeader: 0, plain: 0 },
   };
 
   await page.route(`${ARCHIVES}/**`, async (route) => {
@@ -264,4 +267,111 @@ test("the app never reaches the fixture route", async ({ page }) => {
   await expect(page.locator("#shell-status")).toHaveCount(0);
   await expect(page.locator("h1.app-title")).toHaveCount(0);
   await expect(page.locator("#persistence")).toHaveCount(0);
+});
+
+/**
+ * The demo's own water fill, `#b3cde0` — `sources.ts` paints the basemap's `water` layer with it.
+ *
+ * **Named rather than diffed.** The first version of this assertion compared two renders and
+ * required them to differ at all, which every mutation survived: two page loads differ anyway,
+ * so `> 0` was satisfied by antialiasing noise and vouched for nothing. Renaming all four
+ * `source-layer`s so the basemap drew *nothing* still passed it.
+ *
+ * A named colour is attributable. Nothing else on this map paints it — terrain is a greyscale
+ * hillshade and the contour lines are brown — so its presence is the basemap's `water` layer
+ * having found geometry under the name the demo asked for, and its absence is that layer drawing
+ * nothing.
+ */
+const WATER_FILL: readonly [number, number, number] = [0xb3, 0xcd, 0xe0];
+
+/** Pixels within `tolerance` of a colour, per channel. */
+function countColour(png: Buffer, rgb: readonly [number, number, number], tolerance = 12): number {
+  const raster = decodePng(png);
+  let found = 0;
+  for (let i = 0; i < raster.data.length; i += 4) {
+    if (
+      Math.abs((raster.data[i] ?? 0) - rgb[0]) <= tolerance &&
+      Math.abs((raster.data[i + 1] ?? 0) - rgb[1]) <= tolerance &&
+      Math.abs((raster.data[i + 2] ?? 0) - rgb[2]) <= tolerance
+    ) {
+      found += 1;
+    }
+  }
+  return found;
+}
+
+test("the root route draws the basemap from its own archive", async ({ page }) => {
+  /**
+   * **Online, and not increment 5's offline provenance.** What this establishes is narrower and
+   * comes first: that the *demo* declares the third source, that MapLibre parses that archive and
+   * asks for its tiles, and that the layer named below draws a basemap-specific contribution.
+   * Whether those bytes can come from the store with the host cut is increment 5's, on the demo's
+   * own download path.
+   *
+   * The oracle is the same unforgeable one the shell test uses — a range read whose first byte is
+   * not 0 cannot be issued without having parsed the archive's header, and the offset in it came
+   * from the archive. Counted **per archive**, so terrain's traffic cannot vouch for the
+   * basemap's: a stack that silently dropped the basemap would still show a map.
+   */
+  const reads = await watchArchives(page);
+  watchConsole(page);
+
+  await page.goto(
+    `${DEMO}/?terrain=${encodeURIComponent(TERRAIN)}` +
+      `&contours=${encodeURIComponent(CONTOURS)}` +
+      `&basemap=${encodeURIComponent(BASEMAP)}`,
+  );
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+  // Three sources declared, not two — the count the shell reports is the app's own statement of
+  // what it handed the renderer.
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-sources", "3");
+
+  await settleRender(appMap(page));
+
+  expect(
+    reads.basemap.beyondHeader,
+    "the basemap archive was opened but never read for content — the map asked for no tile of it",
+  ).toBeGreaterThan(0);
+  // The other two still work: a change that made the basemap draw by breaking the stack would
+  // otherwise pass here.
+  expect(reads.terrain.beyondHeader, "terrain stopped being read").toBeGreaterThan(0);
+  expect(reads.contours.beyondHeader, "contours stopped being read").toBeGreaterThan(0);
+
+  /**
+   * **And one named layer drew.** The range reads above prove the archive was parsed and its
+   * tiles fetched; they do *not* prove the demo's `source-layer` names matched anything inside
+   * it. A layer pointing at a name the archive lacks causes every one of those reads and comes
+   * back with nothing — the v3/v4 failure wearing its rendered face.
+   *
+   * **Scope, stated so it is not read as more.** This probes the `water` layer alone, which is
+   * the agreed basemap-specific contribution — not per-layer attribution for all four. Renaming
+   * `earth` or `landuse` to another name the extract genuinely declares would pass here; the
+   * schema test in `sources.test.ts` is what covers a name the extract does not have.
+   *
+   * The canvas alone, not the frame: MapLibre's attribution control is a sibling of the canvas,
+   * so cropping to the canvas keeps a difference in *text* from vouching for a difference in
+   * *map* — the trap this lane has already been caught by once.
+   */
+  const drawn = await appMap(page).locator("canvas").screenshot();
+
+  // The control: the same page without the basemap. It is what makes the count above
+  // attributable rather than a number — if this one were also blue, the colour would be coming
+  // from somewhere else and the assertion would be measuring the wrong thing.
+  await page.goto(
+    `${DEMO}/?terrain=${encodeURIComponent(TERRAIN)}&contours=${encodeURIComponent(CONTOURS)}`,
+  );
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-sources", "2");
+  await settleRender(appMap(page));
+  const without = await appMap(page).locator("canvas").screenshot();
+
+  expect(
+    countColour(drawn, WATER_FILL),
+    "the basemap's water layer painted nothing — its source-layer matched no geometry",
+  ).toBeGreaterThan(100);
+  expect(
+    countColour(without, WATER_FILL),
+    "the water colour appears without the basemap, so it attributes nothing",
+  ).toBe(0);
+
+  expect(consoleFor(page).problems()).toEqual([]);
 });

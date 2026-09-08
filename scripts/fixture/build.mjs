@@ -257,7 +257,57 @@ export async function runBuild(paths, deps, options = {}) {
             );
           }
           const region = await deps.readBasemapRegion(pin, declaration.bounds);
-          return { pin, ...region };
+
+          /**
+           * The extract's schema is what the demo's style layers are written against, so a
+           * change to it must fail here by name.
+           *
+           * Protomaps' v3 and v4 basemaps differ in their layer schema, and a style written
+           * against the wrong one renders **nothing** while reading as a styling bug. Recording
+           * the layer ids and comparing them is what turns that into a named mismatch — the
+           * coverage-snapshot precedent, applied to a schema instead of a tile list.
+           */
+          const schema = deps.readJson(paths.basemapSchemaPath);
+
+          // The record must be **about this pin**, or it is a schema for some other build that
+          // happens to be on disk. Checked first: a mismatch here explains every mismatch below.
+          if (schema.pin !== pin.key || schema.version !== pin.version) {
+            throw new Error(
+              `${paths.basemapSchemaPath} records the schema of ${String(schema.pin)} ` +
+                `v${String(schema.version)}, but the pin is ${pin.key} v${pin.version} — the ` +
+                `recorded schema belongs to a different build`,
+            );
+          }
+
+          /**
+           * Compared as **records**, not as a list of names.
+           *
+           * A layer keeping its id while its zoom range moves is the failure this exists for and
+           * the one an id-only check cannot see: `roads` that stops at z10 is still `roads`, and
+           * the demo's camera sits at z12, so the map would render without roads and every other
+           * assertion would pass. Ids alone were also joined with commas, which is not a
+           * structural comparison — a layer named `a,b` would collide with two named `a` and `b`.
+           */
+          const normalise = (layers) =>
+            [...layers]
+              .map((layer) => ({
+                id: String(layer.id),
+                minzoom: Number(layer.minzoom),
+                maxzoom: Number(layer.maxzoom),
+              }))
+              .sort((a, b) => a.id.localeCompare(b.id));
+          const declared = normalise(region.metadata.vector_layers ?? []);
+          const recorded = normalise(schema.layers);
+          if (JSON.stringify(declared) !== JSON.stringify(recorded)) {
+            const show = (rows) =>
+              rows.map((r) => `${r.id} z${String(r.minzoom)}-${String(r.maxzoom)}`).join(", ");
+            throw new Error(
+              `the pinned build declares vector layers [${show(declared)}], but ` +
+                `${paths.basemapSchemaPath} records [${show(recorded)}] — the schema moved, and ` +
+                `style layers written against the old one would render nothing`,
+            );
+          }
+          return { pin, schema, ...region };
         });
 
   const basemapLicence =

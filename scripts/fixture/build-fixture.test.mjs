@@ -49,7 +49,7 @@ const REGION = {
 };
 const SPACING = 1 / 3600;
 /** The synthetic basemap extract's SHA-256, recorded rather than derived at run time. */
-const SYNTHETIC_EXTRACT_SHA256 = "42b0a1f51416c484cb37e206a180c6b7be4996496ba10a225669ed567b404826";
+const SYNTHETIC_EXTRACT_SHA256 = "006563fc97fed7930d94cd070cee256f76d81c9a2284b98dead621bbac053675";
 /**
  * Well clear of the floor, and varying enough to carry contours.
  *
@@ -181,14 +181,20 @@ async function syntheticBasemap(dir) {
     bytes: Uint8Array.from([z, x & 0xff, y & 0xff, 7]),
   }));
   const upstreamPath = join(dir, `upstream-${String(seq)}.pmtiles`);
+  // A `vector_layers` document of its own, because the build asserts the archive's schema against
+  // a recorded one — an upstream declaring none would exercise only the failure path.
+  // **Deliberately not alphabetical.** The build sorts both sides before comparing; if the
+  // archive's own order were already sorted, dropping either sort would still compare equal and
+  // the ordering-insensitivity would be untested.
+  const vectorLayers = [
+    { id: "water", fields: {}, minzoom: 0, maxzoom: 15 },
+    { id: "earth", fields: {}, minzoom: 0, maxzoom: 15 },
+  ];
   await writeArchive(
     upstreamPath,
     tiles,
-    { bounds, minzoom: minZoom, maxzoom: maxZoom, name: "synthetic" },
-    {
-      tileType: "mvt",
-      compression: "none",
-    },
+    { bounds, minzoom: minZoom, maxzoom: maxZoom, name: "synthetic", vector_layers: vectorLayers },
+    { tileType: "mvt", compression: "none" },
   );
   const object = readFileSync(upstreamPath);
 
@@ -211,6 +217,15 @@ async function syntheticBasemap(dir) {
   };
   const pinPath = join(dir, `pin-${String(seq)}.json`);
   writeFileSync(pinPath, JSON.stringify(pin));
+  const schemaPath = join(dir, `schema-${String(seq)}.json`);
+  writeFileSync(
+    schemaPath,
+    JSON.stringify({
+      pin: pin.key,
+      version: pin.version,
+      layers: vectorLayers.map(({ id, minzoom, maxzoom }) => ({ id, minzoom, maxzoom })),
+    }),
+  );
 
   const fetchImpl = (url, init) => {
     if (url === pin.metadataUrl) {
@@ -236,7 +251,7 @@ async function syntheticBasemap(dir) {
         Promise.resolve(slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength)),
     });
   };
-  return { pin, pinPath, fetchImpl, tiles };
+  return { pin, pinPath, schemaPath, fetchImpl, tiles };
 }
 
 /** The basemap paths a synthetic run needs, in one place rather than five. */
@@ -246,6 +261,7 @@ const withBasemap = (base, basemap, archivePath) => ({
   basemapPinPath: basemap.pinPath,
   basemapAttributionPath: DEFAULT_PATHS.basemapAttributionPath,
   basemapNoticePath: DEFAULT_PATHS.basemapNoticePath,
+  basemapSchemaPath: basemap.schemaPath,
   basemapRoles: DEFAULT_PATHS.basemapRoles,
   basemapLicenceDocuments: DEFAULT_PATHS.basemapLicenceDocuments,
 });
@@ -288,6 +304,7 @@ describe("the committed entry point produces an archive", () => {
         basemapPinPath: basemap.pinPath,
         basemapAttributionPath: DEFAULT_PATHS.basemapAttributionPath,
         basemapNoticePath: DEFAULT_PATHS.basemapNoticePath,
+        basemapSchemaPath: basemap.schemaPath,
         basemapRoles: DEFAULT_PATHS.basemapRoles,
         basemapLicenceDocuments: DEFAULT_PATHS.basemapLicenceDocuments,
       },
@@ -317,6 +334,7 @@ describe("the committed entry point produces an archive", () => {
         basemapPinPath: basemap.pinPath,
         basemapAttributionPath: DEFAULT_PATHS.basemapAttributionPath,
         basemapNoticePath: DEFAULT_PATHS.basemapNoticePath,
+        basemapSchemaPath: basemap.schemaPath,
         basemapRoles: DEFAULT_PATHS.basemapRoles,
         basemapLicenceDocuments: DEFAULT_PATHS.basemapLicenceDocuments,
       },
@@ -328,9 +346,19 @@ describe("the committed entry point produces an archive", () => {
     // PMTiles defines `attribution` as a string; a role map there would be the wrong type for
     // every reader of the format.
     expect(typeof metadata.attribution).toBe("string");
-    expect(metadata.attribution).toContain("© OpenStreetMap contributors");
-    expect(metadata.attribution).toContain("https://opendatacommons.org/licenses/odbl/1-0/");
-    expect(metadata.attribution).toContain("https://www.openstreetmap.org/copyright");
+
+    /**
+     * **The whole string, not substrings.** Three `toContain` checks passed while leaving the
+     * composer free to drift in punctuation or add wording no document supports — and the
+     * artefact hash is no help, because a later re-baseline blesses whatever it then produces.
+     * Built from the same checked-in notice the composer reads, so this is an equality against
+     * the intended text rather than a restatement of the implementation.
+     */
+    const notice = JSON.parse(readFileSync(DEFAULT_PATHS.basemapNoticePath, "utf8"));
+    expect(metadata.attribution).toBe(
+      `${notice.credit} — data available under the ` +
+        `${notice.licence}, ${notice.licenceUri} — source ${notice.sourceUri}`,
+    );
 
     // **The documents are provenance, not payload** (ADR-0038): §4.2's "a copy of this License"
     // belongs to conveying a Database, and this extract is a Produced Work. Carrying 25 KB of
@@ -363,6 +391,7 @@ describe("the committed entry point produces an archive", () => {
           basemapPinPath: basemap.pinPath,
           basemapAttributionPath: DEFAULT_PATHS.basemapAttributionPath,
           basemapNoticePath: DEFAULT_PATHS.basemapNoticePath,
+          basemapSchemaPath: basemap.schemaPath,
           basemapRoles: DEFAULT_PATHS.basemapRoles,
           basemapLicenceDocuments: DEFAULT_PATHS.basemapLicenceDocuments,
         },
@@ -446,6 +475,116 @@ describe("the committed entry point produces an archive", () => {
     expect(metadata["mapatlas:notice"]).toBeUndefined();
   });
 
+  it("compares the layer set, not the order it happens to be written in", async () => {
+    // The recorded schema is a **set** of layers. Order in `vector_layers` is the upstream's
+    // business and can change without the schema meaning anything different, so a comparison
+    // sensitive to it would fail a build for a reordering nobody has to care about.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    writeFileSync(
+      basemap.schemaPath,
+      JSON.stringify({
+        pin: basemap.pin.key,
+        version: basemap.pin.version,
+        layers: [
+          { id: "earth", minzoom: 0, maxzoom: 15 },
+          { id: "water", minzoom: 0, maxzoom: 15 },
+        ],
+      }),
+    );
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+
+    await expect(
+      buildFixture({
+        paths: withBasemap(paths, basemap, join(dir, "out", "basemap-order.pmtiles")),
+        fetchImpl,
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("refuses a layer that keeps its name while its zoom range moves", async () => {
+    // **The failure an id-only check cannot see.** A layer that stops at z10 is still called the
+    // same thing, and the demo's camera sits at z12 — so the map would render without it while
+    // every other assertion passed. The zoom range is part of the schema, not decoration.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    writeFileSync(
+      basemap.schemaPath,
+      JSON.stringify({
+        pin: basemap.pin.key,
+        version: basemap.pin.version,
+        layers: [
+          { id: "earth", minzoom: 0, maxzoom: 15 },
+          { id: "water", minzoom: 0, maxzoom: 10 },
+        ],
+      }),
+    );
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+
+    await expect(
+      buildFixture({
+        paths: withBasemap(paths, basemap, join(dir, "out", "basemap-zoom.pmtiles")),
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/water z0-10/);
+  });
+
+  it("refuses a schema recorded for a different build", async () => {
+    // A schema for another pin is a schema for another archive that happens to be on disk.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    writeFileSync(
+      basemap.schemaPath,
+      JSON.stringify({
+        pin: "someone-elses.pmtiles",
+        version: basemap.pin.version,
+        layers: [
+          { id: "earth", minzoom: 0, maxzoom: 15 },
+          { id: "water", minzoom: 0, maxzoom: 15 },
+        ],
+      }),
+    );
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+
+    await expect(
+      buildFixture({
+        paths: withBasemap(paths, basemap, join(dir, "out", "basemap-otherpin.pmtiles")),
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/belongs to a different build/);
+  });
+
+  it("refuses an upstream whose layer schema has moved", async () => {
+    // **The v3/v4 failure, made a named one.** A style written against the wrong schema renders
+    // nothing while reading as a styling bug; comparing the archive's `vector_layers` against the
+    // recorded set turns that into a mismatch the build reports by layer name.
+    const { fetchImpl: cog } = syntheticSource();
+    const basemap = await syntheticBasemap(dir);
+    writeFileSync(
+      basemap.schemaPath,
+      JSON.stringify({
+        pin: basemap.pin.key,
+        version: basemap.pin.version,
+        layers: [
+          { id: "earth", minzoom: 0, maxzoom: 15 },
+          { id: "buildings", minzoom: 0, maxzoom: 15 },
+        ],
+      }),
+    );
+    const fetchImpl = (url, init) =>
+      String(url).includes("upstream.invalid") ? basemap.fetchImpl(url, init) : cog(url, init);
+
+    await expect(
+      buildFixture({
+        paths: withBasemap(paths, basemap, join(dir, "out", "basemap-schema.pmtiles")),
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/the schema moved/);
+  });
+
   it("refuses an upstream that is not the pinned build", async () => {
     // The identity check, before a single tile is read: a different archive at the same URL is
     // exactly the failure a passing round-trip would otherwise hide.
@@ -480,6 +619,7 @@ describe("the committed entry point produces an archive", () => {
           basemapPinPath: basemap.pinPath,
           basemapAttributionPath: DEFAULT_PATHS.basemapAttributionPath,
           basemapNoticePath: DEFAULT_PATHS.basemapNoticePath,
+          basemapSchemaPath: basemap.schemaPath,
           basemapRoles: DEFAULT_PATHS.basemapRoles,
           basemapLicenceDocuments: DEFAULT_PATHS.basemapLicenceDocuments,
         },

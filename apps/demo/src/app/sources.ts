@@ -16,7 +16,7 @@
 
 import type { JSONValue, LatLng, TileSource } from "@mapatlas/core";
 
-import { FIXTURE_ATTRIBUTION } from "../attribution.js";
+import { BASEMAP_ATTRIBUTION, FIXTURE_ATTRIBUTION } from "../attribution.js";
 
 /** A style with no sources of its own, so an empty map needs no network. */
 export const BLANK_STYLE: JSONValue = {
@@ -29,6 +29,7 @@ export const BLANK_STYLE: JSONValue = {
 export interface DemoSources {
   terrainUrl?: string | undefined;
   contourUrl?: string | undefined;
+  basemapUrl?: string | undefined;
 }
 
 /**
@@ -43,6 +44,7 @@ export function readDemoSources(from: URL): DemoSources {
   return {
     terrainUrl: from.searchParams.get("terrain") ?? undefined,
     contourUrl: from.searchParams.get("contours") ?? undefined,
+    basemapUrl: from.searchParams.get("basemap") ?? undefined,
   };
 }
 
@@ -87,8 +89,74 @@ export const DEMO_CAMERA: { center: LatLng; zoom: number } = {
 };
 
 /** The demo's `TileSource` stack for a given set of archive locations. */
+/**
+ * The layers drawn from the basemap extract.
+ *
+ * **Written against the extract's own `vector_layers`, which is how the v3/v4 question is settled
+ * structurally** rather than by reading documentation: `sources.test.ts` compares these
+ * `source-layer` names against the ids the built archive declares, so a schema change fails as a
+ * mismatch instead of rendering an empty map. The extract carries nine layers; these are the four
+ * that make it read as a map at z8–14 over one massif.
+ *
+ * **No labels, and that is a constraint rather than a preference.** A `symbol` layer with text
+ * needs a `glyphs` URL, which is a font server — a runtime network dependency the demo must not
+ * have (`CLAUDE.md`: no egress the consumer did not configure), and one that would defeat the
+ * offline criterion in increment 5. `places` and `pois` are therefore left undrawn.
+ *
+ * The scope fence says "recognisably a map" and stops there; this is that and no more.
+ */
+const BASEMAP_STYLE_LAYERS = [
+  // Landmass first, so water and roads have something to sit on.
+  {
+    id: "demo-basemap-earth",
+    type: "fill",
+    source: "demo-basemap",
+    "source-layer": "earth",
+    paint: { "fill-color": "#e8e4dc" },
+  },
+  {
+    id: "demo-basemap-landuse",
+    type: "fill",
+    source: "demo-basemap",
+    "source-layer": "landuse",
+    paint: { "fill-color": "#dfe5d5" },
+  },
+  {
+    id: "demo-basemap-water",
+    type: "fill",
+    source: "demo-basemap",
+    "source-layer": "water",
+    paint: { "fill-color": "#b3cde0" },
+  },
+  {
+    id: "demo-basemap-roads",
+    type: "line",
+    source: "demo-basemap",
+    "source-layer": "roads",
+    paint: { "line-color": "#c8bfae", "line-width": 0.9 },
+  },
+];
+
 export function demoTileSources(sources: DemoSources): TileSource[] {
   const tiles: TileSource[] = [];
+
+  // **First, so it is underneath.** The stack is ordered base → overlays, and a basemap drawn
+  // after the hillshade would paint opaque fills over the relief the DEM exists to show.
+  if (sources.basemapUrl !== undefined) {
+    tiles.push({
+      id: "demo-basemap",
+      kind: "vector",
+      transport: "pmtiles",
+      url: sources.basemapUrl,
+      // Self-hosted: cut locally by `npm run fixture:build` from a pinned build whose terms
+      // permit it (ADR-0038). Absence would refuse the region download (ADR-0033).
+      offlineLicensed: true,
+      // **A second line, not a replacement** — the DEM's obligation is unrelated and both are
+      // declared, so the control renders both.
+      attribution: BASEMAP_ATTRIBUTION,
+      styleLayers: BASEMAP_STYLE_LAYERS,
+    } satisfies TileSource);
+  }
 
   if (sources.terrainUrl !== undefined) {
     tiles.push({

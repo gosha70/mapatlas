@@ -1,0 +1,52 @@
+{
+  "why": "The vector_layers the pinned extract declares, recorded so the demo's style layers can be written against the schema the archive actually has rather than against documentation. The build asserts the archive still matches this; the demo's tests assert every source-layer it draws is listed here. A schema change — the v3/v4 difference this exists for — then fails as a named mismatch instead of rendering an empty map.",
+  "pin": "20260811.pmtiles",
+  "version": "4.15.1",
+  "layers": [
+    {
+      "id": "boundaries",
+      "minzoom": 0,
+      "maxzoom": 15
+    },
+    {
+      "id": "buildings",
+      "minzoom": 11,
+      "maxzoom": 15
+    },
+    {
+      "id": "earth",
+      "minzoom": 0,
+      "maxzoom": 15
+    },
+    {
+      "id": "landcover",
+      "minzoom": 0,
+      "maxzoom": 7
+    },
+    {
+      "id": "landuse",
+      "minzoom": 2,
+      "maxzoom": 15
+    },
+    {
+      "id": "places",
+      "minzoom": 1,
+      "maxzoom": 15
+    },
+    {
+      "id": "pois",
+      "minzoom": 5,
+      "maxzoom": 15
+    },
+    {
+      "id": "roads",
+      "minzoom": 3,
+      "maxzoom": 15
+    },
+    {
+      "id": "water",
+      "minzoom": 0,
+      "maxzoom": 15
+    }
+  ]
+}

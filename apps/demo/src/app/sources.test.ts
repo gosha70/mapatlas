@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { BASEMAP_ATTRIBUTION, FIXTURE_ATTRIBUTION } from "../attribution.js";
 import {
   DEMO_CAMERA,
   DEMO_REGION,
@@ -10,6 +11,19 @@ import {
   demoTileSources,
   readDemoSources,
 } from "./sources.js";
+
+/**
+ * The extract's layer schema, read from the checked-in record rather than from the archive.
+ *
+ * The archive is a build artefact and is not in the repository, so a test that read it would
+ * pass by being skipped wherever it matters most. `fixtures/basemap/schema.json` is the same fact
+ * in a form CI can hold, and `runBuild` fails by name if the pinned build stops matching it — so
+ * the two halves together are the structural check, and neither is it alone.
+ */
+const schema = JSON.parse(
+  readFileSync(new URL("../../../../fixtures/basemap/schema.json", import.meta.url), "utf8"),
+) as { layers: { id: string }[] };
+const archiveVectorLayerIds = (): string[] => schema.layers.map((layer) => layer.id);
 
 const url = (query = ""): URL => new URL(`http://demo.invalid/${query}`);
 
@@ -135,5 +149,89 @@ describe("the camera opens over the archives", () => {
     // failure is silent: PMTiles answers "no such tile" and MapLibre draws the background.
     expect(DEMO_CAMERA.zoom).toBeGreaterThanOrEqual(declared.minZoom);
     expect(DEMO_CAMERA.zoom).toBeLessThanOrEqual(declared.maxZoom);
+  });
+});
+
+describe("the basemap is drawn from the extract's own schema", () => {
+  it("declares the basemap first, so it sits beneath the relief", () => {
+    // Ordered base → overlays. A basemap drawn after the hillshade paints opaque fills over the
+    // relief the DEM exists to show — which renders as a flat map with a correct source count.
+    const ids = demoTileSources({
+      basemapUrl: "https://a.invalid/b.pmtiles",
+      terrainUrl: "https://a.invalid/t.pmtiles",
+      contourUrl: "https://a.invalid/c.pmtiles",
+    }).map((source) => source.id);
+
+    expect(ids).toStrictEqual(["demo-basemap", "demo-terrain", "demo-contours"]);
+  });
+
+  it("is licensed for offline download", () => {
+    // Self-hosted from our own extract; absence would refuse the region download (ADR-0033).
+    expect(shipped().offlineLicensed).toBe(true);
+  });
+
+  it("carries the OpenStreetMap line as well as the DEM's, never instead of it", () => {
+    // Two derived works from two unrelated sources. A control showing one line is in breach for
+    // whichever it left out.
+    const both = demoTileSources({
+      basemapUrl: "https://a.invalid/b.pmtiles",
+      terrainUrl: "https://a.invalid/t.pmtiles",
+    });
+    const lines = both.map((source) => source.attribution);
+
+    expect(lines).toContain(BASEMAP_ATTRIBUTION);
+    expect(lines).toContain(FIXTURE_ATTRIBUTION);
+    expect(new Set(lines).size, "one source's line replaced the other's").toBe(2);
+  });
+
+  /**
+   * The basemap source **as the application produces it**: parsed from a URL, then built.
+   *
+   * An earlier version of these tests asserted against an exported projection of the private
+   * layer constant, which checks the constant against itself: returning `styleLayers: []` from
+   * `demoTileSources`, or dropping the `basemap=` parameter from `readDemoSources`, left the
+   * whole suite green. That export existed only to be tested and has been removed. Everything
+   * below goes through the shipped path, so there is nothing left to bypass.
+   */
+  const shipped = (query = "?basemap=https://a.invalid/b.pmtiles") => {
+    const [source] = demoTileSources(readDemoSources(url(query)));
+    if (source === undefined) throw new Error(`no source for ${query}`);
+    return source;
+  };
+
+  it("reads the basemap location from the URL", () => {
+    expect(readDemoSources(url("?basemap=https://a.invalid/b.pmtiles")).basemapUrl).toBe(
+      "https://a.invalid/b.pmtiles",
+    );
+    expect(shipped().url).toBe("https://a.invalid/b.pmtiles");
+  });
+
+  it("declares no basemap when the URL names none", () => {
+    // A valid state, not a degraded one — the same as having no archives at all.
+    expect(demoTileSources(readDemoSources(url()))).toStrictEqual([]);
+  });
+
+  it("draws every layer from a source-layer the extract actually declares", () => {
+    // **The v3/v4 question, settled structurally.** The names come from the schema the build
+    // holds the archive to, and the layers come from the source the app returns — so a schema
+    // change fails here as a mismatch instead of rendering an empty map that passes every other
+    // check, and an app that stopped declaring layers fails too.
+    const declared = new Set(archiveVectorLayerIds());
+    const layers = shipped().styleLayers as { "source-layer": string }[];
+
+    expect(layers.length, "the basemap source declares no style layers").toBeGreaterThan(0);
+    for (const layer of layers) {
+      const name = layer["source-layer"];
+      expect(declared.has(name), `the extract declares no "${name}" layer`).toBe(true);
+    }
+  });
+
+  it("draws no text, because a glyphs URL would be a runtime network dependency", () => {
+    // `places` and `pois` exist in the extract and are deliberately undrawn: a symbol layer with
+    // text needs a font server, which is egress the consumer did not configure and which would
+    // defeat the offline criterion outright.
+    const layers = shipped().styleLayers as { type: string }[];
+
+    expect(layers.map((l) => l.type)).not.toContain("symbol");
   });
 });

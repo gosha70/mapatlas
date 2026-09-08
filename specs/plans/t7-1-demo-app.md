@@ -230,9 +230,47 @@ silently.
   was for `s2-pmtiles`. Not conformance to a specification.
 - **Style layers are the demo's**, opaque to the engine (ADR-0011). The plan names how many layers
   the demo needs to look like a map and stops there: a basemap style is where a week disappears.
-- **Provenance, per archive.** The offline scenario shows the basemap's bytes came from the
-  store — an abort route on the extract's URL, and a deleted region failing to render it. Same
-  bar as T6.1, applied to the new archive rather than assumed to carry over.
+- **What 4b closes**, so the increment has a stated end: schema enforcement (the archive's
+  `vector_layers` recorded and asserted, which is how the v3/v4 question is settled structurally),
+  the style layers themselves, the attribution line as an addition rather than a replacement,
+  the source's ordering beneath the relief, and `offlineLicensed: true`. Offline provenance is
+  increment 5's, per the amendment below.
+- **Provenance, per archive — moved to increment 5.** This bar originally sat here, requiring the
+  offline scenario to show the basemap's bytes came from the store. It is unchanged as a bar and
+  is **not weakened**; only where it is discharged has moved, and the reason is that it cannot be
+  discharged here without damaging something else.
+
+  > **Amended after 4b (approved phase-order exception, no ADR — this changes evidence timing,
+  > not architecture).** The offline scenario is `/lab`'s, and `/lab` is T4.6's pixel-differential
+  > and T6.1's provenance harness: a fixed **two-archive** stack, pinned to those scenarios. The
+  > demo route has no region-download path of its own until increment 5. Proving basemap
+  > provenance at 4b therefore meant one of two things, and both are worse than waiting: altering
+  > `/lab`'s fixed stack, or inventing a test-only duplicate of the demo's download path — a
+  > second implementation of the thing under test, which is the shape that passes while the real
+  > path is broken.
+  >
+  > `tasks.md`'s T7.1 already assigns the **demo route** both the region download and the full
+  > loop offline, so increment 5 is where the subject exists.
+  >
+  > **`/lab`'s route, its `labTileSources` stack and its scenarios stay two-archive** and are
+  > unchanged. The *shared* fixture infrastructure is not: `build-lab-archives.mjs` and
+  > `serve-lab-archives.mjs` — lab-named because they predate the demo having archives of its own
+  > — additionally cut and serve a synthetic basemap for the root route's online test. Nothing
+  > `/lab` builds, declares or asserts changes; a third file simply exists beside the pair. Said
+  > precisely because "untouched" was the wording here first, and it was not true of the files.
+
+  What increment 5 must then prove, on the root demo route:
+
+  - the region download copies **`demo-basemap`, `demo-terrain` and `demo-contours`**, with a
+    whole-copy precondition per archive — a single total lets one archive's traffic vouch for
+    another's, which is the vacuity T6.1 already had to fix once;
+  - after the host is cut **and a fresh document**, the basemap is served from `MapAssetStore` and
+    makes a **basemap-specific** rendered difference — not merely that something drew;
+  - after deletion, a fresh render loses that contribution, with a never-downloaded or
+    basemap-omitted control, so the difference is attributable;
+  - the service worker's cache contains **no archive URL**. It may supply the shell and never map
+    bytes: a worker that cached an archive would make the offline scenario pass for the wrong
+    reason, which `What will be got wrong` names.
 
 ## What will be got wrong
 

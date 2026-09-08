@@ -1144,6 +1144,12 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
     plan fenced all three out with the ruling recorded, and complete rollback on a failed
     `download()` is preserved.
 
+    > **Read against T7.1's closure.** This forward reference was **resolved by T7.1's ruling, not
+    > by T7.1 shipping installability.** What T7.1 required and built was an offline app shell: a
+    > service worker, and **no manifest and no icons**, because its own bar allowed those "only as
+    > far as the AC needs" and the AC needed none. Installability is asserted nowhere and is
+    > claimed nowhere — `CONTINUE.md`'s lesson 7 — so nothing here is waiting on it.
+
   **The bar, and what it cost.** *No test asserts that a browser grants persistence.* Three
   engines decide by heuristic and one asks a human, so a test expecting `true` would assert
   Chromium's engagement heuristics about a test page and read, when it passed, as evidence that
@@ -1166,6 +1172,105 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   must be one whose terms permit offline download. _AC:_ full record→pin→photo→review loop works
   **offline**, survives reload, exports valid GeoJSON; the demo's region download runs against a
   self-hosted or offline-licensed source only.
+
+  > **The fake polling sensor channel named in the scope line above is T7.1c's**, ruled on
+  > 2026-09-06 before the plan was written and cited in `specs/plans/t7-1-demo-app.md` under
+  > *What is settled*. It is left in the sentence rather than deleted so the reassignment is
+  > visible instead of looking like an omission. Nothing in T7.1 wires a `SensorSource`.
+
+  **Done** (2026-09-08). Plan: [`specs/plans/t7-1-demo-app.md`](plans/t7-1-demo-app.md), whose
+  bars were set before any candidate implementation and carry three marked amendments. Five
+  increments: the shell (`5216a21`, with `3148735` adding `MapCanvas`'s `initialCamera`), the loop
+  (`5e1b9ee` + `9c05be6` + `6178463`), export (`03c8a53` + `b7690cb` + `702a2ef`), the basemap
+  extract (`434a0eb` through `3156ea5`), and offline (`c050a48`, `026f028`, `de6133b`). A demo
+  runner (`f241fd3`) was added mid-task after the demo turned out to be unstartable by anyone who
+  did not already know how; PRs #26, #28, #29, #31 and #32 are merged, and the offline slice sits
+  on `codex/t7-1-offline`.
+
+  Each criterion, and what discharges it. **Unit provenance and browser integration are named
+  separately throughout**: a unit test can establish what a function computed, and only the
+  browser lane can establish that the shipped application did it.
+
+  - *The record→pin→photo→review loop.* Browser: `e2e/app-loop.e2e.ts` records a trip against a
+    substituted geolocation, drops an event, attaches a photo through the real picker, stops, and
+    reads the review — each step asserted on its own observable, because "the map drew" satisfies
+    none of them. `e2e/app-loop.e2e.ts`'s second scenario is the control that the review is of the
+    trip just recorded rather than of an empty one. Unit: `apps/demo/src/app/loop.test.tsx` covers
+    the ordering the seams force — events are stored unbound and bound at finalize, because
+    `useTrackRecorder` publishes `track` only after `stop()` resolves (ADR-0026), and finalizing
+    waits for every write to settle so a stop cannot overtake one.
+  - *Exports valid GeoJSON.* Unit: `apps/demo/src/app/export.test.ts` — the document parses as a
+    `FeatureCollection`, round-trips the track and the events including fields the engine assigns
+    no meaning to, references photos rather than inlining them, and names the file with an
+    **injective** escape so two ids cannot collide or spell one another's escape sequence.
+    Browser: `e2e/app-loop.e2e.ts` parses the file the browser actually received.
+  - *A consumer `EventPresentation`, with zero renderer changes.* Unit:
+    `apps/demo/src/app/presentation.test.ts` — two neutral categories draw distinguishably, every
+    mark carries an accessible name, and an event whose category this build does not know still
+    draws. The *zero renderer changes* half is a `git diff` rather than a test:
+    **`packages/maplibre` is byte-identical across the whole of T7.1** (`git diff 5f28d88..HEAD --
+    packages/maplibre` is empty).
+  - *A `MediaAnalyzer` swaps in with zero core changes.* The slot is wired at the seam —
+    `loop.tsx` passes `noopAnalyzer` to `EventComposer` explicitly rather than leaving it to the
+    component's default, so the swap a consumer would make is one prop. **`packages/core` is
+    byte-identical across the whole of T7.1**; the only package touched at all is
+    `@mapatlas/react`, which gained `MapCanvas`'s `initialCamera` (ADR-0037).
+  - *A topographic source stack, offline-licensed only.* The demo draws a self-hosted
+    OpenStreetMap extract cut from a pinned Protomaps build, plus the Copernicus DEM's hillshade
+    and contours (ADR-0038, ADR-0024). The basemap is `offlineLicensed: true` because it is our
+    own extract (ADR-0033), and the region request names `sourceIds` explicitly because the
+    published default omits the `hillshade` role and would have dropped the DEM (ADR-0034). Style
+    layers are written against **the extract's own `vector_layers`**, asserted against the pin, so
+    a version mismatch fails the build rather than rendering an empty map.
+    `apps/demo/src/attribution.test.ts` pins the rendered notice to `fixtures/basemap/notice.json`,
+    so the map and the archive cannot come to say different things.
+  - *Map data offline.* `c050a48` is the capability: the app downloads the explicitly named
+    three-source region and installs the persisted archives **before the map can mount**, because
+    `installOfflineArchives` must reach the protocol before any `pmtiles` source is added
+    (ADR-0036). `026f028` is the falsification: `e2e/app-offline.e2e.ts` first establishes that
+    each of the three archives actually *participates* — a range read past byte 0, which a declared
+    but undrawn source never makes — then cuts the archive host and requires, per archive, zero
+    network reads **and** the basemap's own `#b3cde0` water on the canvas. Byte identity itself is
+    not re-proved there; it stays grounded in
+    `packages/offline-pmtiles/src/archive-source.test.ts`, which overwrites the stored blob after
+    download so a reader that re-fetched its url is caught rather than flattered.
+  - *The application shell offline.* `de6133b`: the production build is pinned, `sw.js` is
+    generated from the tree the build emitted with the url list and a digest of those bytes
+    embedded in it, and `e2e/app-shell-offline.e2e.ts` loads a fresh document with the app's own
+    origin aborted — the application boots and the map draws. Neither the browser's HTTP cache nor
+    the worker is allowed to stand in for PMTiles storage: routing disables the http cache, and
+    Cache Storage is enumerated **after the map has drawn** and must name no archive url. ADR-0039.
+  - *Persists across reload.* **On the demo's own state, and kept distinct from crash recovery.**
+    `e2e/app-loop.e2e.ts` drives the whole flow to a finalized track carrying an event with a
+    photo, reloads the document for real, and then reads the app's stores back through
+    `createDemoStorage()` — the same factory `app.tsx` calls, so it follows the app rather than
+    naming a database. It asserts the finalized track is **the same id** as before the reload and
+    still has its geometry, that its event survived **still bound to it** (the binding `loop.tsx`
+    writes at finalize, without which the event is unreachable from the trip for ever, ADR-0026),
+    and that the event's `blobKey` still resolves to **the exact bytes the picker was handed**.
+    The probe reports the empty database before it reports the populated one, so a probe answering
+    with a fixed shape could not satisfy it.
+
+    Falsified two ways: clearing the trips store on every load kills **only** this scenario and
+    leaves the other three loop tests green — the discrimination that shows it measures durability
+    across the reload rather than the write before it — and dropping the finalize-time binding
+    kills the `trackId` assertion.
+
+    This is a different claim from `e2e/recorder.e2e.ts`, which recovers an *interrupted* recording
+    across `page.reload()` and goes on recording into it. That is the recorder's autosave, over the
+    harness route; this is whether what the loop finished writing is still there. No UI is asserted
+    for either: the demo has no trip list and no reopen affordance, because that surface is
+    **T7.1b's**, so the claim is made against storage rather than against a screen T7.1 does not
+    own.
+
+  **What T7.1 does not close.** Phase 7's exit is *"`PRD.md` §6 met end-to-end, offline"* and four
+  tasks discharge it together: the hand-drawn trip is **T7.1b**'s, the sensor channel **T7.1c**'s,
+  and the afternoon-embed documentation **T7.2**'s. Nothing here claims a global basemap,
+  background GPS, a runtime cache strategy, quota, eviction or download resume — which remain
+  unbuilt and unowned — or platform installability. The app-shell bar allowed "a manifest and
+  icons only as far as the AC needs": it needed none, so **none was added**, and no test asks the
+  platform whether the app is installable — `CONTINUE.md`'s lesson 7 is that such a test is
+  testing the platform.
 - **T7.1b Authoring + list flows.** A trip list from `listTrackSummaries()`, and a
   draw→set-times→pin→save flow. _AC:_ a hand-drawn trip appears in the list and reviews
   identically to a recorded one (same stats panel, same export shape, differing only in `origin`).

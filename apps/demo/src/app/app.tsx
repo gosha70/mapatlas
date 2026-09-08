@@ -11,8 +11,8 @@
  *
  * **What this file owns.** Opening the two stores and reporting honestly whether they opened,
  * resolving the tile stack from the URL, and carrying T6.2's settings panels. The
- * record → pin → photo → review loop is `loop.tsx`'s (increment 2); export is not built yet
- * (increment 3). The status line below reports what *this* file can claim — that storage is open
+ * record → pin → photo → review loop and the GeoJSON export are `loop.tsx`'s. The status line
+ * below reports what *this* file can claim — that storage is open
  * and how many sources were declared — and deliberately says nothing about the loop, which has
  * its own status line and its own observables.
  */

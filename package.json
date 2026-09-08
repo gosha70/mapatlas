@@ -28,7 +28,8 @@
     "test:coverage": "vitest run --coverage",
     "test:browser": "playwright test",
     "test:browser:install": "playwright install --with-deps chromium",
-    "fixture:build": "node scripts/fixture/build-fixture.mjs"
+    "fixture:build": "node scripts/fixture/build-fixture.mjs",
+    "demo": "node scripts/demo.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

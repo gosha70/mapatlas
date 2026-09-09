@@ -8,29 +8,51 @@ specific failure modes are cheap to avoid once named.
 
 ## Where the work is
 
-**T7.1c — the channel demo.** `tasks.md` has its scope and acceptance criteria, and `roadmap.md`
-has Phase 7's exit. **Survey both before planning anything**; nothing here pre-plans it,
-deliberately, because the survey is the next session's and it should meet the task on its own
-terms.
+**T7.2 — getting started.** `tasks.md` has its scope and acceptance criteria, and `roadmap.md` has
+Phase 7's exit — which T7.2 is the **last planned task before**. **Survey both before planning
+anything**; nothing here pre-plans it, deliberately, because the survey is the next session's and
+it should meet the task on its own terms.
 
-Three things it will inherit and should know before it starts, none of them scope:
+Three things it will inherit and should know before it starts.
 
-- **The demo has a recorded flow and an authored one, and the channel must reach both.** T7.1b's
-  criterion was that an authored trip is not a second class of thing, and `e2e/app-equivalence`
-  now compares the two structurally. A channel wired into recording alone would break that
-  comparison — and would break it *correctly*, which is the useful part: the equivalence scenario
-  is a standing check that nothing added later applies to one kind of trip and not the other.
-- **`SensorSource` is published and nothing in the demo uses it.** T7.1's scope line named a fake
-  polling sensor channel and the ruling of 2026-09-06 moved it here; `ChannelDescriptor`,
-  `TrackPoint.channels` and `TripReview`'s `channels` prop all exist already, and ADR-0029 settles
-  that the chartable set comes from the **descriptors** rather than from the keys found in the
-  data. So this is assembly again, and a survey should establish what is missing before assuming
-  anything is.
+- **A known demo-surface gap, and it is *not* silently assigned to T7.2.** The engine publishes
+  import, and T7.1c proves an export → import round trip through the demo's storage seam — but the
+  **demo exposes export with no import affordance**. Documentation can *expose* that fact; it
+  cannot make the demo satisfy it, and no amount of prose closes a missing control.
+
+  **Whether Phase 7 requires it is undecided, and T7.2's survey has to decide it.** `PRD.md` §6's
+  demo criterion is *"records a trip and events fully offline, persists across reload, and exports
+  valid GeoJSON"* — export only. Export **and** import appear in §4 item 14 and in §5's *In* list,
+  but those sections are titled *"Core user stories (engine capabilities)"* and *"Scope (v1 = the
+  engine)"* — they are the engine's, and the engine has them and tests them in `core`. So "the demo
+  must offer import" is a reading, not a requirement anything states. T7.2 either finds it is required and says where that is
+  written, hands it to a follow-up task, or records it as an accepted limitation of the demo — but
+  decides in the open, rather than leaving it to be discovered after the last planned task is
+  called done. If the answer is that it *is* required, that is an amendment to `PRD.md` or
+  `roadmap.md`, not a note in a survey.
+- **The demo is the doc's subject, and every planned demo task is closed.** The record → pin →
+  photo → review loop,
+  GeoJSON export, a trip list, hand authoring, a telemetry channel, an offline region and an
+  offline app shell are all built and all have browser evidence — with the open question above the
+  only surface anything has flagged. T7.2 is derived from `api.md` and from what the demo already
+  does; it is not a licence to add product to make the prose easier.
 - **Eviction-aware re-download, quota UI and download resume remain unbuilt and unowned.** T6.1
-  fenced them out, T6.2's survey answered them as questions rather than scope,
-  `architecture.md`'s claim that the store "supports eviction-aware re-download" was removed
-  because nothing implements it, and neither T7.1 nor T7.1b took any of them on. If T7.1c needs
-  one, that is a decision to take, not a commitment to inherit.
+  fenced them out, T6.2's survey answered them as questions rather than scope, `architecture.md`'s
+  claim that the store "supports eviction-aware re-download" was removed because nothing implements
+  it, and no task since has taken any of them on.
+
+### T7.1c is closed (2026-09-09, PR #38, merged as `c36d151`)
+
+The demo records a telemetry channel through the published `SensorSource` seam, charts it in
+review, and carries the evidence that the chart survives an export and a re-import unchanged.
+`tasks.md` holds the authoritative Done record with one bullet per plan requirement;
+`specs/plans/t7-1c-channel-demo.md` is history now, not a work plan. Nothing under `packages/`
+changed, and two of the three increments changed no application code at all.
+
+**ADR-0040** records that an authored trip carries no sensor channels, and the equivalence
+comparison declares the channel paths citing it — a scoped statement written *before* the
+declaration, in the increment that caused the red, with the claim itself asserted separately by
+value because an exclusion is not evidence.
 
 ### T7.1b is closed (2026-09-08, PR #35, merged as `7828d9f`)
 
@@ -233,6 +255,30 @@ and it is the only finding on that branch that came from looking rather than rea
 The remedy is one CSS rule and one assertion — the body's computed `backgroundColor` is not
 transparent, which is what separates "declared a background" from "inherited whatever the canvas
 is". The lesson is larger than the rule: when a change is visual, look at it.
+
+### 7c. A bar quoted from a spec is not a verified bar
+
+Before implementation, verify load-bearing plan claims against the current contract and code. T7.1c
+found **three** planning statements that were authoritative-looking and false in implementation:
+
+- `PRD.md` §6's *"attaches a telemetry channel to every track point"* — stronger than ADR-0009,
+  and unmeetable by any polling source;
+- the plan's *"charted through `TripReview`'s `channels` prop"* — the prop **narrows** the charted
+  set; ADR-0029's default already enabled it, and no wiring was needed;
+- the plan's *"the imported trip has an id of its own and appears as its own row"* —
+  `geoJSONToTrack` preserves `properties.id` and `origin`, so an import **overwrites** its source.
+
+Each had been repeated forward from a document rather than read against the code. **Preserve the
+original statement, record the correction beside it, and change the evidence — not the engine — to
+match the actual contract.** All three corrections here are dated amendments; none rewrote history.
+
+The common rule, and it is the same failure as the ADR-0026 misattribution recorded in the standing
+conventions — that citation came out of a conversation summary, these came out of a plan:
+**citation establishes provenance; verification establishes truth.** A number, a quote or a
+prediction repeated from a document is a pointer to where someone once checked something. It is not
+the check. Read the source before you build on it, and say so when it turns out to disagree.
+
+Related: 7b below is what happens when the *evidence* is allowed to grow to fit the failures instead.
 
 ### 7b. A tolerated-difference list grown from failures is a spot-check wearing a rule's clothes
 

@@ -105,6 +105,23 @@ adds no surface, and keeps the *attributable to the imported document* bar meani
 imported trip has an id of its own and appears as its own row, so a chart read from it cannot be
 the original's chart by accident.
 
+> **Amended 2026-09-09, on increment 3's own finding.** The last sentence is **disproved by the
+> repository**. `geoJSONToTrack` carries `properties.id` through (`portability.ts:390`) and
+> preserves the document's `origin` — core's round-trip test asserts that deliberately — so an
+> imported track has neither a new identity nor an `"imported"` label, and saving it *overwrites*
+> the trip it came from. Attribution therefore comes from **absence** rather than from a second
+> row: the scenario deletes the original, **reloads**, proves through the storage seam that
+> `getTrack(originalId)` is `undefined` and that no summary carries that id, imports into that
+> fresh document, and **reloads again** so the app rebuilds its list from IndexedDB. The reappeared
+> row is attributable to the imported document because no track with that id existed immediately
+> before the import, and neither surviving document could have drawn the second chart. Nothing
+> asserts `origin === "imported"`; the importer's contract is preservation.
+>
+> The recording is also kept **eventless**, which this plan did not say. `deleteTrack` removes the
+> track's events and any blob only they referenced, and the export carries media *references*
+> rather than bytes — so a trip with a photo would make this an accidental media-import test,
+> passing or failing for reasons unrelated to channels.
+
 **An import affordance in the demo is not built here, and is recorded as unowned.** It is a real
 feature, `tasks.md`'s T7.1c line does not name it, and inventing it inside a channel task is the
 kind of widening this repository's plans exist to prevent. But it should be visible rather than

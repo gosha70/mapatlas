@@ -21,19 +21,23 @@ import { useCallback, useMemo, useState } from "react";
 import type { ReactElement } from "react";
 
 import { noopAnalyzer } from "@mapatlas/core";
-import type { Id, LatLng, MapEvent, MediaRef, TerrainOptions, Track } from "@mapatlas/core";
+import type { Id, LatLng, MapEvent, TerrainOptions, Track } from "@mapatlas/core";
 import {
   EventComposer,
   MapCanvas,
   TripReview,
   useEventLog,
+  useTrackList,
   useTrackRecorder,
 } from "@mapatlas/react";
 import type { JSONValue, TileSource } from "@mapatlas/core";
 
+import { Authoring } from "./authoring.js";
 import { buildTripExport, downloadDocument } from "./export.js";
+import { releaseMedia } from "./media.js";
 import { DEMO_CATEGORIES, demoPresentation } from "./presentation.js";
 import type { DemoStorage } from "./storage.js";
+import { TripList } from "./trips.js";
 
 export interface LoopProps {
   readonly storage: DemoStorage;
@@ -71,6 +75,25 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
   /** The last event write that failed, surfaced rather than discarded silently. */
   const [failure, setFailure] = useState<string | undefined>(undefined);
 
+  /**
+   * The stored trips (T7.1b increment 1).
+   *
+   * **The store is what is listed, not this document.** Holding the trips this session happened
+   * to finalize would render identically for as long as the page stays open and then lose every
+   * one of them on reload — which is the whole thing the list exists to prevent, and is why the
+   * browser scenario reloads before it looks. `useTrackList` re-lists from the adapter and keeps
+   * its published order — `api.md` declares `listTrackSummaries()` *"ordered by `startedAt`
+   * ascending, ties broken by id. Required, not optional"*, and the storage conformance suite
+   * holds every adapter to it — so nothing is re-sorted here either.
+   */
+  const trips = useTrackList(storage.trips);
+  /** The trip opened from the list, so the row for it can say so. */
+  const [openedId, setOpenedId] = useState<Id | undefined>(undefined);
+  /** A trip that could not be opened — the list can name one that is no longer there. */
+  const [openFailure, setOpenFailure] = useState<string | undefined>(undefined);
+  /** Whether the hand-authoring flow has the map (T7.1b increment 2). */
+  const [authoring, setAuthoring] = useState(false);
+
   // Bound to the trip under review, and to nothing while recording: `useEventLog(store, undefined)`
   // lists *every* event ever stored, which on the live map would draw previous trips' pins over
   // the one being recorded.
@@ -82,9 +105,12 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
   );
 
   const start = useCallback(async (): Promise<void> => {
+    setAuthoring(false);
     setReviewing(undefined);
     setSessionIds([]);
     setExported(undefined);
+    setOpenedId(undefined);
+    setOpenFailure(undefined);
     await recorder.start();
   }, [recorder]);
 
@@ -96,36 +122,13 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
       await log.updateEvent({ ...event, trackId: finalized.id });
     }
     setReviewing(finalized);
-  }, [log, recorder, sessionIds]);
-
-  /**
-   * Give back the blobs a failed event was carrying.
-   *
-   * **The composer's contract makes this ours.** "From the instant `onSave` receives the
-   * `blobKey` the consumer owns it, and the composer never deletes it again — unmount included"
-   * (ADR-0027). So when the event write rejects, nothing references those bytes and nothing else
-   * will ever collect them.
-   *
-   * A delete that itself fails is reported as *unconfirmed* rather than swallowed or retried:
-   * the bytes may or may not still be there, and claiming either would be a guess.
-   */
-  const releaseMedia = useCallback(
-    async (media: readonly MediaRef[]): Promise<string | undefined> => {
-      const stranded: string[] = [];
-      for (const item of media) {
-        if (item.blobKey === undefined) continue;
-        try {
-          await storage.trips.deleteBlob(item.blobKey);
-        } catch {
-          stranded.push(item.blobKey);
-        }
-      }
-      return stranded.length === 0
-        ? undefined
-        : `${String(stranded.length)} photo left unconfirmed`;
-    },
-    [storage],
-  );
+    setOpenedId(undefined);
+    // **Listed as soon as it exists, not on the next load.** `useTrackList` lists on mount and
+    // when the store is replaced; a trip finalized afterwards is in the store and absent from the
+    // rendered list until something asks again. Awaited rather than fired and forgotten, so a
+    // failure to re-list is not silently the same as an empty list.
+    await trips.refresh();
+  }, [log, recorder, sessionIds, trips]);
 
   const save = useCallback(
     async (input: Omit<MapEvent, "id" | "position">, at: LatLng): Promise<void> => {
@@ -141,7 +144,7 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
         // would have no exit at all, which is worse than the failed write. Closing the
         // composition is what makes the trip operable again; the notice is what stops that from
         // being a silent discard.
-        const unconfirmed = await releaseMedia(input.media);
+        const unconfirmed = await releaseMedia(storage.trips, input.media);
         const why = reason instanceof Error ? reason.message : String(reason);
         setFailure(unconfirmed === undefined ? why : `${why} (${unconfirmed})`);
       } finally {
@@ -151,7 +154,25 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
         setInFlight((n) => n - 1);
       }
     },
-    [log, releaseMedia],
+    [log, storage],
+  );
+
+  /**
+   * A trip that was authored rather than recorded, once it is in the store.
+   *
+   * Reviewed immediately and listed by the same refresh a finalized recording gets: the criterion
+   * is that an authored trip is not a second class of thing, so it takes the same path.
+   */
+  const authored = useCallback(
+    async (track: Track): Promise<void> => {
+      setAuthoring(false);
+      setSessionIds([]);
+      setExported(undefined);
+      setOpenedId(track.id);
+      setReviewing(track);
+      await trips.refresh();
+    },
+    [trips],
   );
 
   const recording = recorder.status === "recording" || recorder.status === "paused";
@@ -198,6 +219,37 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
     );
   }, [reviewEvents, reviewing]);
 
+  /**
+   * Open a listed trip for review.
+   *
+   * **Hydrated here, once.** The list holds summaries with no points in them (ADR-0014), and
+   * `TripReview` needs the track — so this is the one place `getTrack` is called, rather than per
+   * row while rendering.
+   *
+   * A summary whose track has gone is a reachable state, not an impossible one: the list is a
+   * snapshot, and anything that deletes a trip between the render and the click produces exactly
+   * this. Reported rather than returned from silently, which would look to the reader like a
+   * button that does nothing.
+   */
+  const openTrip = useCallback(
+    async (id: Id): Promise<void> => {
+      setOpenFailure(undefined);
+      const track = await storage.trips.getTrack(id);
+      if (track === undefined) {
+        setOpenFailure(`That trip is no longer stored (${id}).`);
+        await trips.refresh();
+        return;
+      }
+      // Not this session's events: `sessionIds` describes a recording, and an opened trip is not
+      // one. Left standing, the recorder line would report a count belonging to another trip.
+      setSessionIds([]);
+      setExported(undefined);
+      setOpenedId(id);
+      setReviewing(track);
+    },
+    [storage, trips],
+  );
+
   /** Finalizing has to wait for the composer to be resolved and for every write to settle. */
   const finalizable = recording && pinAt === undefined && inFlight === 0;
 
@@ -240,9 +292,35 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
         <button id="record-stop" type="button" onClick={() => void stop()} disabled={!finalizable}>
           Stop and review
         </button>
+        <button
+          id="author-start"
+          type="button"
+          onClick={() => {
+            setReviewing(undefined);
+            setOpenedId(undefined);
+            setAuthoring(true);
+          }}
+          // A recording owns the map: drawing over a trip in progress would take the taps the
+          // recorder's own pins need, and there is no second map to put it on.
+          disabled={recording || authoring}
+        >
+          Draw a trip
+        </button>
       </div>
 
-      {reviewing === undefined ? (
+      {authoring ? (
+        <Authoring
+          storage={storage}
+          sources={sources}
+          style={style}
+          terrain={terrain}
+          initialCamera={initialCamera}
+          onSaved={(track) => void authored(track)}
+          onCancel={() => {
+            setAuthoring(false);
+          }}
+        />
+      ) : reviewing === undefined ? (
         <div className="app-map" id="app-map">
           {/* **The camera is load-bearing, not a nicety.** The archives cover 0.08 degrees;
               the default view is the whole world, and from there every tile MapLibre asks for is
@@ -280,6 +358,19 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
           />
         </div>
       )}
+
+      {openFailure === undefined ? null : (
+        <p id="trip-failure" role="alert">
+          {openFailure}
+        </p>
+      )}
+
+      <TripList
+        tracks={trips.tracks}
+        loading={trips.loading}
+        openId={openedId}
+        onOpen={(id) => void openTrip(id)}
+      />
 
       {pinAt === undefined || !composable ? null : (
         <div className="app-composer" id="app-composer">

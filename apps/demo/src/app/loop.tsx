@@ -21,7 +21,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { ReactElement } from "react";
 
 import { noopAnalyzer } from "@mapatlas/core";
-import type { Id, LatLng, MapEvent, MediaRef, TerrainOptions, Track } from "@mapatlas/core";
+import type { Id, LatLng, MapEvent, TerrainOptions, Track } from "@mapatlas/core";
 import {
   EventComposer,
   MapCanvas,
@@ -32,7 +32,9 @@ import {
 } from "@mapatlas/react";
 import type { JSONValue, TileSource } from "@mapatlas/core";
 
+import { Authoring } from "./authoring.js";
 import { buildTripExport, downloadDocument } from "./export.js";
+import { releaseMedia } from "./media.js";
 import { DEMO_CATEGORIES, demoPresentation } from "./presentation.js";
 import type { DemoStorage } from "./storage.js";
 import { TripList } from "./trips.js";
@@ -89,6 +91,8 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
   const [openedId, setOpenedId] = useState<Id | undefined>(undefined);
   /** A trip that could not be opened — the list can name one that is no longer there. */
   const [openFailure, setOpenFailure] = useState<string | undefined>(undefined);
+  /** Whether the hand-authoring flow has the map (T7.1b increment 2). */
+  const [authoring, setAuthoring] = useState(false);
 
   // Bound to the trip under review, and to nothing while recording: `useEventLog(store, undefined)`
   // lists *every* event ever stored, which on the live map would draw previous trips' pins over
@@ -101,6 +105,7 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
   );
 
   const start = useCallback(async (): Promise<void> => {
+    setAuthoring(false);
     setReviewing(undefined);
     setSessionIds([]);
     setExported(undefined);
@@ -125,35 +130,6 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
     await trips.refresh();
   }, [log, recorder, sessionIds, trips]);
 
-  /**
-   * Give back the blobs a failed event was carrying.
-   *
-   * **The composer's contract makes this ours.** "From the instant `onSave` receives the
-   * `blobKey` the consumer owns it, and the composer never deletes it again — unmount included"
-   * (ADR-0027). So when the event write rejects, nothing references those bytes and nothing else
-   * will ever collect them.
-   *
-   * A delete that itself fails is reported as *unconfirmed* rather than swallowed or retried:
-   * the bytes may or may not still be there, and claiming either would be a guess.
-   */
-  const releaseMedia = useCallback(
-    async (media: readonly MediaRef[]): Promise<string | undefined> => {
-      const stranded: string[] = [];
-      for (const item of media) {
-        if (item.blobKey === undefined) continue;
-        try {
-          await storage.trips.deleteBlob(item.blobKey);
-        } catch {
-          stranded.push(item.blobKey);
-        }
-      }
-      return stranded.length === 0
-        ? undefined
-        : `${String(stranded.length)} photo left unconfirmed`;
-    },
-    [storage],
-  );
-
   const save = useCallback(
     async (input: Omit<MapEvent, "id" | "position">, at: LatLng): Promise<void> => {
       setInFlight((n) => n + 1);
@@ -168,7 +144,7 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
         // would have no exit at all, which is worse than the failed write. Closing the
         // composition is what makes the trip operable again; the notice is what stops that from
         // being a silent discard.
-        const unconfirmed = await releaseMedia(input.media);
+        const unconfirmed = await releaseMedia(storage.trips, input.media);
         const why = reason instanceof Error ? reason.message : String(reason);
         setFailure(unconfirmed === undefined ? why : `${why} (${unconfirmed})`);
       } finally {
@@ -178,7 +154,25 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
         setInFlight((n) => n - 1);
       }
     },
-    [log, releaseMedia],
+    [log, storage],
+  );
+
+  /**
+   * A trip that was authored rather than recorded, once it is in the store.
+   *
+   * Reviewed immediately and listed by the same refresh a finalized recording gets: the criterion
+   * is that an authored trip is not a second class of thing, so it takes the same path.
+   */
+  const authored = useCallback(
+    async (track: Track): Promise<void> => {
+      setAuthoring(false);
+      setSessionIds([]);
+      setExported(undefined);
+      setOpenedId(track.id);
+      setReviewing(track);
+      await trips.refresh();
+    },
+    [trips],
   );
 
   const recording = recorder.status === "recording" || recorder.status === "paused";
@@ -298,9 +292,35 @@ export function Loop({ storage, sources, style, terrain, initialCamera }: LoopPr
         <button id="record-stop" type="button" onClick={() => void stop()} disabled={!finalizable}>
           Stop and review
         </button>
+        <button
+          id="author-start"
+          type="button"
+          onClick={() => {
+            setReviewing(undefined);
+            setOpenedId(undefined);
+            setAuthoring(true);
+          }}
+          // A recording owns the map: drawing over a trip in progress would take the taps the
+          // recorder's own pins need, and there is no second map to put it on.
+          disabled={recording || authoring}
+        >
+          Draw a trip
+        </button>
       </div>
 
-      {reviewing === undefined ? (
+      {authoring ? (
+        <Authoring
+          storage={storage}
+          sources={sources}
+          style={style}
+          terrain={terrain}
+          initialCamera={initialCamera}
+          onSaved={(track) => void authored(track)}
+          onCancel={() => {
+            setAuthoring(false);
+          }}
+        />
+      ) : reviewing === undefined ? (
         <div className="app-map" id="app-map">
           {/* **The camera is load-bearing, not a nicety.** The archives cover 0.08 degrees;
               the default view is the whole world, and from there every tile MapLibre asks for is

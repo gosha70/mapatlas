@@ -374,3 +374,104 @@ test("a trip recorded here is listed by a later document, and reopens as itself"
 
   expect(consoleFor(page).problems()).toStrictEqual([]);
 });
+
+test("a hand-drawn trip is saved with its pinned event, and reopens carrying it", async ({
+  page,
+}) => {
+  /**
+   * **Draw → set times → pin → save, end to end** (T7.1b increment 2).
+   *
+   * `authoring.test.tsx` proves the wiring against doubled bindings: a reported vertex reaches the
+   * draft, timing gates the save, the event is written unbound and then bound. It cannot prove
+   * that a **click on a real MapLibre canvas** produces a vertex at all — draw mode is the
+   * renderer's, bound to the map's own `click` — nor that what was saved is still there for a
+   * later document to open.
+   *
+   * So the observable is the **reopened** trip: saved, found again in the list after a reload, and
+   * carrying the event in both the review and the exported file. An event that was written but
+   * never bound survives in the store and appears in neither — which is the difference between
+   * "lost" and "orphaned" that the two mutations keep apart.
+   */
+  watchConsole(page);
+  await page.goto(withArchives);
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+
+  await page.locator("#author-start").click();
+  await expect(page.locator("#authoring-status")).toHaveAttribute("data-points", "0");
+
+  // Three real clicks on the canvas. Draw mode is wired to MapLibre's own `click`, so this is the
+  // interaction a person performs, not a handler called directly.
+  const box = await page.locator("#authoring-map canvas").boundingBox();
+  if (box === null) throw new Error("the authoring map drew no canvas to draw on");
+  const vertices: readonly (readonly [number, number])[] = [
+    [-80, -40],
+    [0, 0],
+    [80, 40],
+  ];
+  for (const [dx, dy] of vertices) {
+    await page.mouse.click(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy);
+  }
+  await expect(page.locator("#authoring-status")).toHaveAttribute("data-points", "3");
+
+  // Untimed until the step that times them, and unsavable until then — the engine's refusal,
+  // surfaced before the button.
+  await expect(page.locator("#authoring-status")).toHaveAttribute("data-untimed", "3");
+  await expect(page.locator("#authoring-status")).toHaveAttribute("data-savable", "false");
+  await page.locator("#author-times").click();
+  await expect(page.locator("#authoring-status")).toHaveAttribute("data-untimed", "0");
+  await expect(page.locator("#authoring-status")).toHaveAttribute("data-savable", "true");
+
+  // Pin, through the composer, with a photo — the same path the recorded loop takes.
+  await page.locator("#author-pin").click();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator("#authoring-composer")).toBeVisible();
+  const chooser = page.waitForEvent("filechooser");
+  await page.locator(".mapatlas-composer-photo").click();
+  await (await chooser).setFiles(PHOTO);
+  await expect(page.locator(".mapatlas-composer-preview")).toBeVisible();
+  // A comment, so the exported feature is identifiable as *this* event rather than as an event.
+  await page.locator(".mapatlas-composer-comment").fill("drawn by hand");
+  await page.locator(".mapatlas-composer-save").click();
+  await expect(page.locator("#authoring-status")).toHaveAttribute("data-events", "1");
+
+  await page.locator("#author-save").click();
+  await expect(page.locator("#app-review")).toBeVisible();
+
+  // A fresh document: the draft, the pending ids and every binding are gone, and only what
+  // reached the store can answer.
+  await page.reload();
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+
+  const row = page.locator('.trip-open[data-origin="authored"]');
+  await expect(row, "the authored trip is not in the list a new document drew").toHaveCount(1);
+  await expect(row).toHaveAttribute("data-points", "3");
+  await row.click();
+
+  // **Carrying the event.** The photo in the review is resolved from the `blobKey` through the
+  // store, so a visible image means the whole chain held — and it is absent for an event that
+  // was written but never bound to this track.
+  const review = page.locator("#app-review");
+  await expect(review).toBeVisible();
+  await expect(review.locator("img").first()).toBeVisible();
+
+  // And in the export, which is the other half of "reviews identically to a recorded one".
+  const saving = page.waitForEvent("download");
+  await page.locator("#export-geojson").click();
+  const saved = await (await saving).path();
+  if (saved === null) throw new Error("the browser saved no file");
+  const doc = JSON.parse(await readFile(saved, "utf8")) as {
+    features: { properties?: Record<string, unknown> }[];
+  };
+  const events = doc.features.filter((feature) => feature.properties?.["kind"] === "event");
+  expect(events, "the exported authored trip carries no event").toHaveLength(1);
+  expect(events[0]?.properties?.["comment"]).toBe("drawn by hand");
+  // Bound, and bound to *this* trip: an event carrying another trip's id would export from a
+  // review of that trip instead, and this assertion is what tells the two apart.
+  const track = doc.features.find((feature) => feature.properties?.["kind"] === "track");
+  expect(events[0]?.properties?.["trackId"]).toBe(track?.properties?.["id"]);
+  expect(track?.properties?.["origin"], "the saved trip was not marked as authored").toBe(
+    "authored",
+  );
+
+  expect(consoleFor(page).problems()).toStrictEqual([]);
+});

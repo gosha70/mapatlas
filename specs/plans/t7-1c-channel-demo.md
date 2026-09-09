@@ -138,6 +138,16 @@ that one cannot show what two would · getting-started documentation (**T7.2**) 
    **deliberate** state, a descriptor declared with the samples withheld, rather than as a side
    effect of the sensor failing to start. Otherwise that observable is the mutation rather than
    the thing the mutation is meant to break. Second because a chart needs samples.
+
+   > **Amended 2026-09-09, on the increment's own finding.** The scope fence above says this is
+   > charted *"through `TripReview`'s `channels` prop"*. **No prop wiring was required.** ADR-0029
+   > makes an omitted `channels` mean the track's *declared descriptors*, and `chartable()` then
+   > keeps only those some point actually sampled — so the component charts the demo's channel with
+   > nothing passed at all, and the prop **narrows** that set rather than enabling it. Increment 2
+   > therefore adds browser evidence and **no product change**: `git diff -- apps` is empty for it.
+   > Recorded rather than left standing, because a plan that says a prop is the enabling path sends
+   > the next reader looking for wiring that was never needed. The existing component discharged
+   > the assembly more directly than this plan predicted.
 3. **The round trip.** *Observable:* **the pair** — the chart rendered from the re-imported track
    is identical to the chart rendered before the export. Last because the pair cannot exist until
    both halves do.

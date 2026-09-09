@@ -6,7 +6,17 @@ import { readFile } from "node:fs/promises";
 
 import { geoJSONToTrack } from "@mapatlas/core";
 
-import { consoleFor, fixturePng, watchConsole } from "./fixtures/browser.js";
+import { consoleFor, watchConsole } from "./fixtures/browser.js";
+import {
+  HOME,
+  PHOTO,
+  composeEvent,
+  distanceKm,
+  drawThreeVertices,
+  openDemo,
+  pinOnMap,
+  recordTwoFixes,
+} from "./fixtures/demo-flow.js";
 
 /**
  * The demo's record → pin → photo → review loop (T7.1 increment 2), in a real browser.
@@ -36,77 +46,19 @@ test.use({
   // Inside DEMO_REGION, so the live mark lands on ground the archives actually cover. A fix over
   // open ocean records identically and renders nothing, which is the failure mode this whole
   // increment's camera work existed to stop.
-  geolocation: { latitude: 45.84, longitude: 6.865, accuracy: 5 },
+  geolocation: HOME,
 });
-
-const DEMO = "http://127.0.0.1:5175";
-const ARCHIVES = "http://127.0.0.1:5176";
-
-const withArchives =
-  `${DEMO}/?terrain=${encodeURIComponent(`${ARCHIVES}/terrain.pmtiles`)}` +
-  `&contours=${encodeURIComponent(`${ARCHIVES}/contours.pmtiles`)}`;
-
-const PHOTO = {
-  name: "field-shot.jpg",
-  mimeType: "image/jpeg",
-  // A real, decodable PNG. A signature followed by arbitrary bytes round-trips through storage
-  // perfectly and renders as a zero-sized broken image — which would fail the review assertion
-  // below on a fixture defect rather than on the app.
-  buffer: fixturePng(),
-};
-
-/** Record two distinct fixes. The default policy keeps a fix only after 10 m, so the moves are
- *  far larger than that: a track that kept one point is not a trip. */
-async function recordTwoFixes(page: Page): Promise<void> {
-  await page.locator("#record-start").click();
-  await expect(page.locator("#recorder-status")).toHaveAttribute("data-status", "recording");
-
-  for (const fix of [
-    { latitude: 45.842, longitude: 6.867, accuracy: 5 },
-    { latitude: 45.845, longitude: 6.87, accuracy: 5 },
-  ]) {
-    await page.context().setGeolocation(fix);
-    await page.waitForTimeout(250);
-  }
-}
-
-/** Drop a pin by tapping the map, the way a person does — not by calling a handler. */
-async function pinOnMap(page: Page): Promise<void> {
-  const box = await page.locator("#app-map canvas").boundingBox();
-  if (box === null) throw new Error("the map drew no canvas to tap");
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await expect(page.locator("#app-composer")).toBeVisible();
-}
-
-/** The review's own reported distance, in km, read out of the stats panel. */
-async function distanceKm(page: Page): Promise<number> {
-  const stats = page.locator(".mapatlas-trip-stats");
-  await expect(stats).toBeVisible();
-  const text = (await stats.textContent()) ?? "";
-  const found = /Distance\s*([\d.]+)\s*km/.exec(text);
-  if (found?.[1] === undefined) throw new Error(`no distance in the stats panel: ${text}`);
-  return Number(found[1]);
-}
 
 test("a recorded trip carries an event with a photo, and the review renders it", async ({
   page,
 }) => {
   watchConsole(page);
-  await page.goto(withArchives);
-  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+  await openDemo(page);
 
   await recordTwoFixes(page);
   await pinOnMap(page);
-
-  // The photo goes in through the capture affordance, never `setInputFiles` on the element:
-  // writing the input's files directly would pass even if the button were wired to nothing.
-  const chooser = page.waitForEvent("filechooser");
-  await page.locator(".mapatlas-composer-photo").click();
-  await (await chooser).setFiles(PHOTO);
-  // The preview proves the bytes decoded, not merely that a file was selected.
-  await expect(page.locator(".mapatlas-composer-preview")).toBeVisible();
-
-  await page.locator(".mapatlas-composer-save").click();
+  await expect(page.locator("#app-composer")).toBeVisible();
+  await composeEvent(page, "a note");
   await expect(page.locator("#app-composer")).toHaveCount(0);
   await expect(page.locator("#recorder-status")).toHaveAttribute("data-events", "1");
 
@@ -127,8 +79,7 @@ test("a recorded trip carries an event with a photo, and the review renders it",
 test("the review is of the trip that was recorded, not an empty one", async ({ page }) => {
   // Separated deliberately: the test above would pass on a track with no points, because a photo
   // in a review says nothing about whether any fix was ever kept. This is the recording half.
-  await page.goto(withArchives);
-  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+  await openDemo(page);
 
   await recordTwoFixes(page);
   await page.locator("#record-stop").click();
@@ -152,16 +103,11 @@ test("the exported file parses, and round-trips the trip that produced it", asyn
   // a document that round-trips; it cannot prove the browser was ever handed one. This drives the
   // actual control, takes the actual file the browser saved, and reads it back through the
   // published importer — the same function a consumer would use on the far side.
-  await page.goto(withArchives);
-  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+  await openDemo(page);
 
   await recordTwoFixes(page);
   await pinOnMap(page);
-  const chooser = page.waitForEvent("filechooser");
-  await page.locator(".mapatlas-composer-photo").click();
-  await (await chooser).setFiles(PHOTO);
-  await expect(page.locator(".mapatlas-composer-preview")).toBeVisible();
-  await page.locator(".mapatlas-composer-save").click();
+  await composeEvent(page, "a note");
   await expect(page.locator("#recorder-status")).toHaveAttribute("data-events", "1");
 
   await page.locator("#record-stop").click();
@@ -260,8 +206,7 @@ test("a finalized trip, its event and its photo survive a real reload", async ({
    * database this test happens to know the name of.
    */
   watchConsole(page);
-  await page.goto(withArchives);
-  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+  await openDemo(page);
 
   // **The probe reports absence before it reports presence.** Otherwise a probe that answered with
   // a fixed shape, or that read some other origin's data, would satisfy every assertion below and
@@ -272,11 +217,7 @@ test("a finalized trip, its event and its photo survive a real reload", async ({
 
   await recordTwoFixes(page);
   await pinOnMap(page);
-  const chooser = page.waitForEvent("filechooser");
-  await page.locator(".mapatlas-composer-photo").click();
-  await (await chooser).setFiles(PHOTO);
-  await expect(page.locator(".mapatlas-composer-preview")).toBeVisible();
-  await page.locator(".mapatlas-composer-save").click();
+  await composeEvent(page, "a note");
   await expect(page.locator("#recorder-status")).toHaveAttribute("data-events", "1");
 
   await page.locator("#record-stop").click();
@@ -334,8 +275,7 @@ test("a trip recorded here is listed by a later document, and reopens as itself"
    * happily for an empty track, which this file has been caught by once already.
    */
   watchConsole(page);
-  await page.goto(withArchives);
-  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+  await openDemo(page);
 
   // Nothing stored yet, and the list says so rather than saying nothing.
   await expect(page.locator("#trip-list")).toHaveAttribute("data-count", "0");
@@ -393,25 +333,14 @@ test("a hand-drawn trip is saved with its pinned event, and reopens carrying it"
    * "lost" and "orphaned" that the two mutations keep apart.
    */
   watchConsole(page);
-  await page.goto(withArchives);
-  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+  await openDemo(page);
 
   await page.locator("#author-start").click();
   await expect(page.locator("#authoring-status")).toHaveAttribute("data-points", "0");
 
   // Three real clicks on the canvas. Draw mode is wired to MapLibre's own `click`, so this is the
   // interaction a person performs, not a handler called directly.
-  const box = await page.locator("#authoring-map canvas").boundingBox();
-  if (box === null) throw new Error("the authoring map drew no canvas to draw on");
-  const vertices: readonly (readonly [number, number])[] = [
-    [-80, -40],
-    [0, 0],
-    [80, 40],
-  ];
-  for (const [dx, dy] of vertices) {
-    await page.mouse.click(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy);
-  }
-  await expect(page.locator("#authoring-status")).toHaveAttribute("data-points", "3");
+  await drawThreeVertices(page);
 
   // Untimed until the step that times them, and unsavable until then — the engine's refusal,
   // surfaced before the button.
@@ -423,15 +352,9 @@ test("a hand-drawn trip is saved with its pinned event, and reopens carrying it"
 
   // Pin, through the composer, with a photo — the same path the recorded loop takes.
   await page.locator("#author-pin").click();
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await pinOnMap(page, "#authoring-map");
   await expect(page.locator("#authoring-composer")).toBeVisible();
-  const chooser = page.waitForEvent("filechooser");
-  await page.locator(".mapatlas-composer-photo").click();
-  await (await chooser).setFiles(PHOTO);
-  await expect(page.locator(".mapatlas-composer-preview")).toBeVisible();
-  // A comment, so the exported feature is identifiable as *this* event rather than as an event.
-  await page.locator(".mapatlas-composer-comment").fill("drawn by hand");
-  await page.locator(".mapatlas-composer-save").click();
+  await composeEvent(page, "drawn by hand");
   await expect(page.locator("#authoring-status")).toHaveAttribute("data-events", "1");
 
   await page.locator("#author-save").click();

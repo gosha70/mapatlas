@@ -1353,6 +1353,91 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
 - **T7.1c Channel demo.** The fake sensor channel is recorded, persisted, charted in review, and
   survives GeoJSON round-trip. _AC:_ the exported file contains the channel arrays and
   re-importing reproduces the chart.
+  **Done** (2026-09-09, PR #38, merged as `c36d151`). Plan:
+  [`specs/plans/t7-1c-channel-demo.md`](plans/t7-1c-channel-demo.md), set against `main` at
+  `abfd39f` before any implementation (PR #37) and carrying **three dated amendments**, each
+  recording a planning statement the code disproved. Three commits: `d496c65` recording the
+  channel, `8d300b2` charting it, `43aab18` the export–import round trip. **Nothing under
+  `packages/` changed** — `git diff abfd39f..43aab18 -- packages` is empty — and increments 2 and 3
+  changed no application code either.
+
+  Each of the plan's requirements, and what discharges it:
+
+  - *A fake `SensorSource`, wired at the published seam.* `useTrackRecorder` takes
+    `sensors?: SensorSource[]` and `createPollingSensorSource` turns a `read` into one, so the demo
+    supplies a function and nothing else. Swapping it for a real instrument is one constructor call
+    in `apps/demo/src/app/channel.ts`, which is the claim `PRD.md` §6 makes about the seam.
+  - *The values are usable as evidence.* A seeded sequence, because the round trip needs two
+    properties that pull apart: **deterministic**, or a flake in the comparison reads as a fidelity
+    defect, and **regenerable from nothing else in the document**, or the chart could be reproduced
+    from a file that dropped every channel array. A clock- or position-derived read has the first
+    and not the second; `Math.random()` has the second and not the first. It must also not be
+    constant, which would be regenerable from nothing at all.
+  - *Recorded and persisted.* `e2e/app-loop.e2e.ts` reloads and reads the store back: the declared
+    descriptor is on the track, **and** at least one kept point carries the key. The pairing is the
+    point — ADR-0029 makes a declared-but-unsampled channel indistinguishable from an undeclared
+    one, so a descriptor alone is not evidence.
+  - *Charted in review.* `e2e/app-channel.e2e.ts` requires a figure keyed by the declared channel
+    with non-empty polyline geometry, and the descriptor's own label reaching the caption and the
+    accessibility name — ADR-0009 has the engine render label and unit verbatim and derive neither,
+    so seeing them is seeing the consumer's words reach the surface. Its control writes a track
+    declaring the channel with **no samples**, deliberately rather than by breaking the sensor, and
+    requires no chart.
+  - *The export contains the channel arrays, and re-importing reproduces the chart.* The relational
+    half, so the unit under test is the **pair**: the rendered polyline `points`, per segment,
+    before the export and after the import — an identity rather than a resemblance to a constant.
+    `portability`'s encoding is not re-proved here; `core` tests it.
+  - *Attribution of the second render.* By **absence**, because `geoJSONToTrack` preserves
+    `properties.id` and the document's `origin`, so an import overwrites the trip it came from and
+    cannot be told apart by a second row. Delete → **reload** → prove through the storage seam that
+    `getTrack(originalId)` is `undefined` and no summary names it → import into that fresh document
+    → **reload again**. Two boundaries: the first removes the document that drew the original
+    chart, the second the importing one. The recording is **eventless**, because `deleteTrack`
+    cascades to events and orphaned blobs while the export carries media *references* — a photo
+    would make it an accidental media-import test.
+  - *The equivalence check stays green by declaration, never by weakening.* ADR-0040, written
+    **before** the declaration that cites it, records that an authored trip carries no channels: a
+    channel is a sample and a drawn trip was not anywhere at any time. The declaration is **seven
+    model-owned subtree roots** read out of `track.ts`, `channels.ts` and `portability.ts` — not any
+    property named `channels`, since `Track.meta` is arbitrary consumer JSON and a segment-name
+    exemption would have swallowed a consumer's own field. Two counterexamples in
+    `e2e/structure-oracle.e2e.ts` hold that boundary. And because an exclusion is not evidence, the
+    ADR's claim is asserted **by value**: the authored track declares no channel and no authored
+    point carries samples.
+
+  **A contract correction, not an implementation change.** `PRD.md` §6 said a `SensorSource`
+  *"attaches a telemetry channel to every track point"*. No polling source can meet that:
+  `createPollingSensorSource.start()` schedules an interval and does not read at zero,
+  `mergeSensorSamples` takes only samples at or before the point, and the recorder **drains**
+  pending samples at each kept point — so a point carries a value exactly when one arrived in its
+  window, which ADR-0009 already permitted to be none. The criterion now reads *"available
+  telemetry samples"*, with its own dated note. The wording was wrong, not the engine.
+
+  **What the browser lane deliberately does not assert**, recorded because two stricter shapes were
+  tried and rejected rather than never attempted: *"no gap after the first point"* passed in
+  isolation and failed twice under full-lane load, and at a 25 ms cadence a loaded run kept only
+  **two geolocation fixes at all**. The number of kept points is as load-dependent as the sampling,
+  so any per-index shape makes CI scheduling part of the product contract. That the source keeps
+  sampling — repeatedly, in order, not constantly — is owned by `channel.test.ts`, where it is
+  deterministic.
+
+  **Falsifiers, each dying on a named assertion:** no sensor wired · the source declared but never
+  sampled · the review told to chart nothing · a descriptor declaring a key the samples do not use ·
+  the deliberate empty control *given* samples · skipping the delete · skipping the import ·
+  dropping the channel arrays while keeping the descriptors · **changing the values alone**, which
+  separates "the channel survived structurally" from "the same channel data survived" and holds at
+  any sample count because the descriptor fixes the chart's scale at 40–110. One malformed mutant is
+  recorded rather than counted: unwiring by deletion left a binding unused, so `tsc --build` failed
+  and the preview server never started — a mutant the compiler rejects never ran.
+
+  **What T7.1c does not close.** The getting-started documentation is **T7.2**'s. `/lab` is
+  untouched and its retirement remains its own cleanup task. And the demo **exports but offers no
+  import affordance** — recorded in `CONTINUE.md` as a known **demo-surface** gap, not as an
+  established exit requirement: `PRD.md` §6 asks the demo for export, while import appears in **§4
+  item 14 and §5's *In* list** — sections titled *"Core user stories (engine capabilities)"* and
+  *"Scope (v1 = the engine)"*, which `core` has and tests. Whether Phase 7 needs the affordance is
+  undecided and is T7.2's survey to settle.
+
 - **T7.2 Getting started.** Docs derived from `api.md`: embed the loop in an afternoon. _AC:_
   a new consumer following the doc reaches a working map+event loop.
 

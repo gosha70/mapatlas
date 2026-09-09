@@ -1276,6 +1276,80 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
 - **T7.1b Authoring + list flows.** A trip list from `listTrackSummaries()`, and a
   draw→set-times→pin→save flow. _AC:_ a hand-drawn trip appears in the list and reviews
   identically to a recorded one (same stats panel, same export shape, differing only in `origin`).
+  **Done** (2026-09-08, PR #35, merged as `7828d9f`). Plan:
+  [`specs/plans/t7-1b-authoring-list.md`](plans/t7-1b-authoring-list.md), whose bars were set
+  against `main` at `d48363f` before any implementation (PR #34). Three commits, one per
+  increment: `a895665` the list, `dcecab2` the authoring flow, `2c1830b` the equivalence pair.
+  **Nothing under `packages/` changed** — `git diff d48363f..2c1830b -- packages` is empty, the
+  same expectation T7.1 met, and the plan's "no new public API" bar is therefore a `git diff`
+  rather than a claim.
+
+  Each of the plan's requirements, and what discharges it:
+
+  - *A trip list from `listTrackSummaries()`.* `useTrackList` sits in `loop.tsx` beside the other
+    store-facing bindings and `trips.tsx` renders what it is handed. The claim is made where it is
+    real: `e2e/app-loop.e2e.ts` records a trip, reloads, and finds it in the list a **new
+    document** drew — a list built from the trips a session finalized renders identically until
+    the page is refreshed, which no assertion taken inside one document can see. The unit lane is
+    explicit about the narrower thing it proves; `trips.test.tsx`'s header says feeding it two
+    summaries and finding two rows proves rendering and nothing about listing.
+  - *A listed trip reopens into `TripReview`.* Hydrated once on open, because the list holds
+    summaries with no points (ADR-0014) and calling `getTrack` per row would undo the projection
+    that exists to avoid it. The reopened trip is identified by its **distance**, compared with
+    what the same trip reported before the reload: a row appearing is satisfied by any row, and
+    `TripReview` renders happily for an empty track.
+  - *`draw → set-times → pin → save`.* All four steps, over `useTrackDraft` and `MapCanvas`'s
+    published draw mode — three real clicks on the canvas, since draw mode is bound to MapLibre's
+    own `click`. Timing is a step and not a default: `append` writes an untimed vertex and
+    `toTrack()` refuses while any remain, so `Save` stays disabled until the times exist.
+  - *The pinned event.* Written **unbound** and updated with the id `save()` returns, because a
+    draft is not a track and has no id until then. Its own ordering problem, not the recorded
+    loop's, whose cause is that `useTrackRecorder` publishes `track` only after `stop()` resolves.
+    A failed save keeps the session open and retryable; the binding adopts the id from the first
+    `toTrack()`, so a retry re-saves the same trip rather than minting a second.
+  - *A hand-drawn trip reviews identically, differing only in `origin`.* **Two assertions, kept
+    apart, because as one claim it is unsatisfiable.** A value diff of two independently produced
+    trips can never be exactly `{origin}` — ids, coordinates, timestamps and `trackId` references
+    differ legitimately. What ADR-0014 contracts is *"no special cases — the only difference is
+    one enum field"*. So `e2e/app-equivalence.e2e.ts` makes **one complete structural comparison**
+    over the review's inputs and both exported documents, and asserts `origin` **by value on both
+    sides** — `"recorded"` and `"authored"`, since asserting one and assuming the other is half a
+    test. The pair is two independently produced trips read back by a fresh document; seeding the
+    draft from the recorded track would relabel `origin` (`draft.test.ts:810`) and leave one
+    object wearing two labels.
+  - *The optional GPS fields, ruled on up front.* `TrackPoint` publishes `accuracyM`, `altitudeM`,
+    `altitudeAccuracyM`, `speedMps` and `headingDeg`, none of which an authored point can carry —
+    a **structural** difference, present against absent. They are declared by name before the
+    comparison exists, and **every path named there is one the file asserts nothing about**:
+    not values, not presence, not type. Everything else in both documents is compared.
+  - *The stats panel compared as rendered.* Asserted, and its weakness stated in the same place:
+    `TripReview` computes `stats` with `computeStats(props.track)` and renders `StatsPanel`
+    unconditionally, never consulting `Track.stats` — so a panel appears for any track and its
+    three rows are fixed. What carries the clause is a **real distance on both sides**, each trip
+    through the same `computeStats` path with geometry that survived.
+  - *Persistence is not re-proved.* T7.1 closed it, and nothing here re-asserts it.
+
+  **The oracle is tested before anything is asserted with it.** `vitest.config.ts` excludes
+  `e2e/**`, so `e2e/structure-oracle.e2e.ts` follows `rendered-oracle.e2e.ts`'s precedent with
+  eleven self-tests — differing array lengths (**length is a value, not a structure**), a field on
+  only some elements, a type change reported from both sides, `null` not passing as an object, the
+  root compared, and declaration scoping. Blinding it fails seven of them.
+
+  **Mutations, each killed by a named assertion:** the list rendered from document state · no
+  refresh after finalize · opening reviewing a summary rather than the hydrated track · a vanished
+  trip opening silently · the event **orphaned**, written and never bound · the event **lost**,
+  never reaching the store — different failure sets, kept apart on purpose · one GPS field left
+  undeclared · the oracle blinded. Two malformed mutants are recorded in `dcecab2`'s body rather
+  than counted: each left a binding unused, so `tsc --build` failed and the preview server never
+  started — a mutant the compiler rejects never ran and killed nothing.
+
+  **What T7.1b does not close.** The sensor channel is **T7.1c**'s and the getting-started
+  documentation **T7.2**'s. `/lab` is untouched and its retirement is deliberately not here: it
+  remains an **evidence fixture** until each lab-owned browser assertion is mapped to an
+  equivalent root-app oracle or deliberately retired, and that audit is its own cleanup task.
+  Editing a recorded trip is fenced out — a draft built `from` one is relabelled `"authored"`
+  (`draft.test.ts:810`), so the affordance would silently rewrite provenance.
+
 - **T7.1c Channel demo.** The fake sensor channel is recorded, persisted, charted in review, and
   survives GeoJSON round-trip. _AC:_ the exported file contains the channel arrays and
   re-importing reproduces the chart.

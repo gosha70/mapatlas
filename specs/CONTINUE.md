@@ -8,24 +8,44 @@ specific failure modes are cheap to avoid once named.
 
 ## Where the work is
 
-**T7.1b — authoring and list flows.** `tasks.md` has its scope and acceptance criteria, and
-`roadmap.md` has Phase 7's exit. **Survey both before planning anything**; nothing here pre-plans
-it, deliberately, because the survey is the next session's and it should meet the task on its own
+**T7.1c — the channel demo.** `tasks.md` has its scope and acceptance criteria, and `roadmap.md`
+has Phase 7's exit. **Survey both before planning anything**; nothing here pre-plans it,
+deliberately, because the survey is the next session's and it should meet the task on its own
 terms.
 
-Two things it will inherit and should know before it starts, neither of them scope:
+Three things it will inherit and should know before it starts, none of them scope:
 
-- **The demo app has no trip list, and that is T7.1b's first observable.** Durability is already
-  settled and does not need re-proving: `e2e/app-loop.e2e.ts` finalizes a trip with an event and a
-  photo, reloads for real, and reads all three back out of the app's own stores. What does not
-  exist is any way for a *person* to find that trip again — `listTrackSummaries()` reaches no
-  screen. Build the surface; the storage claim underneath it is already green, and a T7.1b test
-  that merely re-asserts persistence is testing what T7.1 closed.
+- **The demo has a recorded flow and an authored one, and the channel must reach both.** T7.1b's
+  criterion was that an authored trip is not a second class of thing, and `e2e/app-equivalence`
+  now compares the two structurally. A channel wired into recording alone would break that
+  comparison — and would break it *correctly*, which is the useful part: the equivalence scenario
+  is a standing check that nothing added later applies to one kind of trip and not the other.
+- **`SensorSource` is published and nothing in the demo uses it.** T7.1's scope line named a fake
+  polling sensor channel and the ruling of 2026-09-06 moved it here; `ChannelDescriptor`,
+  `TrackPoint.channels` and `TripReview`'s `channels` prop all exist already, and ADR-0029 settles
+  that the chartable set comes from the **descriptors** rather than from the keys found in the
+  data. So this is assembly again, and a survey should establish what is missing before assuming
+  anything is.
 - **Eviction-aware re-download, quota UI and download resume remain unbuilt and unowned.** T6.1
   fenced them out, T6.2's survey answered them as questions rather than scope,
   `architecture.md`'s claim that the store "supports eviction-aware re-download" was removed
-  because nothing implements it, and T7.1 did not take any of them on. If T7.1b needs one, that
-  is a decision to take, not a commitment to inherit.
+  because nothing implements it, and neither T7.1 nor T7.1b took any of them on. If T7.1c needs
+  one, that is a decision to take, not a commitment to inherit.
+
+### T7.1b is closed (2026-09-08, PR #35, merged as `7828d9f`)
+
+The demo lists its stored trips and reopens one for review, authors a trip by hand — draw, set
+times, pin an event, save — and carries the evidence that an authored trip is the same kind of
+thing as a recorded one. `tasks.md` holds the authoritative Done record with one bullet per plan
+requirement; `specs/plans/t7-1b-authoring-list.md` is history now, not a work plan. Nothing under
+`packages/` changed across the whole task.
+
+**`/lab` is still an evidence fixture, and its retirement is still nobody's task yet.** The root
+app now supersedes it as the product demonstration, which is what made retirement *thinkable* —
+but `/lab` remains the subject of five merged browser scenarios, and removing it before each of
+those assertions is mapped to an equivalent root-app oracle would trade known evidence for an
+assumption. The audit is its own cleanup task: per scenario, is there equivalent root-app
+evidence? If yes, migrate or delete; if no, is the old claim still required? Only then remove.
 
 ### T7.1 is closed (2026-09-08)
 
@@ -214,6 +234,27 @@ The remedy is one CSS rule and one assertion — the body's computed `background
 transparent, which is what separates "declared a background" from "inherited whatever the canvas
 is". The lesson is larger than the rule: when a change is visual, look at it.
 
+### 7b. A tolerated-difference list grown from failures is a spot-check wearing a rule's clothes
+
+T7.1b's equivalence comparison declares the fields it will not compare — the GPS values only a
+recorder can supply. The bar said those must be **named before the comparison is written**, and
+the run produced the counterexample twice in one sitting. The first execution reported
+`simplifiedSegments[][].accuracyM`: the Douglas–Peucker cache holds `TrackPoint`s too, so the same
+fields appear under a spelling nobody had enumerated. The second reported
+`features[].properties.accuracyM[]` and `[][]`: the export carries per-point values as arrays.
+
+Both would have been *fixed* by appending whatever the red run printed. That is the trap, and it
+is not obvious while it is happening — each addition looks like a correction, the list grows one
+true entry at a time, and what is left at the end is a comparison that tolerates exactly the
+differences that happened to occur. **A tolerated-difference list grown from failures is
+indistinguishable from a spot-check**, which is the thing the bar exists to forbid.
+
+The answer is that a declaration has to be a *scoped statement made in advance* rather than an
+enumeration: the fields were named once, in one list, and the declaration was made to cover a path
+**and everything beneath it** at real path boundaries — so a third spelling of the same field is
+covered by the rule rather than by a new line. Applies to any allow-list, ignore-list or expected
+failures file: if it grew by one entry per red run, it is not a rule and nobody can check it.
+
 ### 7. A test that asks the platform to agree with you is testing the platform
 
 A test that calls `navigator.storage.persist()` and expects `true` asserts Chromium's engagement
@@ -249,6 +290,11 @@ throughout**, so it will meet this again on its first offline round-trip test.
   claim nobody can check. Remove it or make the protected path observable.
 - **Label verification honestly.** Gate runs and mutations you ran yourself are *author
   verification*. Say so. Independent adjudication is worth a lot more and should be marked.
+- **`gh pr edit` can fail silently on this repository.** It goes through the GraphQL API, which
+  returns a Projects-classic deprecation error; `gh` prints it and exits **without changing the
+  title or body**, so a PR keeps whatever GitHub generated from the first commit. Read the PR back
+  after editing, and use `gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f title=… -F body=@file`
+  instead, which is REST and works. Worth knowing before it is read as one's own mistake.
 - Every source file needs `// SPDX-License-Identifier: Apache-2.0`; commits use `-s`.
 - Gates: `npm run verify` (build, typecheck, lint, coverage, isolation scan, SPDX scan, prettier,
   packaging check) and `npm run test:browser`. Check the **exit code**, not the printed output.

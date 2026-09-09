@@ -8,7 +8,19 @@
 
 1. **T7.1c discharges one criterion of `PRD.md` §6**, not Phase 7's exit: *"Adding a `SensorSource`
    (even the fake) attaches a telemetry channel to every track point, charts it in review, and
-   exports it — with zero core changes."* `tasks.md` states the acceptance criterion as *"the
+   exports it — with zero core changes."*
+
+   > **Amended 2026-09-09, during increment 1.** The sentence quoted above was `PRD.md`'s at the
+   > time this plan was written, and it is **stronger than the engine's contract** — quoting it
+   > without checking it against ADR-0009 is the mistake, not the plan's use of it. A polling
+   > source cannot attach a sample to the first kept fix (`start()` schedules an interval and does
+   > not read at zero) and `mergeSensorSamples` excludes samples newer than a point; ADR-0009
+   > already made `channels` optional, merged into **kept** points under a `maxAgeMs` policy, with
+   > sensor failure non-fatal. `PRD.md` §6 now reads *"attaches available telemetry samples to the
+   > kept track points"*, with its own dated note. **No bar in this plan changes**: `tasks.md`'s
+   > T7.1c observable — channel arrays exported, re-import reproducing the chart — was always
+   > compatible with sparse samples, and increment 1's evidence asserts what the fixture can
+   > honestly claim rather than what the old sentence asked for. `tasks.md` states the acceptance criterion as *"the
    exported file contains the channel arrays and re-importing reproduces the chart"*. The
    getting-started documentation is **T7.2**'s and closes the phase.
 2. **The channel was fenced here on 2026-09-06**, before T7.1's plan was written. T7.1's scope line
@@ -93,6 +105,23 @@ adds no surface, and keeps the *attributable to the imported document* bar meani
 imported trip has an id of its own and appears as its own row, so a chart read from it cannot be
 the original's chart by accident.
 
+> **Amended 2026-09-09, on increment 3's own finding.** The last sentence is **disproved by the
+> repository**. `geoJSONToTrack` carries `properties.id` through (`portability.ts:390`) and
+> preserves the document's `origin` — core's round-trip test asserts that deliberately — so an
+> imported track has neither a new identity nor an `"imported"` label, and saving it *overwrites*
+> the trip it came from. Attribution therefore comes from **absence** rather than from a second
+> row: the scenario deletes the original, **reloads**, proves through the storage seam that
+> `getTrack(originalId)` is `undefined` and that no summary carries that id, imports into that
+> fresh document, and **reloads again** so the app rebuilds its list from IndexedDB. The reappeared
+> row is attributable to the imported document because no track with that id existed immediately
+> before the import, and neither surviving document could have drawn the second chart. Nothing
+> asserts `origin === "imported"`; the importer's contract is preservation.
+>
+> The recording is also kept **eventless**, which this plan did not say. `deleteTrack` removes the
+> track's events and any blob only they referenced, and the export carries media *references*
+> rather than bytes — so a trip with a photo would make this an accidental media-import test,
+> passing or failing for reasons unrelated to channels.
+
 **An import affordance in the demo is not built here, and is recorded as unowned.** It is a real
 feature, `tasks.md`'s T7.1c line does not name it, and inventing it inside a channel task is the
 kind of widening this repository's plans exist to prevent. But it should be visible rather than
@@ -126,6 +155,16 @@ that one cannot show what two would · getting-started documentation (**T7.2**) 
    **deliberate** state, a descriptor declared with the samples withheld, rather than as a side
    effect of the sensor failing to start. Otherwise that observable is the mutation rather than
    the thing the mutation is meant to break. Second because a chart needs samples.
+
+   > **Amended 2026-09-09, on the increment's own finding.** The scope fence above says this is
+   > charted *"through `TripReview`'s `channels` prop"*. **No prop wiring was required.** ADR-0029
+   > makes an omitted `channels` mean the track's *declared descriptors*, and `chartable()` then
+   > keeps only those some point actually sampled — so the component charts the demo's channel with
+   > nothing passed at all, and the prop **narrows** that set rather than enabling it. Increment 2
+   > therefore adds browser evidence and **no product change**: `git diff -- apps` is empty for it.
+   > Recorded rather than left standing, because a plan that says a prop is the enabling path sends
+   > the next reader looking for wiring that was never needed. The existing component discharged
+   > the assembly more directly than this plan predicted.
 3. **The round trip.** *Observable:* **the pair** — the chart rendered from the re-imported track
    is identical to the chart rendered before the export. Last because the pair cannot exist until
    both halves do.

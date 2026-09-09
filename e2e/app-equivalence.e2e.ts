@@ -15,6 +15,7 @@ import {
   recordTwoFixes,
 } from "./fixtures/demo-flow.js";
 import { structuralDifference } from "./fixtures/structure.js";
+import { GPS_ONLY, SENSOR_CHANNEL_ONLY } from "./fixtures/track-shape.js";
 
 /**
  * A hand-drawn trip is the same kind of thing as a recorded one (T7.1b increment 3).
@@ -50,27 +51,20 @@ test.use({
 test.setTimeout(120_000);
 
 /**
- * The fields only a GPS fix can supply, declared by name.
+ * What the two trips are allowed to differ in, and nothing else.
  *
- * `TrackPoint` publishes `accuracyM`, `altitudeM`, `altitudeAccuracyM`, `speedMps` and
- * `headingDeg`, all optional; `useTrackDraft.append` writes a bare `{lat, lng}` and the timing
- * step adds `t`. A recorder supplies whatever the platform gave it — under Playwright's injected
- * geolocation that is `accuracyM` — so this is a **structural** difference, present against
- * absent, and one that no amount of care in the demo could remove.
+ * Both lists live in `fixtures/track-shape.ts` with the reasoning that produced them, and both are
+ * checked there by `structure-oracle.e2e.ts` — a declaration is only as good as the guarantee that
+ * it did not widen past what it names, and that guarantee is worth having in a test rather than in
+ * a comment. `SENSOR_CHANNEL_ONLY` is ADR-0040's; `GPS_ONLY` is what a fix supplies and a drawn
+ * point cannot.
  *
- * **Three spellings, because the same points are held in three places.** `Track.points` is the
- * source of truth; `Track.simplifiedSegments` is the Douglas–Peucker render cache holding
- * `TrackPoint`s of its own (ADR-0018); and the exported document carries the fields under
- * `features[].properties`. The third of these was found by the comparison rather than by reading
- * the type — the first run reported `simplifiedSegments[][].accuracyM`, which is the rule being
- * *stated* instead of discovered later as a puzzling red. Nothing else is declared.
+ * **Every path in either list is one this file asserts nothing about** — not values, not presence,
+ * not type. What is excluded from the shape comparison is asserted **by value** instead, which is
+ * why `origin` and the channel claim below are separate assertions rather than consequences of an
+ * exclusion.
  */
-const GPS_FIELDS = ["accuracyM", "altitudeM", "altitudeAccuracyM", "speedMps", "headingDeg"];
-const GPS_ONLY = [
-  ...GPS_FIELDS.map((field) => `points[].${field}`),
-  ...GPS_FIELDS.map((field) => `simplifiedSegments[][].${field}`),
-  ...GPS_FIELDS.map((field) => `features[].properties.${field}`),
-];
+const NOT_COMPARED = [...GPS_ONLY, ...SENSOR_CHANNEL_ONLY];
 
 /** The stored tracks and events, read back through the demo's own storage factory. */
 const PROBE = `
@@ -172,9 +166,31 @@ test("a drawn trip and a recorded one differ in provenance and in nothing struct
   expect(recorded?.origin).toBe("recorded");
   expect(authored?.origin).toBe("authored");
 
+  // ── The provenance assertion has a second half, for the same reason it has a first.
+  //
+  // **Declaring the channel paths means the comparison asserts nothing about them** — so if the
+  // demo ever attached a channel to a drawn trip, the structural comparison would swallow it and
+  // ADR-0040's claim would be false with everything green. `origin` is handled exactly this way
+  // and for exactly this reason: what is excluded from the shape comparison is asserted by value
+  // instead, never left to the exclusion.
+  expect(
+    (recorded as { channels?: unknown[] }).channels ?? [],
+    "the recorded trip declared no channel, so the pair proves nothing about them",
+  ).toHaveLength(1);
+  expect(
+    (authored as { channels?: unknown[] }).channels ?? [],
+    "an authored trip declared a sensor channel — ADR-0040 says it carries none",
+  ).toStrictEqual([]);
+  expect(
+    ((authored as { points?: { channels?: unknown }[] }).points ?? []).filter(
+      (point) => point.channels !== undefined,
+    ),
+    "an authored point carries channel samples — nothing sampled anything on a drawn trip",
+  ).toStrictEqual([]);
+
   // ── The structural assertion, over the review's inputs: the track…
   expect(
-    structuralDifference(recorded, authored, { optional: GPS_ONLY }),
+    structuralDifference(recorded, authored, { optional: NOT_COMPARED }),
     "the two tracks are not the same shape",
   ).toStrictEqual([]);
 
@@ -184,7 +200,7 @@ test("a drawn trip and a recorded one differ in provenance and in nothing struct
   expect(recordedEvents, "the recorded trip carries no event to compare").toHaveLength(1);
   expect(authoredEvents, "the authored trip carries no event to compare").toHaveLength(1);
   expect(
-    structuralDifference(recordedEvents, authoredEvents, { optional: GPS_ONLY }),
+    structuralDifference(recordedEvents, authoredEvents, { optional: NOT_COMPARED }),
     "the two events are not the same shape",
   ).toStrictEqual([]);
 
@@ -209,7 +225,7 @@ test("a drawn trip and a recorded one differ in provenance and in nothing struct
 
   // ── The structural assertion, over the exported documents.
   expect(
-    structuralDifference(recordedExport, authoredExport, { optional: GPS_ONLY }),
+    structuralDifference(recordedExport, authoredExport, { optional: NOT_COMPARED }),
     "the two exported documents are not the same shape",
   ).toStrictEqual([]);
 

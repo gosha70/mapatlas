@@ -1424,3 +1424,61 @@ server does and would send a reader looking for a missing header rather than at 
 
 **Registration is production-only**, because `sw.js` is generated from the bundle and does not exist
 under the dev server. The demo's other scenarios are unaffected, and `npm run demo` is unchanged.
+
+## ADR-0040 — An authored trip carries no sensor channels, and the equivalence check says so
+
+**Status.** Accepted (T7.1c increment 1).
+
+**Context.** T7.1b left a standing check: `e2e/app-equivalence.e2e.ts` produces a recorded trip and
+a hand-drawn one in the same run and requires them to be **the same shape**, with `origin` the only
+difference asserted by value. ADR-0014 is what that check enforces — *"review, stats, export,
+offline, and presentation work on an authored track with no special cases — the only difference is
+one enum field."*
+
+T7.1c attaches a `SensorSource` to the recorder. The moment it does, a recorded trip gains
+`points[].channels`, a `ChannelDescriptor` on the track, and parallel channel arrays in its export,
+and an authored trip has none of them. **The equivalence check goes red, and it is right to.**
+
+**Decision.** **An authored trip carries no sensor channels**, and the equivalence comparison
+declares those paths, citing this ADR as the reason.
+
+**Why this is the model and not a shortfall.** A channel is a *sample*: a value some source read at
+a moment the trip passed through. A hand-drawn trip was not anywhere at any time — its timestamps
+are interpolated from a pace the person chose (`interpolateTimes`), and there was no strap, no
+barometer and no device present to read. There is nothing for a channel to be.
+
+**Why it is a decision at all**, rather than a fact of the type system: `core`'s draft *model* can
+hold channels. `TrackDraft.append` takes a `DraftTrackPoint` (`draft.ts:43`), the draft deep-copies
+per-point `channels` through its history (`:136`), seeds them from a track it was built out of
+(`:227`) and carries them to the finalized track (`:432`). What cannot express one is the
+**published React binding**: `useTrackDraft.append` takes a bare `LatLng` and reduces it to
+`{lat, lng}` (`use-track-draft.ts:128`) — for an unrelated reason, so that a vertex arrives
+*untimed* and the timing step cannot be skipped. So a consumer building on `@mapatlas/react` cannot
+attach a channel to an authored point, and making them able to is a widening of published API,
+which is its own ADR and its own `api.md` change rather than something a demo task does in passing.
+
+**The two answers not taken**, recorded because each is the cheaper thing to do when the check goes
+red and each destroys what the check is for:
+
+- **Weakening the comparison** — comparing less, or dropping the export from it. That is the
+  spot-check `CONTINUE.md`'s mistake 7b exists to forbid: a tolerated-difference list grown from
+  failures is indistinguishable from one, and this would be its first entry.
+- **Painting a synthetic channel onto drawn points** so the shapes match. This invents data to
+  satisfy a test, and the demo is a consumer's reference — it would be teaching that a hand-drawn
+  trip carries sensor readings.
+
+**Consequences.**
+
+The declaration in `app-equivalence.e2e.ts` names the channel paths and **cites this ADR**, in the
+same increment that causes the red and written before the declaration. It is a scoped statement
+made in advance, which is the only form mistake 7b permits.
+
+**The check keeps its teeth.** Declaring the channel paths means the comparison asserts nothing
+about them — and everything else in both documents is still compared, so a channel appearing
+somewhere it was not declared, or any unrelated divergence, still fails. A mutation that widens the
+declaration past the channel paths is required to fail, precisely so the declaration cannot grow
+into the thing it replaced.
+
+**A consumer who wants authored channels is not blocked by the engine, only by the binding.**
+`core`'s draft would carry them today. That is a real seam and this ADR does not close it; it
+records that the demo does not use it and that the React surface does not expose it.

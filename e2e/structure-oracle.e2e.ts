@@ -2,6 +2,7 @@
 import { expect, test } from "@playwright/test";
 
 import { structuralDifference, structureOf } from "./fixtures/structure.js";
+import { GPS_ONLY, SENSOR_CHANNEL_ONLY } from "./fixtures/track-shape.js";
 
 /**
  * The structural oracle, tested before anything is asserted with it.
@@ -151,5 +152,69 @@ test("the structure of a document names every path it contains", () => {
     "a:array",
     "a[].b:string",
     "a[]:object",
+  ]);
+});
+
+test("the sensor declaration exempts the model's channel state and not a consumer's", () => {
+  /**
+   * **The discriminator for the declaration itself, not for the mechanism.** An earlier version
+   * matched any segment named `channels`, wherever it occurred. That reads well and is wrong:
+   * `Track.meta` is `Record<string, JSONValue>` and belongs to the consumer, so a payload with a
+   * `channels` key of its own would have vanished from the comparison — the declaration widening
+   * past what it names, which is the failure the plan's mutation list calls out by name.
+   *
+   * So the real list is asserted here: the model's own channel state is exempt, and an identically
+   * named thing under consumer JSON is still compared.
+   */
+  const withSensor = {
+    channels: [{ key: "cadence" }],
+    points: [{ lat: 1, channels: { cadence: 60 } }],
+    stats: { channels: { cadence: { avg: 60 } } },
+    meta: { channels: { one: 1 } },
+  };
+  const withoutSensor = {
+    points: [{ lat: 1 }],
+    stats: {},
+    meta: { channels: { two: "a different shape" } },
+  };
+
+  expect(
+    structuralDifference(withSensor, withoutSensor, { optional: SENSOR_CHANNEL_ONLY }),
+  ).toStrictEqual(["only in a: meta.channels.one:number", "only in b: meta.channels.two:string"]);
+});
+
+test("the sensor declaration exempts the exported spellings too, and no more", () => {
+  // The export keeps the same state under its own names, and `meta` rides along in the feature's
+  // properties exactly as the model carries it.
+  const exported = {
+    features: [
+      {
+        properties: {
+          channels: { cadence: [[60]] },
+          channelDescriptors: [{ key: "cadence" }],
+          stats: { channels: { cadence: { avg: 60 } } },
+          meta: { channels: { one: 1 } },
+        },
+      },
+    ],
+  };
+  // `stats` itself is present on both: what the declaration exempts is the channel roll-up
+  // inside it, not the object, and a fixture missing the object entirely would be testing that.
+  const plain = { features: [{ properties: { stats: {}, meta: {} } }] };
+
+  expect(structuralDifference(exported, plain, { optional: SENSOR_CHANNEL_ONLY })).toStrictEqual([
+    "only in a: features[].properties.meta.channels.one:number",
+    "only in a: features[].properties.meta.channels:object",
+  ]);
+});
+
+test("the GPS declaration exempts the five published fields and nothing beside them", () => {
+  // `accuracyMore` is not `accuracyM`, and a field the recorder does not supply is not excused by
+  // sitting next to ones it does.
+  const a = { points: [{ accuracyM: 5, speedMps: 2, invented: true }] };
+  const b = { points: [{}] };
+
+  expect(structuralDifference(a, b, { optional: GPS_ONLY })).toStrictEqual([
+    "only in a: points[].invented:boolean",
   ]);
 });

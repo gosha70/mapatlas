@@ -177,6 +177,40 @@ for (const key of events.flatMap((event) => event.blobKeys)) {
 window.__demoPersisted = { tracks, events, blobs };
 `;
 
+/**
+ * The declared channel and its samples, read out of the app's own store.
+ *
+ * A second probe rather than a widening of the first: that one answers "did the trip, its event
+ * and its photo survive a reload", and this one answers "was a channel recorded at all". Sharing
+ * one would make each scenario wait on the other's reads.
+ */
+const CHANNEL_PROBE = `
+import { createDemoStorage } from "/src/app/storage.js";
+
+const storage = createDemoStorage();
+const [summary] = await storage.trips.listTrackSummaries();
+const track = summary === undefined ? undefined : await storage.trips.getTrack(summary.id);
+window.__demoChannel = {
+  descriptors: (track?.channels ?? []).map((d) => d.key),
+  sampled: (track?.points ?? []).filter((p) => p.channels?.cadence !== undefined).length,
+  values: (track?.points ?? []).map((p) => p.channels?.cadence),
+  points: track?.points.length ?? 0,
+};
+`;
+
+interface Channels {
+  readonly descriptors: string[];
+  readonly sampled: number;
+  readonly values: (number | undefined)[];
+  readonly points: number;
+}
+
+async function readChannels(page: Page): Promise<Channels> {
+  await page.addScriptTag({ type: "module", content: CHANNEL_PROBE });
+  await page.waitForFunction(() => "__demoChannel" in window);
+  return page.evaluate(() => (window as unknown as { __demoChannel: Channels }).__demoChannel);
+}
+
 interface Persisted {
   readonly tracks: { id: string; points: number }[];
   readonly events: { id: string; trackId?: string; blobKeys: string[] }[];
@@ -395,6 +429,88 @@ test("a hand-drawn trip is saved with its pinned event, and reopens carrying it"
   expect(track?.properties?.["origin"], "the saved trip was not marked as authored").toBe(
     "authored",
   );
+
+  expect(consoleFor(page).problems()).toStrictEqual([]);
+});
+
+test("a recorded trip carries the declared channel, sampled and persisted", async ({ page }) => {
+  /**
+   * **The channel reached the points, and survived to the store** (T7.1c increment 1).
+   *
+   * `channel.test.ts` proves the fake instrument's own two properties — deterministic, and a
+   * function of nothing else in the document. It cannot show that `useTrackRecorder` accepted the
+   * source, started it, merged its samples onto the fixes the policy kept, or that any of it
+   * reached IndexedDB: that is a real recorder over a real store, and only this lane has one.
+   *
+   * **A descriptor is not a sample** (ADR-0029). `chartable()` starts from the descriptors and
+   * keeps only those something sampled, so a track that declared the channel and recorded nothing
+   * is indistinguishable from one that never declared it — which is why both halves are asserted
+   * here, on the stored track rather than on anything rendered.
+   */
+  watchConsole(page);
+  await openDemo(page);
+
+  await recordTwoFixes(page);
+
+  await page.locator("#record-stop").click();
+  await expect(page.locator("#app-review")).toBeVisible();
+
+  // A fresh document: the recorder and its source are gone, so only what reached the store answers.
+  await page.reload();
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+
+  const stored = await readPersisted(page);
+  expect(stored.tracks, "no trip was stored to look at").toHaveLength(1);
+
+  const channels = await readChannels(page);
+
+  // The descriptor the consumer declared, carried onto the finalized track.
+  expect(channels.descriptors, "the declared channel is not on the stored track").toStrictEqual([
+    "cadence",
+  ]);
+
+  // And samples behind it. Without this the assertion above is satisfied by a source that never
+  // started — the exact case ADR-0029 says renders nothing while looking correct.
+  expect(
+    channels.points,
+    "a one-point track cannot show whether every point carries it",
+  ).toBeGreaterThan(1);
+
+  /**
+   * **At least one kept point carries the key — and that is deliberately all this lane claims.**
+   *
+   * The pairing that matters is with the descriptor above. `chartable()` starts from the
+   * descriptors and keeps only those something sampled (ADR-0029), so a track that declared the
+   * channel and recorded nothing renders no chart while looking correct — the descriptor alone is
+   * not evidence, and this is the half that makes it one.
+   *
+   * **Why not "every point", or even "more than one".** Both were tried and both are
+   * scheduler-dependent rather than contractual. `channels` is optional (ADR-0009);
+   * `createPollingSensorSource.start()` schedules an interval and does not read at zero;
+   * `mergeSensorSamples` takes only samples at or before the point; and `recorder.ts:544` *drains*
+   * the pending samples at each kept point, so a point carries a value exactly when one arrived in
+   * its window. Measured: `unsampled ⊆ {0}` passed in isolation and failed twice in a loaded
+   * full-lane run with `[0, 1]`; widening the fixes did not fix it; and at a 25 ms cadence a
+   * loaded run kept only **two** geolocation fixes at all, so even the number of points is a
+   * function of machine load. A healthy run producing `[null, 78]` is legal, and an assertion that
+   * failed on it would make CI scheduling part of the product contract.
+   *
+   * That the fake source keeps sampling rather than emitting once is a property of the source, and
+   * it is owned where it is deterministic: `channel.test.ts` drives the sequence directly.
+   */
+  expect(
+    channels.sampled,
+    "the channel was declared but nothing was ever sampled onto a point",
+  ).toBeGreaterThan(0);
+
+  // The values are the sequence the demo's source produces, not something the recorder invented:
+  // every sampled value is one this channel can emit.
+  const emitted = new Set([60, 66, 72, 78, 84, 90, 96]);
+  for (const value of channels.values) {
+    if (value !== undefined) {
+      expect(emitted, `a value the demo's channel never emits: ${String(value)}`).toContain(value);
+    }
+  }
 
   expect(consoleFor(page).problems()).toStrictEqual([]);
 });

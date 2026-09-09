@@ -8,7 +8,19 @@
 
 1. **T7.1c discharges one criterion of `PRD.md` §6**, not Phase 7's exit: *"Adding a `SensorSource`
    (even the fake) attaches a telemetry channel to every track point, charts it in review, and
-   exports it — with zero core changes."* `tasks.md` states the acceptance criterion as *"the
+   exports it — with zero core changes."*
+
+   > **Amended 2026-09-09, during increment 1.** The sentence quoted above was `PRD.md`'s at the
+   > time this plan was written, and it is **stronger than the engine's contract** — quoting it
+   > without checking it against ADR-0009 is the mistake, not the plan's use of it. A polling
+   > source cannot attach a sample to the first kept fix (`start()` schedules an interval and does
+   > not read at zero) and `mergeSensorSamples` excludes samples newer than a point; ADR-0009
+   > already made `channels` optional, merged into **kept** points under a `maxAgeMs` policy, with
+   > sensor failure non-fatal. `PRD.md` §6 now reads *"attaches available telemetry samples to the
+   > kept track points"*, with its own dated note. **No bar in this plan changes**: `tasks.md`'s
+   > T7.1c observable — channel arrays exported, re-import reproducing the chart — was always
+   > compatible with sparse samples, and increment 1's evidence asserts what the fixture can
+   > honestly claim rather than what the old sentence asked for. `tasks.md` states the acceptance criterion as *"the
    exported file contains the channel arrays and re-importing reproduces the chart"*. The
    getting-started documentation is **T7.2**'s and closes the phase.
 2. **The channel was fenced here on 2026-09-06**, before T7.1's plan was written. T7.1's scope line

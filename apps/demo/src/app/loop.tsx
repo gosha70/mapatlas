@@ -33,6 +33,7 @@ import {
 import type { JSONValue, TileSource } from "@mapatlas/core";
 
 import { Authoring } from "./authoring.js";
+import { createDemoChannel } from "./channel.js";
 import { buildTripExport, downloadDocument } from "./export.js";
 import { releaseMedia } from "./media.js";
 import { DEMO_CATEGORIES, demoPresentation } from "./presentation.js";
@@ -48,7 +49,20 @@ export interface LoopProps {
 }
 
 export function Loop({ storage, sources, style, terrain, initialCamera }: LoopProps): ReactElement {
-  const recorder = useTrackRecorder({ store: storage.trips });
+  /**
+   * The fake telemetry channel (T7.1c increment 1).
+   *
+   * **Built once and held**, not per render: `useTrackRecorder` treats a new `sensors` array as a
+   * new set of sources, and a source rebuilt mid-recording would be started again with its
+   * sequence reset. `useMemo` with no dependencies is the smallest thing that is right here,
+   * because nothing about this source depends on props.
+   *
+   * **Wired at the published seam and nowhere else.** Swapping this for a real instrument is one
+   * constructor call in `channel.ts`; nothing under `packages/` changes, which is the claim
+   * `PRD.md` §6 makes about `SensorSource`.
+   */
+  const sensors = useMemo(() => [createDemoChannel()], []);
+  const recorder = useTrackRecorder({ store: storage.trips, sensors });
 
   /** The finalized trip under review. Set by `stop()`, cleared when a new recording starts. */
   const [reviewing, setReviewing] = useState<Track | undefined>(undefined);

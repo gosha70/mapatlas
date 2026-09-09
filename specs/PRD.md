@@ -107,8 +107,21 @@ products embed.
 - The demo app records a trip and events **fully offline**, persists across reload, and
   exports valid GeoJSON.
 - Swapping in a `MediaAnalyzer` (even a stub) adds photo-analysis with **zero core changes**.
-- Adding a `SensorSource` (even the fake) attaches a telemetry channel to every track point,
-  charts it in review, and exports it — with **zero core changes**.
+- Adding a `SensorSource` (even the fake) attaches available telemetry samples to the kept track
+  points, charts the channel in review, and exports it — with **zero core changes**. A point for
+  which no eligible sample exists carries no value for that channel, and sensor absence or failure
+  never loses the trip.
+
+  > **Corrected 2026-09-09**, during T7.1c. This read *"attaches a telemetry channel to every track
+  > point"*, which is stronger than the engine's own contract and cannot be met by any polling
+  > source. `createPollingSensorSource.start()` schedules an interval and does not sample
+  > synchronously, and `mergeSensorSamples` excludes samples *newer* than the point — so the fix
+  > kept when recording starts precedes every sample that will ever exist. ADR-0009 already said
+  > so: `channels` is optional, samples are merged into **kept** points under a `maxAgeMs` policy,
+  > and *"a sensor failure is non-fatal"*. The gap is not only the first point either: a strap that
+  > disconnects mid-ride leaves one wherever it went quiet. The wording, not the engine, was wrong.
+  > Measured in the demo before this was changed: at a 500 ms cadence a three-point track carried a
+  > value on the last point only.
 - A consumer supplies an `EventPresentation` and its categories render as its own marks —
   with **zero renderer changes** and no engine knowledge of the categories.
 - A trip drawn by hand is byte-for-byte the same shape as a recorded one: same review, same

@@ -165,6 +165,10 @@ build/fixture/
 # `npm run demo:build`; never committed, for the same reason `build/fixture/` is not.
 /build/demo/
 
+# The getting-started example, installed and built as a consumer would (T7.2). Packed
+# tarballs, a `node_modules` of its own and a bundle, rebuilt from empty on every browser run.
+/build/quick-start/
+
 # Playwright
 /test-results/
 /playwright-report/

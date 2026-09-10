@@ -60,8 +60,10 @@ jobs:
     name: browser · real Chromium
     runs-on: ubuntu-latest
     # Bounded on purpose: a stuck browser download or a wedged WebGL process should cost a
-    # known amount of runner time rather than the platform default of six hours.
-    timeout-minutes: 20
+    # known amount of runner time rather than the platform default of six hours. Raised for
+    # T7.2: one of the five servers packs the engine, installs it into a project of its own and
+    # builds the getting-started example before it can serve anything.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 
@@ -83,7 +85,7 @@ jobs:
 
       - name: Browser tests
         run: npm run test:browser
-        timeout-minutes: 10
+        timeout-minutes: 14
 
       - name: Upload traces and screenshots
         if: failure()

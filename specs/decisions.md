@@ -1482,3 +1482,68 @@ into the thing it replaced.
 **A consumer who wants authored channels is not blocked by the engine, only by the binding.**
 `core`'s draft would carry them today. That is a real seam and this ADR does not close it; it
 records that the demo does not use it and that the React surface does not expose it.
+
+## ADR-0041 — The getting-started example is built and run as a packed consumer, never through the workspace
+
+**Status.** Accepted (T7.2 increment 1).
+
+**Context.** `PRD.md` §6's first criterion is that *"a developer can embed the React `<MapCanvas>` +
+recorder + event composer and get the full record→pin→photo→review loop working in an afternoon"*,
+and `tasks.md` states the acceptance criterion as *"a new consumer following the doc reaches a
+working map+event loop."* Both are claims about **executing the documentation's code**, and prose
+describing an API drifts the first time the API moves — silently, and looking correct throughout.
+So the example is a real source file rather than a snippet.
+
+That immediately raises the question of *where* it is compiled. `tsc --build` inside this monorepo
+resolves `@mapatlas/*` through TypeScript project references, and vite resolves them through
+`apps/demo/vite.config.ts`'s aliases — *"every alias here is a bare package name resolving to its
+built entry: what `npm install` would give."* A new consumer has neither. An example that compiled
+and ran under those would prove the example works **here**, which is not the claim being made.
+`check-packaging.mjs` already refuses that shape for imports: it packs the tarballs, installs them
+into a scratch project under `--install-strategy=nested`, and resolves there, *"because a
+`package.json` read in place cannot tell you what a consumer gets."*
+
+**Decision.** The example lives at `examples/quick-start`, outside the npm workspaces, and is
+**always built from packed tarballs in a project of its own**. `scripts/consumer-project.mjs`
+describes that project once — the packages to pack, the third-party versions to pin, the example
+files to copy — and both lanes build it with the same function:
+
+- **`check:packaging`** installs it and runs the project's own `tsc` against the example's own
+  `tsconfig.json`. This runs in a job with no browser.
+- **The browser lane** (`scripts/serve-example.mjs`) installs the same project, builds it with the
+  project's own vite, and serves the bundle on its own origin for `e2e/quick-start.e2e.ts`.
+
+**Neither lane may fall back to a workspace alias** — no `paths` entry, no project reference, no
+vite alias. If the example only builds inside this repository, that is a finding about the packages
+and not a detail of the harness.
+
+**Two lanes rather than one, because they cannot be one.** CI's `gates` job has no Chromium, and
+`check-packaging` deletes its scratch project when it finishes, so "install the tarballs and run the
+app" is not a thing one gate does. `tsc` proves the types line up; it says nothing about whether a
+map mounts, a fix is kept, or a photo comes back out of storage.
+
+**The example ships no `package.json`, and that is deliberate.** A checked-in manifest would name
+`@mapatlas/*` at versions no registry can serve — the workspace versions are `0.0.0` — so an install
+from it would either fail or resolve something else entirely. The engine arrives as tarballs, and
+every third-party version is **read from the root manifest** rather than written down, so the
+example is compiled and run against the versions the rest of the repository exercises.
+`maplibre-gl` is pointedly *not* among them: it reaches the project through
+`@mapatlas/maplibre`'s peer dependency, which is what makes `check:packaging`'s "installed at the
+consumer root, so it really is a peer" assertion able to fail.
+
+**Map data is explicit consumer-supplied configuration.** The example points at a same-origin
+`/basemap.pmtiles` — an archive the reader is told to bring — and its `TileSource`, its
+`source-layer` names, its paint and its camera are all in the example's own source. The browser lane
+cuts a synthetic archive and serves it at exactly that path: the same code, given a source the lane
+cut for itself, which is how `/lab` and the app-shell scenario already work.
+
+**The two obvious alternatives are both forbidden.** Reading `apps/demo`'s archives or
+`e2e/fixtures`' would put repository-only state inside a copyable example, which is the whole thing
+the packed-consumer boundary exists to stop. Baking in a public community or government tile host
+would violate `CLAUDE.md`'s *"no bundled map tiles"* and *"no telemetry / network egress the consumer
+did not configure"* — a copyable snippet pointing at somebody else's tile server sends every reader's
+traffic there under a usage policy this project has not agreed to.
+
+**What keeps this honest is a mutation, not an intention.** Removing the configured source from the
+example must take the browser lane's named-colour count to zero. If the map still paints without it,
+the example is drawing from something the reader was never given.

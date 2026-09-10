@@ -75,5 +75,19 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 180_000,
     },
+    {
+      // **The getting-started example, built as a consumer** (T7.2). Packed tarballs installed
+      // into a project of their own, built by that project's own vite, with no workspace alias
+      // and no project reference — so what runs here is what a reader who ran `npm install`
+      // would get, not what resolves inside this repository.
+      //
+      // **Never reused**, for the preview server's reason and one more: the tarballs are repacked
+      // from whatever `dist` currently holds, so an already-running server would serve an example
+      // linked against an older engine while reporting the current one.
+      command: "node scripts/serve-example.mjs",
+      url: "http://127.0.0.1:5178/",
+      reuseExistingServer: false,
+      timeout: 300_000,
+    },
   ],
 });

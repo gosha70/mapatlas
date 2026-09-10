@@ -119,12 +119,7 @@ export async function buildLabArchives(region) {
   await writeArchive(terrainPath, rasterTiles, metadata, { tileType: "png", compression: "none" });
   await writeArchive(contourPath, vectorTiles, metadata, { tileType: "mvt", compression: "gzip" });
 
-  const basemapPath = join(dir, "basemap.pmtiles");
-  const basemapTiles = syntheticBasemapTiles(region, addresses);
-  await writeArchive(basemapPath, basemapTiles, metadata, {
-    tileType: "mvt",
-    compression: "none",
-  });
+  const { path: basemapPath, tiles: basemapTiles } = await buildBasemapArchive(region, dir);
 
   // A manifest beside them, so the scenario reads paths rather than recomputing a temp name.
   writeFileSync(
@@ -138,8 +133,39 @@ export async function buildLabArchives(region) {
     basemapPath,
     terrainTiles: rasterTiles.length,
     contourTiles: vectorTiles.length,
-    basemapTiles: basemapTiles.length,
+    basemapTiles,
   };
+}
+
+/**
+ * Cut the basemap on its own, into a directory the caller names.
+ *
+ * **Exported because a second lane needs this archive and not the other two.** The
+ * getting-started example declares one vector source, and its browser lane serves an archive at
+ * the path the example points at — the source the lane cut for itself, in place of the map data
+ * the reader is told to bring. Building the terrain and contour pair for it would cost a DEM
+ * render and a contour trace that nothing in that lane reads.
+ *
+ * @param {{ bounds: number[], minZoom: number, maxZoom: number }} region
+ * @param {string} dir where to write `basemap.pmtiles`
+ * @returns {Promise<{ path: string, tiles: number }>}
+ */
+export async function buildBasemapArchive(region, dir) {
+  const addresses = [...tilesInRange(region.bounds, region.minZoom, region.maxZoom)];
+  const path = join(dir, "basemap.pmtiles");
+  const tiles = syntheticBasemapTiles(region, addresses);
+  await writeArchive(
+    path,
+    tiles,
+    {
+      name: "synthetic-basemap",
+      bounds: region.bounds,
+      minzoom: region.minZoom,
+      maxzoom: region.maxZoom,
+    },
+    { tileType: "mvt", compression: "none" },
+  );
+  return { path, tiles: tiles.length };
 }
 
 /**

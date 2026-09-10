@@ -3,6 +3,11 @@
 > Bars set 2026-09-09, **before any candidate implementation**, against `main` at `3cc2256`
 > (the merge of PR #39, which closed T7.1c). Every survey finding below was read out of the code
 > or the specs at that commit and is cited; nothing is repeated forward from a plan.
+>
+> **Amended 2026-09-10 (increment 1), in the required-mutations list only.** One mutation was
+> written here that cannot reach the assertion it names. It is struck through rather than deleted,
+> with the mutation that does reach it beside it — a bar that was wrong is evidence about how this
+> plan was written, and a list that quietly loses its mistakes cannot be audited.
 
 ## What is settled — cite, do not re-open
 
@@ -277,7 +282,18 @@ Each must turn a named assertion red:
   fails, in both directions (edit the example instead → the same gate fails);
 - the example's `MapCanvas` given no sources → the named-colour count on the canvas is zero, where
   a typecheck passes and a canvas is still present;
-- the example's recorder never started → the review reports no kept fixes;
+- ~~the example's recorder never started → the review reports no kept fixes~~ — **malformed;
+  found and replaced in increment 1.** An example that never starts the recorder cannot reach a
+  review at all: the mutant is killed by the scenario's wait for `data-status="recording"`, several
+  steps before any review exists, so it says nothing about whether *"more than one fix"* is
+  observable. What it actually checks is that the flow cannot proceed without a recording, which
+  was never in doubt. Replaced by the mutation that reaches the oracle: **the recording is given no
+  fix beyond the browser's initial position → the review reports a distance of exactly `0.00 km`
+  and the stored track holds exactly one point**, both red. Recorded here because the first attempt
+  at *that* replacement was invalid too — cutting the scenario's fix list to a single entry still
+  leaves two positions, since `test.use({ geolocation })` supplies one before the loop runs, and it
+  survived. A mutant that never mutated is indistinguishable from a blind oracle, and the
+  distinction is the whole value of the list;
 - the photo dropped between the composer and storage → the review renders no image, distinguishably
   from an event that was never written at all;
 - an event written by the example but never stored → the scenario's storage read fails;

@@ -1,0 +1,21 @@
+{
+  // A consumer's own tsconfig: it extends nothing in this repository, because a consumer has
+  // nothing in this repository. `@mapatlas/*` resolves through `node_modules` and no `paths`
+  // entry rescues it — an example that only compiles against a workspace alias would prove that
+  // the packages work here, which is what nobody is asking.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    // No ambient `@types/*` beyond what the imports themselves pull in. `vite-env.d.ts` declares
+    // the two bundler-resolved modules by hand rather than depending on `vite/client`.
+    "types": []
+  },
+  "include": ["src"]
+}

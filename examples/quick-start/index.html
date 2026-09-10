@@ -1,0 +1,37 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MAP-ATLAS quick start</title>
+    <style>
+      body {
+        font:
+          16px/1.5 system-ui,
+          sans-serif;
+        max-width: 44rem;
+        margin: 0 auto;
+        padding: 2rem 1.5rem;
+        color-scheme: light;
+        background: #fff;
+        color: #1f2328;
+      }
+      /* `MapCanvas` renders at 100% of its container, so the container is what gives the map a
+         height. Without one it collapses to nothing and the map draws nothing — which looks
+         like a broken engine rather than a missing stylesheet rule. */
+      #map {
+        height: 24rem;
+      }
+      /* `TripReview` renders its own map as its first child, and it needs a height for exactly
+         the same reason. */
+      .mapatlas-trip-review > div:first-child {
+        height: 24rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

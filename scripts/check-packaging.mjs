@@ -15,24 +15,22 @@
  * peer dependency puts it where the application can reach it.
  */
 
-import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-
-/**
- * Packed together because these are workspace versions no registry can serve.
- *
- * The **whole publish graph** of anything checked below, not just the packages named in the
- * checks: `@mapatlas/react` depends on `@mapatlas/recorder-web`, so omitting it would leave the
- * scratch install trying to fetch `0.0.0` from npm and failing for a reason that has nothing to
- * do with what the gate is asking.
- */
-const PACKAGES = ["packages/core", "packages/recorder-web", "packages/maplibre", "packages/react"];
+import {
+  CONSUMER_DEPENDENCIES,
+  CommandFailed,
+  EXACT_VERSION,
+  EXAMPLE,
+  PACKAGES,
+  ROOT as root,
+  createConsumerProject,
+  manifest,
+  run,
+} from "./consumer-project.mjs";
 
 /** What a consumer must be able to reach from their own project root. */
 const CONSUMER_IMPORTS = ["@mapatlas/maplibre", "maplibre-gl/dist/maplibre-gl.css"];
@@ -75,12 +73,6 @@ const TEST_ONLY_DEPENDENCIES = [{ package: "@mapatlas/react", dependency: "react
  * the file a consumer's resolver reads.
  */
 const EXACT_PEERS = [{ package: "@mapatlas/maplibre", peer: "maplibre-gl" }];
-
-const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
-
-function manifest(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
-}
 
 /**
  * Every file a package itself ships, so an artifact can be searched rather than sampled.
@@ -134,54 +126,6 @@ function lockfileDrift() {
   return drift;
 }
 
-/**
- * A command whose own diagnosis survives.
- *
- * `execFileSync` throws `Command failed: …` and a script stack, which says nothing about
- * *why*: a registry timeout, an auth failure, a cache permission error and a corrupt tarball
- * all look identical. The tool already explained itself on stderr, so the failure carries
- * that explanation rather than replacing it with a stack.
- */
-class CommandFailed extends Error {
-  constructor(command, args, cwd, cause) {
-    super(`\`${[command, ...args].join(" ")}\` failed in ${cwd}`);
-    this.name = "CommandFailed";
-    this.status = typeof cause.status === "number" ? cause.status : null;
-    // A spawn that never reached npm — a missing cwd, npm not on PATH — reports here and
-    // nowhere else, since there is no tool output to relay.
-    this.code = typeof cause.code === "string" ? cause.code : null;
-    this.stdout = typeof cause.stdout === "string" ? cause.stdout : "";
-    this.stderr = typeof cause.stderr === "string" ? cause.stderr : "";
-  }
-
-  report() {
-    const exit = this.status === null ? "" : ` (exit ${String(this.status)})`;
-    const sections = [`check:packaging — ${this.message}${exit}`];
-    if (this.code !== null) sections.push(`  the command itself could not run: ${this.code}`);
-    // stderr first: npm puts the actionable line there, and it is what a reader needs.
-    if (this.stderr.trim() !== "") sections.push(`\n--- npm stderr ---\n${this.stderr.trimEnd()}`);
-    if (this.stdout.trim() !== "") sections.push(`\n--- npm stdout ---\n${this.stdout.trimEnd()}`);
-    return sections.join("\n");
-  }
-}
-
-/**
- * `--loglevel=error` rather than `--silent`: stdout stays clean enough to read a tarball
- * filename off, while anything that actually goes wrong still reaches stderr, where the
- * failure path above can relay it.
- */
-function run(command, args, cwd) {
-  try {
-    return execFileSync(command, args, {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch (error) {
-    throw new CommandFailed(command, args, cwd, error ?? {});
-  }
-}
-
 /** One voice for every failure, whether it stopped the run early or at the end. */
 function report(failures) {
   console.error(
@@ -211,32 +155,10 @@ const scratch = mkdtempSync(join(tmpdir(), "mapatlas-packaging-"));
 const failures = [];
 
 try {
-  const tarballs = PACKAGES.map((directory) => {
-    const output = run(
-      "npm",
-      ["pack", "--loglevel=error", "--pack-destination", scratch],
-      join(root, directory),
-    );
-    return join(scratch, output.trim().split("\n").at(-1));
-  });
-
-  writeFileSync(
-    join(scratch, "package.json"),
-    `${JSON.stringify({ name: "consumer", private: true, version: "0.0.0", type: "module" }, null, 2)}\n`,
-  );
-
-  run(
-    "npm",
-    [
-      "install",
-      "--install-strategy=nested",
-      "--no-audit",
-      "--no-fund",
-      "--loglevel=error",
-      ...tarballs,
-    ],
-    scratch,
-  );
+  // The packed engine, the pinned third-party dependencies, and the example's real files —
+  // built by the same function the browser lane builds its project with, so the two lanes cannot
+  // come to disagree about what "a consumer" means.
+  createConsumerProject({ into: scratch, dependencies: CONSUMER_DEPENDENCIES });
 
   const require = createRequire(join(scratch, "consumer.js"));
   for (const specifier of CONSUMER_IMPORTS) {
@@ -327,11 +249,36 @@ try {
   if (!existsSync(join(scratch, "node_modules/maplibre-gl/package.json"))) {
     failures.push("maplibre-gl is not installed at the consumer root — it is not a peer");
   }
+
+  /**
+   * **Does the getting-started example compile for a consumer?** (T7.2)
+   *
+   * The claim `PRD.md` §6 makes is that a developer reaches a working loop by following the
+   * document, and prose describing an API drifts the first time the API moves — silently, and
+   * looking correct the whole time. So the example is a real source file, and this is the half
+   * of its proof that needs no browser: it typechecks against the **packed** packages, in a
+   * project with no `paths` entry, no project reference and no vite alias to rescue an import.
+   *
+   * `tsc` from the project's own `node_modules`, run with the project's own `tsconfig.json` —
+   * the one the example ships and a reader would copy. Compiling with this repository's compiler
+   * or this repository's options would be answering a different question.
+   *
+   * It proves the types line up and nothing more: that a map mounts and an event is stored is
+   * the browser lane's, on the same packed artifact.
+   */
+  try {
+    run(process.execPath, [join(scratch, "node_modules/typescript/bin/tsc"), "--noEmit"], scratch);
+  } catch (error) {
+    failures.push(
+      `${EXAMPLE} does not compile against the packed packages — ` +
+        (error instanceof CommandFailed ? error.report() : String(error)),
+    );
+  }
 } catch (error) {
   // A gate that cannot say why it failed is a gate nobody trusts. npm's own diagnosis is
   // relayed verbatim rather than summarised into `Command failed`.
   console.error(
-    error instanceof CommandFailed ? error.report() : `check:packaging — ${String(error)}`,
+    `check:packaging — ${error instanceof CommandFailed ? error.report() : String(error)}`,
   );
   process.exitCode = 1;
 } finally {
@@ -347,5 +294,6 @@ if (failures.length > 0) {
 
 console.log(
   `check:packaging — clean (${PACKAGES.length} packed, ${CONSUMER_IMPORTS.length} resolved, ` +
-    `${EXECUTED_IMPORTS.length} executed, ${EXACT_PEERS.length} pinned peer, nested resolution)`,
+    `${EXECUTED_IMPORTS.length} executed, ${EXACT_PEERS.length} pinned peer, ` +
+    `${EXAMPLE} compiled, nested resolution)`,
 );

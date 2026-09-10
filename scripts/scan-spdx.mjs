@@ -12,7 +12,9 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const IDENTIFIER = "SPDX-License-Identifier: Apache-2.0";
-const ROOTS = ["packages", "apps", "scripts"];
+// `examples` is here because it ships source a reader is invited to copy — an unlicensed
+// snippet is worse than an unlicensed internal file, not better.
+const ROOTS = ["packages", "apps", "scripts", "examples"];
 const EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".mjs", ".js", ".jsx"];
 const SKIP_DIRECTORIES = new Set(["node_modules", "dist", ".git"]);
 const EXEMPT = new Set(["eslint.config.mjs", "vitest.config.ts"]);

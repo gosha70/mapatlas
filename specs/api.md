@@ -7,6 +7,397 @@
 > same change plus an ADR in [`decisions.md`](decisions.md). Types are illustrative
 > TypeScript — names and shapes are the contract; bodies are the build.
 
+## 0. Quick start
+
+> Every block in this section is **the same bytes** as a real file under
+> [`examples/quick-start`](../examples/quick-start) — `check:docs` fails the build when a block and
+> its file disagree, in either direction. That example is compiled against the packed packages by
+> `check:packaging` and run in a real browser by `e2e/quick-start.e2e.ts`, so what is below is code
+> that is known to work rather than code that looked right when it was written.
+
+The loop itself. Four surfaces from `@mapatlas/react`, one store from
+`@mapatlas/storage-idb`, and the types from `@mapatlas/core` — nothing reaches past a package
+entry point, because a consumer cannot.
+
+```tsx examples/quick-start/src/quick-start.tsx
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Record a track, pin an event on it with a photo, review what was recorded.
+ *
+ * Everything here arrives from a published entry point — `@mapatlas/react` for the hooks and
+ * components, `@mapatlas/storage-idb` for persistence, `@mapatlas/core` for the types. Nothing
+ * reaches into a `dist` path or an internal module, because a consumer cannot.
+ *
+ * What it leaves out is deliberate: offline regions, hand-authored tracks, telemetry channels,
+ * an AI analyzer and a trip list are all built and all proved elsewhere. This is the loop the
+ * first afternoon needs and nothing beyond it.
+ */
+
+import { useCallback, useState } from "react";
+import type { ReactElement } from "react";
+
+import type { LatLng, MapEvent, MediaRef, Track } from "@mapatlas/core";
+import {
+  EventComposer,
+  MapCanvas,
+  TripReview,
+  useEventLog,
+  useTrackRecorder,
+} from "@mapatlas/react";
+import { createIdbStorageAdapter } from "@mapatlas/storage-idb";
+
+import { BASEMAP, CAMERA } from "./map-source.js";
+
+/**
+ * One adapter per document, not one per render. It opens its IndexedDB connection lazily and
+ * memoises it, so a second adapter would open a second connection to the same database.
+ */
+const store = createIdbStorageAdapter();
+
+/** Stable across renders: `MapCanvas` treats a new array as a new source stack. */
+const sources = [BASEMAP];
+
+/**
+ * Give back the blobs an event that was never written was carrying.
+ *
+ * **`EventComposer` seals itself before it calls `onSave`, and from that moment these bytes are
+ * yours** — the composer will not delete them again, unmount included (ADR-0027). So a rejected
+ * write leaves nothing referencing the blob and nothing that will ever collect it. This is the
+ * obligation that comes with the handover, not error-handling ceremony.
+ *
+ * A delete that itself fails is reported as **unconfirmed** rather than swallowed or retried: the
+ * bytes may or may not still be there, and claiming either would be a guess.
+ */
+async function releaseMedia(media: readonly MediaRef[]): Promise<string | undefined> {
+  const stranded: string[] = [];
+  for (const item of media) {
+    if (item.blobKey === undefined) continue;
+    try {
+      await store.deleteBlob(item.blobKey);
+    } catch {
+      stranded.push(item.blobKey);
+    }
+  }
+  return stranded.length === 0 ? undefined : `${String(stranded.length)} photo left unconfirmed`;
+}
+
+export function QuickStart(): ReactElement {
+  const recorder = useTrackRecorder({ store });
+  const log = useEventLog(store);
+
+  /** The finalized trip under review; `undefined` means the live map is showing instead. */
+  const [trip, setTrip] = useState<Track | undefined>(undefined);
+  /** Where the composer is open, if it is. */
+  const [pinAt, setPinAt] = useState<LatLng | undefined>(undefined);
+  /** The events written during this recording, so the review can render them. */
+  const [pinned, setPinned] = useState<MapEvent[]>([]);
+  /** The last event write that failed, surfaced rather than discarded silently. */
+  const [failure, setFailure] = useState<string | undefined>(undefined);
+
+  const recording = recorder.status === "recording";
+
+  const start = useCallback(async (): Promise<void> => {
+    setTrip(undefined);
+    setPinned([]);
+    await recorder.start();
+  }, [recorder]);
+
+  /**
+   * Stop, then bind the events to the trip they belong to.
+   *
+   * An event pinned mid-recording cannot carry a `trackId`: `useTrackRecorder` publishes the
+   * track only when `stop()` resolves, so there is no id to write yet. The events are stored
+   * unbound and updated here, before the review is shown.
+   */
+  const stop = useCallback(async (): Promise<void> => {
+    const track = await recorder.stop();
+    const bound = pinned.map((event) => ({ ...event, trackId: track.id }));
+    for (const event of bound) await log.updateEvent(event);
+    setPinned(bound);
+    setTrip(track);
+  }, [log, pinned, recorder]);
+
+  /**
+   * Write the composed event. The composer has already written the photo to `store` as a blob
+   * and handed back a `MediaRef` carrying its `blobKey`; this stores the event that references
+   * it, and `TripReview` resolves the key back to an image through the same store.
+   *
+   * **The rejection path is not optional, and it is not symmetric with the success path.** The
+   * composer sealed itself before calling this, so it can neither retry nor cancel — a failed
+   * write that left the composition open would leave a trip with no way to finish and a photo
+   * nothing references. Both halves are handled below.
+   */
+  const save = useCallback(
+    async (input: Omit<MapEvent, "id" | "position">, at: LatLng): Promise<void> => {
+      try {
+        const written = await log.addEvent({ ...input, position: at });
+        setPinned((events) => [...events, written]);
+        setFailure(undefined);
+      } catch (reason) {
+        const unconfirmed = await releaseMedia(input.media);
+        const why = reason instanceof Error ? reason.message : String(reason);
+        setFailure(unconfirmed === undefined ? why : `${why} (${unconfirmed})`);
+      } finally {
+        // **In `finally`, and that is the point rather than tidiness.** Closing the composition
+        // is what makes the trip operable again: Stop is disabled while a composer is open, so
+        // leaving `pinAt` set after a rejection would hold the trip open with no control able to
+        // clear it. The notice above is what stops that from being a silent discard.
+        //
+        // Clearing it here also means Stop cannot run *during* a write — there is only ever one
+        // composer, so `pinAt` is the whole in-flight window.
+        setPinAt(undefined);
+      }
+    },
+    [log],
+  );
+
+  return (
+    <>
+      <h1>Field log</h1>
+      <p id="status" data-status={recorder.status}>
+        {`Recorder ${recorder.status}. ${String(pinned.length)} event${pinned.length === 1 ? "" : "s"}.`}
+      </p>
+
+      {failure === undefined ? null : (
+        <p id="failure" role="alert">
+          {`The event was not saved: ${failure}`}
+        </p>
+      )}
+
+      <p>
+        <button id="start" type="button" onClick={() => void start()} disabled={recording}>
+          Start recording
+        </button>{" "}
+        <button
+          id="stop"
+          type="button"
+          onClick={() => void stop()}
+          // Not while a composer is open: its event is not written yet, so finalizing now would
+          // leave it unbound with nothing on screen able to reach it.
+          disabled={!recording || pinAt !== undefined}
+        >
+          Stop and review
+        </button>
+      </p>
+
+      {trip === undefined ? (
+        <div id="map">
+          <MapCanvas
+            sources={sources}
+            initialCamera={CAMERA}
+            events={pinned}
+            {...(recorder.livePoint === undefined ? {} : { livePoint: recorder.livePoint })}
+            {...(recording ? { onMapTap: setPinAt } : {})}
+          />
+        </div>
+      ) : (
+        <div id="review">
+          <TripReview track={trip} events={pinned} store={store} sources={sources} />
+        </div>
+      )}
+
+      {pinAt === undefined ? null : (
+        <EventComposer
+          at={pinAt}
+          store={store}
+          mode="photo"
+          onSave={(input) => void save(input, pinAt)}
+          onCancel={() => {
+            setPinAt(undefined);
+          }}
+        />
+      )}
+    </>
+  );
+}
+```
+
+**The one thing you have to bring.** MAP-ATLAS bundles no tiles and points at no tile server,
+so the archive and the camera below describe *your* data.
+
+```ts examples/quick-start/src/map-source.ts
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * The one thing this example cannot supply for you: map data.
+ *
+ * MAP-ATLAS bundles no tiles and points at no tile server. A copyable snippet that named
+ * somebody else's host would send every reader's traffic there under terms this project never
+ * agreed to, so the archive below is **yours**: a `.pmtiles` file your own application serves.
+ * Drop it in `public/` and it is served at the path used here; change the URL if it lives
+ * somewhere else.
+ *
+ * Both values describe your data rather than this example. `CAMERA` has to open inside the
+ * ground your archive covers — a map opened over tiles the archive does not have renders as an
+ * empty box with a correct attribution line, which is the most confusing way for this to fail.
+ */
+
+import type { LatLng, TileSource } from "@mapatlas/core";
+
+export const BASEMAP: TileSource = {
+  id: "basemap",
+  kind: "vector",
+  transport: "pmtiles",
+  // Same-origin: whatever is in `public/` is served from the root of your application.
+  url: new URL("/basemap.pmtiles", window.location.href).toString(),
+  // Rendered verbatim, over the map. This is a licence obligation you inherit with the data,
+  // not a caption — replace it with your source's terms.
+  attribution: "© your basemap provider",
+  // The layer names are your archive's, not the engine's: `source-layer` selects a layer inside
+  // the vector tiles, so these have to match what your archive actually contains.
+  styleLayers: [
+    {
+      id: "basemap-earth",
+      type: "fill",
+      source: "basemap",
+      "source-layer": "earth",
+      paint: { "fill-color": "#e8e4dc" },
+    },
+    {
+      id: "basemap-water",
+      type: "fill",
+      source: "basemap",
+      "source-layer": "water",
+      paint: { "fill-color": "#0f8a7a" },
+    },
+  ],
+};
+
+export const CAMERA: { center: LatLng; zoom: number } = {
+  center: { lat: 45.84, lng: 6.865 },
+  zoom: 12,
+};
+```
+
+Mounting, and the two lines MapLibre needs from every application that embeds it.
+
+```tsx examples/quick-start/src/main.tsx
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * The entry point, and the two lines MapLibre needs from every application that embeds it.
+ *
+ * The stylesheet is not optional: without it MapLibre's controls are unstyled and map marks
+ * lose their positioning. Neither is the worker URL — MapLibre resolves its worker relative to
+ * the importing chunk, and under a bundler that rewrites imports the request 404s silently: the
+ * map constructs, the style parses, and no tile is ever built. The `?worker&url` syntax is
+ * Vite's; other bundlers have their own.
+ */
+
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+
+import "maplibre-gl/dist/maplibre-gl.css";
+import { setWorkerUrl } from "maplibre-gl";
+import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
+
+import { QuickStart } from "./quick-start.js";
+
+setWorkerUrl(workerUrl);
+
+const mount = document.querySelector("#app");
+if (mount === null) throw new Error("index.html has no #app element to mount into");
+
+createRoot(mount).render(
+  <StrictMode>
+    <QuickStart />
+  </StrictMode>,
+);
+```
+
+The page. The height rules are not decoration — a map in a container with no height collapses
+and draws nothing.
+
+```html examples/quick-start/index.html
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MAP-ATLAS quick start</title>
+    <style>
+      body {
+        font:
+          16px/1.5 system-ui,
+          sans-serif;
+        max-width: 44rem;
+        margin: 0 auto;
+        padding: 2rem 1.5rem;
+        color-scheme: light;
+        background: #fff;
+        color: #1f2328;
+      }
+      /* `MapCanvas` renders at 100% of its container, so the container is what gives the map a
+         height. Without one it collapses to nothing and the map draws nothing — which looks
+         like a broken engine rather than a missing stylesheet rule. */
+      #map {
+        height: 24rem;
+      }
+      /* `TripReview` renders its own map as its first child, and it needs a height for exactly
+         the same reason. */
+      .mapatlas-trip-review > div:first-child {
+        height: 24rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+```
+
+The two bundler-resolved imports `main.tsx` uses, declared rather than pulled in with an
+ambient type package.
+
+```ts examples/quick-start/src/vite-env.d.ts
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * The two bundler-resolved imports MapLibre's bootstrap needs.
+ *
+ * Both are the consumer's job — the stylesheet is a side-effect import, and `?worker&url`
+ * resolves to a served URL rather than to a module — and neither has types of its own. Declared
+ * here rather than by depending on `vite/client`, which would pull an ambient type package in
+ * for exactly these two lines.
+ */
+
+declare module "*.css";
+
+declare module "*?worker&url" {
+  const url: string;
+  export default url;
+}
+```
+
+And the compiler options this is checked against.
+
+```json examples/quick-start/tsconfig.json
+{
+  // A consumer's own tsconfig: it extends nothing in this repository, because a consumer has
+  // nothing in this repository. `@mapatlas/*` resolves through `node_modules` and no `paths`
+  // entry rescues it — an example that only compiles against a workspace alias would prove that
+  // the packages work here, which is what nobody is asking.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    // No ambient `@types/*` beyond what the imports themselves pull in. `vite-env.d.ts` declares
+    // the two bundler-resolved modules by hand rather than depending on `vite/client`.
+    "types": []
+  },
+  "include": ["src"]
+}
+```
+
 ## 1. Core data types (`@mapatlas/core`)
 
 ```ts

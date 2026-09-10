@@ -46,6 +46,12 @@ jobs:
       - name: Scan — SPDX headers
         run: npm run scan:spdx
 
+      # Before the packaging gate because it is offline and instant: a quick start that has
+      # come apart from the example should not wait on a registry to say so. After the format
+      # check, because the comparison is byte for byte and prettier owns the bytes.
+      - name: Check — documentation drift
+        run: npm run check:docs
+
       # Packs the real tarballs and installs them unhoisted, which is the one environment
       # every other gate cannot reach: inside this workspace an undeclared dependency
       # resolves anyway, and a consumer's would not.

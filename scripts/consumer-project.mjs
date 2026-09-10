@@ -18,7 +18,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -203,6 +203,25 @@ export function packWorkspacePackages(into) {
     );
     return join(into, output.trim().split("\n").at(-1));
   });
+}
+
+/**
+ * Every file a consumer project receives, flattened and relative to the example's root.
+ *
+ * The documentation gate reads this: a quick start that showed five of six files would hand a
+ * reader a project that does not build, and nothing about the five it *did* show would be wrong.
+ * Derived from the same list the copy walks, so the two cannot disagree about what "the example"
+ * is.
+ */
+export function exampleFiles() {
+  const walk = (relative) => {
+    const absolute = join(ROOT, EXAMPLE, relative);
+    if (!statSync(absolute).isDirectory()) return [relative];
+    return readdirSync(absolute)
+      .sort()
+      .flatMap((entry) => walk(`${relative}/${entry}`));
+  };
+  return EXAMPLE_FILES.flatMap((entry) => walk(entry));
 }
 
 /** Copy the example's real files — the same bytes the document shows — into a project. */

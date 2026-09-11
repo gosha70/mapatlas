@@ -2,7 +2,14 @@
 import { describe, expect, it } from "vitest";
 
 import { EXAMPLE } from "./consumer-project.mjs";
-import { SECTION, blocksInSection, driftBetween } from "./docs-drift.mjs";
+import {
+  SECTION,
+  blocksInSection,
+  driftBetween,
+  framed,
+  generatedRegions,
+  projectionDrift,
+} from "./docs-drift.mjs";
 
 /**
  * Documents built here rather than read from the repository.
@@ -168,5 +175,164 @@ describe("driftBetween", () => {
     expect(check(markdown, { "src/a.ts": "one\n", "src/b.ts": "two\n" })).toStrictEqual([
       expect.stringContaining("never shows"),
     ]);
+  });
+});
+
+describe("generatedRegions", () => {
+  it("returns the text between the markers, and neither marker", () => {
+    const markdown = document_(
+      "intro",
+      "<!-- generated:status -->",
+      "a",
+      "b",
+      "<!-- /generated:status -->",
+      "after",
+    );
+    expect(generatedRegions(markdown)).toStrictEqual([
+      { name: "status", content: "a\nb", line: 2, from: 2, to: 5 },
+    ]);
+  });
+
+  it("refuses a region that is never closed, rather than swallowing the rest of the file", () => {
+    expect(() => generatedRegions(document_("<!-- generated:status -->", "a"))).toThrow(
+      /never closed/,
+    );
+  });
+
+  it("refuses a close that does not match the region that is open", () => {
+    expect(() =>
+      generatedRegions(document_("<!-- generated:status -->", "<!-- /generated:install -->")),
+    ).toThrow(/not open/);
+  });
+
+  it("refuses a region opened inside another, which has no meaning", () => {
+    expect(() =>
+      generatedRegions(document_("<!-- generated:status -->", "<!-- generated:install -->")),
+    ).toThrow(/still open/);
+  });
+});
+
+describe("projectionDrift", () => {
+  const check = (markdown, expected) =>
+    projectionDrift({
+      document: "README.md",
+      regions: generatedRegions(markdown),
+      expected: new Map(Object.entries(expected)),
+    });
+
+  it("says nothing when the block is what the repository projects", () => {
+    const markdown = document_(
+      "<!-- generated:status -->",
+      "",
+      "one",
+      "",
+      "<!-- /generated:status -->",
+    );
+    expect(check(markdown, { status: "one" })).toStrictEqual([]);
+  });
+
+  /**
+   * The failure the whole mechanism exists for: `tasks.md` moved and the block did not, or the
+   * block was edited by hand. Neither is distinguishable from the other and neither is allowed.
+   */
+  it("reports a block that no longer matches its projection", () => {
+    const markdown = document_("<!-- generated:status -->", "one", "<!-- /generated:status -->");
+    expect(check(markdown, { status: "two" })).toStrictEqual([
+      expect.stringContaining("is not what this repository projects"),
+    ]);
+  });
+
+  it("refuses a region nothing knows how to produce", () => {
+    const markdown = document_("<!-- generated:invented -->", "x", "<!-- /generated:invented -->");
+    expect(check(markdown, {})).toStrictEqual([
+      expect.stringContaining("not a projection this gate knows how to produce"),
+    ]);
+  });
+
+  /** A projection with nowhere to land is a claim the document quietly stopped making. */
+  it("reports a projection the document has no region for", () => {
+    expect(check(document_("nothing here"), { status: "one" })).toStrictEqual([
+      expect.stringContaining('no "<!-- generated:status -->" region'),
+    ]);
+  });
+
+  it("refuses the same region twice, since two copies can say different things", () => {
+    const markdown = document_(
+      "<!-- generated:status -->",
+      "",
+      "one",
+      "",
+      "<!-- /generated:status -->",
+      "<!-- generated:status -->",
+      "",
+      "one",
+      "",
+      "<!-- /generated:status -->",
+    );
+    expect(check(markdown, { status: "one" })).toStrictEqual([
+      expect.stringContaining("appears twice"),
+    ]);
+  });
+});
+
+describe("a fence inside a generated region", () => {
+  const markdown = document_(
+    SECTION,
+    "<!-- generated:install -->",
+    block("sh", "npm install"),
+    "<!-- /generated:install -->",
+    block(`ts ${EXAMPLE}/src/a.ts`, "one"),
+  );
+
+  it("is marked as generated rather than read as a mirror", () => {
+    const blocks = blocksInSection(markdown, SECTION);
+    expect(blocks.map((b) => b.generated)).toStrictEqual([true, false]);
+  });
+
+  /**
+   * Otherwise it would be reported as a block naming no source file — asking two owners to check
+   * one block, and making it impossible to put a projected command in the quick start at all.
+   */
+  it("is not required to name a source file, because its projection checks it", () => {
+    expect(
+      driftBetween({
+        blocks: blocksInSection(markdown, SECTION),
+        shipped: new Map([["src/a.ts", "one\n"]]),
+      }),
+    ).toStrictEqual([]);
+  });
+});
+
+describe("the framing of a generated block", () => {
+  const check = (body) =>
+    projectionDrift({
+      document: "README.md",
+      regions: generatedRegions(
+        document_("<!-- generated:status -->", ...body, "<!-- /generated:status -->"),
+      ),
+      expected: new Map([["status", "one"]]),
+    });
+
+  it("is one blank line either side, which is what --write produces", () => {
+    expect(check(["", "one", ""])).toStrictEqual([]);
+    expect(framed("one")).toBe("\none\n");
+  });
+
+  /**
+   * **The hole a `trim()` left.** Four spaces of indentation turns a markdown table into a code
+   * block — the page renders differently and says something else — and a comparison that trimmed
+   * called the two identical. The framing is part of the projection, not noise around it.
+   */
+  it("rejects projected content that has been indented", () => {
+    expect(check(["", "    one", ""])).toStrictEqual([expect.stringContaining("byte for byte")]);
+  });
+
+  it("rejects a block run into the prose around it", () => {
+    expect(check(["one"])).toStrictEqual([expect.stringContaining("byte for byte")]);
+  });
+
+  it("rejects a blank line added or a trailing space left behind", () => {
+    expect(check(["", "", "one", ""])).toStrictEqual([expect.stringContaining("byte for byte")]);
+    expect(check(["", "one ", ""])).toStrictEqual([expect.stringContaining("byte for byte")]);
   });
 });

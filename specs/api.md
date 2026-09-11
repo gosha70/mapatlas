@@ -9,15 +9,76 @@
 
 ## 0. Quick start
 
-> Every block in this section is **the same bytes** as a real file under
-> [`examples/quick-start`](../examples/quick-start) — `check:docs` fails the build when a block and
-> its file disagree, in either direction. That example is compiled against the packed packages by
-> `check:packaging` and run in a real browser by `e2e/quick-start.e2e.ts`, so what is below is code
-> that is known to work rather than code that looked right when it was written.
+> **Every fenced block below is checked.** Each one is **either** the same bytes as a file under
+> [`examples/quick-start`](../examples/quick-start) **or** generated from this repository — the
+> install command is the generated one — and `check:docs` fails the build when either kind drifts.
+> That example is compiled against the **packed** packages by `check:packaging` and driven through
+> the whole loop in a real browser by `e2e/quick-start.e2e.ts`, so what follows is code that is
+> known to work rather than code that looked right when it was written.
 
-The loop itself. Four surfaces from `@mapatlas/react`, one store from
-`@mapatlas/storage-idb`, and the types from `@mapatlas/core` — nothing reaches past a package
-entry point, because a consumer cannot.
+By the end you have a page that records a track, drops an event on it with a photo attached, and
+reviews the finished trip — the loop `PRD.md` §6 asks for. It is a Vite + React project; the four
+surfaces come from §9 and the store from §5.
+
+**The one thing you must bring is map data.** MAP-ATLAS bundles no tiles and points at no tile
+server, by design — a snippet aimed at somebody else's host would send your readers' traffic there
+under terms this project never agreed to. So `map-source.ts` below describes *your* archive and
+*your* attribution, and the map draws nothing until you supply one.
+
+### Install
+
+**The packages are not on npm yet.** Every one is `0.0.0` and the registry has none of them, so
+`npm install @mapatlas/react` resolves nothing. What works today is the tarball route below — and
+it is not a workaround invented for this page: it is exactly what `check:packaging` and the browser
+lane do, which is why the example is known to build and run against it. When the packages publish,
+this block becomes an ordinary registry install.
+
+`maplibre-gl` is deliberately not in the list. It is a **peer** dependency of `@mapatlas/maplibre`
+pinned to one exact version (§8), and npm places it from that declaration — naming it yourself
+would mean pinning it yourself, which is the thing the peer declaration exists to prevent.
+
+<!-- generated:install -->
+
+```sh
+# Two directories are involved. Set both before running anything below.
+MAPATLAS=~/src/mapatlas        # a checkout of this repository
+PROJECT=~/src/my-field-app     # the project you are adding the engine to
+TARBALLS=/tmp/mapatlas
+
+# 1. Build the engine's tarballs. This runs in the checkout, where ./packages/* exist.
+cd "$MAPATLAS"
+npm install && npm run build
+mkdir -p "$TARBALLS"
+npm pack --pack-destination "$TARBALLS" \
+  ./packages/core \
+  ./packages/recorder-web \
+  ./packages/maplibre \
+  ./packages/react \
+  ./packages/storage-idb
+
+# 2. Install them, beside what a consumer supplies themselves. This runs in *your* project:
+#    without the cd, the engine is installed back into the checkout that just built it.
+cd "$PROJECT"
+npm install \
+  "$TARBALLS"/mapatlas-core-0.0.0.tgz \
+  "$TARBALLS"/mapatlas-recorder-web-0.0.0.tgz \
+  "$TARBALLS"/mapatlas-maplibre-0.0.0.tgz \
+  "$TARBALLS"/mapatlas-react-0.0.0.tgz \
+  "$TARBALLS"/mapatlas-storage-idb-0.0.0.tgz \
+  react@19.2.8 \
+  react-dom@19.2.8 \
+  typescript@6.0.3 \
+  @types/react@19.2.18 \
+  @types/react-dom@19.2.4 \
+  vite@8.2.2
+```
+
+<!-- /generated:install -->
+
+### The loop
+
+Four surfaces and one store. Everything arrives from a package entry point, because that is all a
+consumer has.
 
 ```tsx examples/quick-start/src/quick-start.tsx
 // SPDX-License-Identifier: Apache-2.0
@@ -213,8 +274,11 @@ export function QuickStart(): ReactElement {
 }
 ```
 
-**The one thing you have to bring.** MAP-ATLAS bundles no tiles and points at no tile server,
-so the archive and the camera below describe *your* data.
+### The map data you supply
+
+Both values below describe your data rather than this example. The camera has to open inside the
+ground your archive covers: a map opened over tiles the archive does not have renders as an empty
+box with a correct attribution line, which is the most confusing way for this to fail.
 
 ```ts examples/quick-start/src/map-source.ts
 // SPDX-License-Identifier: Apache-2.0
@@ -270,7 +334,11 @@ export const CAMERA: { center: LatLng; zoom: number } = {
 };
 ```
 
-Mounting, and the two lines MapLibre needs from every application that embeds it.
+### Mounting, and the two lines MapLibre needs
+
+Neither is optional and neither can be done for you. Without the stylesheet, MapLibre's controls
+are unstyled and map marks lose their positioning; without the worker URL the map constructs, the
+style parses, and no tile is ever built — a blank map with no error anywhere (§8).
 
 ```tsx examples/quick-start/src/main.tsx
 // SPDX-License-Identifier: Apache-2.0
@@ -306,8 +374,10 @@ createRoot(mount).render(
 );
 ```
 
-The page. The height rules are not decoration — a map in a container with no height collapses
-and draws nothing.
+### The page
+
+The height rules are not decoration. `MapCanvas` renders at 100% of its container, so a container
+with no height collapses and the map draws nothing.
 
 ```html examples/quick-start/index.html
 <!-- SPDX-License-Identifier: Apache-2.0 -->
@@ -349,8 +419,11 @@ and draws nothing.
 </html>
 ```
 
-The two bundler-resolved imports `main.tsx` uses, declared rather than pulled in with an
-ambient type package.
+### The two declarations and the compiler options
+
+`vite-env.d.ts` types the two bundler-resolved imports `main.tsx` uses, rather than pulling in an
+ambient type package for them. The `tsconfig.json` is the one the example is compiled with, and it
+extends nothing in this repository — a consumer has nothing in this repository.
 
 ```ts examples/quick-start/src/vite-env.d.ts
 // SPDX-License-Identifier: Apache-2.0
@@ -371,8 +444,6 @@ declare module "*?worker&url" {
   export default url;
 }
 ```
-
-And the compiler options this is checked against.
 
 ```json examples/quick-start/tsconfig.json
 {
@@ -397,6 +468,30 @@ And the compiler options this is checked against.
   "include": ["src"]
 }
 ```
+
+### What this leaves out, and where it is proved
+
+An afternoon is the criterion, so the example stops at the loop. Each of these is built, has
+browser evidence, and has its own record in [`tasks.md`](tasks.md):
+
+- **Offline regions** — downloading a `.pmtiles` region and drawing from it with the network cut
+  (§7, `OfflineRegionStore`; T6.1).
+- **Hand-authored trips** — drawing a track by tap, timing it, and saving it as a first-class
+  track (§4, `useTrackDraft`; T7.1b).
+- **Telemetry channels** — a `SensorSource` merged into kept points and charted in review (§3;
+  T7.1c).
+- **A photo analyzer** — the `MediaAnalyzer` seam `EventComposer` takes (§6). The example passes
+  none, which is the shipped default made explicit.
+- **A trip list, persistence controls and an installable shell** — all in `apps/demo`, which is
+  the same engine wired to the whole surface rather than to the first hour of it.
+
+### Import: the engine has it, the demo does not
+
+The demo exports valid GeoJSON and offers **no import affordance** — there is no button that reads
+a file back in. That is a limit of the demo's surface and not of the engine: `geoJSONToTrack` is
+published (§10), `core` tests it, and `e2e/app-channel.e2e.ts` drives a full export → delete →
+import round trip through the demo's own storage seam. A consumer who needs import calls the
+published function; nothing here is in the way.
 
 ## 1. Core data types (`@mapatlas/core`)
 

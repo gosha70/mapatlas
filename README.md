@@ -19,23 +19,44 @@ supplied by whoever consumes it:
 MAP-ATLAS is the reusable core; the value-added domain, private data, and any
 privacy/sharing rules live in the consuming application.
 
+## Quick start
+
+The getting-started path is a section of the API contract itself:
+**[`specs/api.md` § 0 — Quick start](specs/api.md#0-quick-start)**. It takes an empty project to a
+working record → pin → photo → review loop, and every fenced block in it is checked: each one is
+**either** the same bytes as a file under [`examples/quick-start`](examples/quick-start) **or**
+generated from this repository — the install command is the generated one. That example is
+compiled against the packed packages by `check:packaging` and run in a real browser by
+`e2e/quick-start.e2e.ts`. Nothing is repeated here, because a second copy is a copy that drifts.
+
 ## Status
 
-**Phase 0 complete; core implementation begins in Phase 1.**
+<!-- generated:status -->
 
-The monorepo, toolchain, and enforcement are in place and green in CI: seven build units
-wired with TypeScript project references, strict TypeScript, Vitest, ESLint/Prettier, and
-the import-isolation and SPDX scanners that keep the one architectural rule honest. No
-product runtime logic exists yet — the engine's data model, seams, and track logic are
-[Phase 1](specs/roadmap.md).
+[`specs/tasks.md`](specs/tasks.md) carries a **Done** record for 12 of its 49 tasks; the first in document order is T4.6.
+A zero below means *no Done record*, not *no completed work*: this table reports what that
+file records, and is generated from it.
 
-The [`specs/`](specs/) directory remains the governing contract: build against it, and
-change it in the same commit as any public interface it describes.
+| Phase | Tasks | With a Done record |
+| --- | --- | --- |
+| 0 — Toolchain & skeleton | 8 | 0 |
+| 1 — `@mapatlas/core` | 13 | 0 |
+| 2 — `@mapatlas/storage-idb` | 3 | 0 |
+| 3 — `@mapatlas/recorder-web` | 4 | 0 |
+| 4 — `@mapatlas/maplibre` | 9 | 2 |
+| 5 — `@mapatlas/react` | 6 | 5 |
+| 6 — Offline regions | 2 | 2 |
+| 7 — Demo + docs | 4 | 3 |
 
-## What's here now (the build seed)
+<!-- /generated:status -->
+
+[`specs/roadmap.md`](specs/roadmap.md) has the phase order and each phase's exit criteria.
+
+## The governing contract
 
 Everything in [`specs/`](specs/) is **harness-neutral** — the canonical source of truth,
-written so that different build harnesses can consume the *same* brief:
+written so that different build harnesses can consume the *same* brief. Build against it, and
+change it in the same commit as any public interface it describes:
 
 - [`specs/PRD.md`](specs/PRD.md) — product requirements: users, problems, scope, non-goals.
 - [`specs/architecture.md`](specs/architecture.md) — package layout, module boundaries, data model, offline + AI seams.
@@ -55,11 +76,11 @@ the same `specs/`. Any other harness should read `specs/` directly.
   a native adapter for background tracking in a Capacitor/Cordova shell).
 - **AI is optional and pluggable**: a `MediaAnalyzer` interface (photo → labels/summary).
   No model is bundled; consumers provide on-device or remote analyzers.
-- **Consumers load the renderer's stylesheet.** `@mapatlas/maplibre` does not import
-  `maplibre-gl/dist/maplibre-gl.css` on your behalf — injecting global CSS is a decision about
-  your document, not ours, and it breaks anyone bundling CSS themselves. Import it once
-  alongside the engine. Without it MapLibre's controls are unstyled and map marks lose their
-  absolute positioning, so they render outside the map.
+- **A consumer wires two things themselves**: the renderer's stylesheet and MapLibre's worker
+  URL. Neither can be done for you — injecting global CSS is a decision about your document, and
+  the worker's URL depends on your bundler. The quick start above shows both, in code that is
+  checked; [`packages/maplibre/README.md`](packages/maplibre/README.md) explains what breaks
+  without them.
 
 ## License
 

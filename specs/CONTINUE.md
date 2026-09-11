@@ -8,64 +8,51 @@ specific failure modes are cheap to avoid once named.
 
 ## Where the work is
 
-**Every planned task is closed. What is left is Phase 7's exit, and it is a ruling rather than a
-build.** `roadmap.md` states that exit as *"the success criteria in `PRD.md` §6 are demonstrably met
-end-to-end, offline"* — delegating the criteria themselves to §6, and adding one qualifier of its
-own: **end-to-end, offline**. That qualifier adds no import requirement. T7.2 was the last planned
-task, and all four of Phase 7's now carry a Done record; the backlog as a whole does not, which is
-the first recorded item below.
+**Phase 7 has exited and M1 is reached.** **ADR-0042** is the decision — the evidence, the
+alternative not taken, the consequences and the reversal rule — and `roadmap.md`'s exit carries a
+dated note pointing at it: `PRD.md` §6's first criterion is met for a developer who **builds
+the packages from a checkout** — `api.md` §0 takes them there, every fenced block in it is checked,
+and both lanes run the example — and is **not** met for one who runs `npm install @mapatlas/react`,
+because nothing is published. The exit was taken on the reading that **§6 names no registry**, and
+`api.md` §0 states the situation plainly so no reader is misled while that stands. **Publishing is
+post-v1**, in `roadmap.md`'s list, not an omission in Phase 7.
 
-**The one thing standing between here and that exit is not a missing feature.** §6's first
-criterion is that *"a developer can embed the React `<MapCanvas>` + recorder + event composer and
-get the full record→pin→photo→review loop working in an afternoon, reading only `api.md`"*, and
-`tasks.md` states T7.2's acceptance as *"a new consumer following the doc reaches a working
-map+event loop."* That is now true for a reader who **builds from a checkout** — `specs/api.md` §0
-takes them there, the example is compiled against the packed packages and run in a browser, and
-following the document by hand produces a project that typechecks and builds. It is **not** true for
-a reader who runs `npm install @mapatlas/react`: the packages are not published. Every one is
-`0.0.0`, the registry has none of them, and there is no release workflow.
+If a later owner rules that §6 does require a registry install, that is an amendment to ADR-0042
+and to `roadmap.md`'s note, plus a release task — versioning off `0.0.0`, a publish workflow with provenance,
+org ownership, and what `check:packaging` should assert about a *published* artifact rather than a
+packed one. It is not a reinterpretation of the note.
 
-**That is a decision for the owner, and nothing here pre-empts it.** Either §6 is satisfied by a
-documented, checked, build-from-source path — in which case Phase 7 exits and publishing is
-post-v1 — or it is not, in which case a **release task** is the last thing before the exit and it is
-a real one: versioning, provenance, org ownership and a publish workflow, none of which a
-documentation task should decide in passing. `api.md` §0 states the situation plainly rather than
-glossing it, so whichever way the ruling goes, no reader is misled in the meantime.
+**So there is no phase to finish. What is buildable is `tasks.md`'s Phase 8** — three follow-ups,
+post-v1, unowned and unordered, each with acceptance criteria written when they were recorded rather
+than when someone picks them up.
 
-Three things are recorded and unowned. None is assigned to anybody; each is named so it is not
-discovered after the last planned task is called done.
+- **T8.1 — the fixture-build flake.** Tracked in **issue #30**; read it first. Its acceptance
+  criterion is deliberately awkward: the failure must be made **reproducible on demand** before it
+  is fixed, because a change that merely stops it being observed is indistinguishable from one that
+  fixed it.
+- **T8.2 — per-package READMEs.** Five of six packages ship none, and the sixth's code is checked by
+  nothing. `check:docs`'s rules are already per-document, so the mechanism exists.
+- **T8.3 — the `/lab` retirement audit.** Each lab-owned browser assertion mapped to a root-app
+  oracle or deliberately retired, shown by the mapping rather than by the suite staying green —
+  deleting a scenario also leaves it green.
 
-- **`tasks.md` under-records what is built.** It carries a **Done** record for 13 of its 49 tasks.
-  The first in document order is T4.6, and Phases 0–3 — 28 tasks, every one of them built, tested
-  and shipping inside the packed tarballs — carry none, as does T5.5, whose replay cursor
-  `TripReview` renders today. The README's status block is projected from those records and says so
-  in its own words: *a zero means no Done record, not no completed work*. **Backfilling them is a
-  real task and a hazardous one** — every existing record cites PRs, commits and plans, and writing
-  37 of them from memory is exactly the mistake 7c exists to stop. Whoever takes it on reads the
-  history, not the recollection.
-- **There is no release path.** Six packages at `0.0.0`, `publishConfig.access: public` on each, no
-  publish workflow, nothing on the registry. `check:packaging` proves the *artifact* a consumer
-  would get is sound; it says nothing about how one would get it.
-- **Eviction-aware re-download, quota UI and download resume remain unbuilt.** T6.1 fenced them
-  out, T6.2's survey answered them as questions rather than scope, `architecture.md`'s claim that
-  the store *"supports eviction-aware re-download"* was removed because nothing implements it, and
-  no task since has taken any of them on.
+Two things remain recorded and **not** written up as tasks. Neither is assigned; both are named so
+they are not discovered as surprises.
 
-And one intermittent failure is **already tracked, in issue #30** — read it before spending an
-hour on this, because two hours have been spent already. It records the same test,
-`scripts/fixture/build.test.mjs > … > reads each admitted cell once, by its own id, in the order
-coverage returned them`, failing with a **byte-identical signature on two different commits**: run
-`34083663330` on `9c05be6` during PR #28, and run `34152303724` on `fcd5194` during PR #31. Each
-passed on re-run with no code change. A third occurrence, run `34490218769` on `d8410f0` during
-PR #42, carries the same signature again and likewise passed unchanged.
-
-That a failure reproduces byte-for-byte across three different commits is much stronger evidence
-than any one of them: `0 sample(s) covered by none and 3955 by more than one, over 46x113` means
-the 35×113 crop for `N45E007` lands **entirely inside** the 46×113 crop for `N45E006`, where the
-two should sit side by side. It is not an edge row and not noise. The issue records the `cropFor`
-epsilon as the only lead and marks it unproven, and records `readCrops` double-pushing as
-**checked and eliminated** — an async generator cannot be iterated twice. A green re-run is
-evidence that it is intermittent, not that it is fine.
+- **`tasks.md` under-records what is built.** It carries a **Done** record for 13 of its 52 tasks.
+  The first in document order is T4.6, and Phases 0–3 — 28 tasks, every one built, tested and
+  shipping inside the packed tarballs — carry none, as does T5.5, whose replay cursor `TripReview`
+  renders today. The README's status block is projected from those records and says so in its own
+  words: *a zero means no Done record, not no completed work*. **Backfilling them is a real task and
+  a hazardous one** — every existing record cites PRs, commits and plans, and writing the **36
+  built tasks that lack one** from memory is exactly what mistake 7c exists to stop. (Phase 8's
+  three are unrecorded because they are unbuilt, which is a different thing; the totals in the
+  README's block count both.) Whoever takes it on reads the history, not
+  the recollection.
+- **Eviction-aware re-download, quota UI and download resume remain unbuilt.** T6.1 fenced them out,
+  T6.2's survey answered them as questions rather than scope, `architecture.md`'s claim that the
+  store *"supports eviction-aware re-download"* was removed because nothing implements it, and no
+  task since has taken any of them on.
 
 ### T7.2 is closed (2026-09-10, PRs #41, #42 and #43)
 

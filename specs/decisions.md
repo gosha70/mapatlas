@@ -1547,3 +1547,72 @@ traffic there under a usage policy this project has not agreed to.
 **What keeps this honest is a mutation, not an intention.** Removing the configured source from the
 example must take the browser lane's named-colour count to zero. If the map still paints without it,
 the example is drawing from something the reader was never given.
+
+## ADR-0042 — Phase 7 exits on a build-from-source reading of `PRD.md` §6; publishing is post-v1
+
+**Status.** Accepted 2026-09-11, by the repository owner, on T7.2's close-out.
+
+**Context.** `roadmap.md`'s Phase 7 exit is *"the success criteria in `PRD.md` §6 are demonstrably
+met end-to-end, offline"*. §6's first criterion is that *"a developer can embed the React
+`<MapCanvas>` + recorder + event composer and get the full record→pin→photo→review loop working in
+an afternoon, reading only `api.md`."*
+
+T7.2 discharged that criterion for a developer who **builds the packages from a checkout**, and
+surveyed one thing the plan had not: **the packages are not published.** Every one is `0.0.0`, the
+registry returns 404 for `@mapatlas/core` and `@mapatlas/react`, and there is no publish workflow.
+So `npm install @mapatlas/react` — the natural first line of any getting-started page — resolves
+nothing. Both proving lanes pack tarballs for exactly this reason.
+
+That leaves the exit turning on a reading rather than on a measurement, which is why it is an ADR
+and not a status line.
+
+**Decision.** **Phase 7 exits, on the reading that §6 names no registry.** §6 asks what a developer
+can *embed and get working*; it does not name a distribution channel, and the answer it does ask for
+is checked in two lanes. **M1 is therefore reached** — `roadmap.md` defines it as Phases 0–7 green,
+and §6 is met on this reading. **Publishing moves to `roadmap.md`'s post-v1 list**, as a release
+problem rather than an engine one.
+
+**The evidence the reading rests on**, all of it mechanical:
+
+- `specs/api.md` §0 takes an empty project to the full loop, and **every fenced block in it is
+  checked** — six are the same bytes as a file under `examples/quick-start`, the seventh is
+  generated from the packages this repository builds, and `check:docs` fails the build when either
+  drifts in either direction.
+- `check:packaging` compiles that example against the **packed tarballs** in a project with no
+  workspace resolution; `e2e/quick-start.e2e.ts` runs the same example, built from the same
+  tarballs, in a real browser, and attributes each step of the loop to its own observable
+  (ADR-0041).
+- Following the document by hand — both install steps verbatim, then the six files — produces a
+  project that typechecks and builds, with `maplibre-gl` placed from the peer declaration.
+
+**What is not true, stated because the reading depends on it being visible.** A reader who reaches
+for the registry gets nothing, and `api.md` §0 says so in prose rather than glossing it. The exit is
+defensible only while that remains visible: a quick start that implied a registry install would make
+this ADR a fiction.
+
+**The alternative not taken: release first.** Making §6 true for the ordinary reader by publishing
+before exiting Phase 7. Rejected as scope rather than as a bad idea — it is versioning off `0.0.0`,
+a publish workflow with provenance, npm org ownership, and a decision about what `check:packaging`
+should assert of a *published* artifact rather than a packed one. None of that is engine work, none
+of it is what §6 measures, and a documentation task should not decide any of it in passing. It is
+recorded as post-v1 so it is chosen deliberately rather than arrived at.
+
+**Consequences.**
+
+- Phases 0–7 are closed; `tasks.md` has no unblocked task in them. What is buildable is Phase 8 —
+  post-v1 follow-ups, explicitly outside M1.
+- The engine's embeddability claim is now a *checked* claim rather than an asserted one, and stays
+  that way only while `check:docs` and `check:packaging` both run in `verify` **and
+  `e2e/quick-start.e2e.ts` remains in the required browser lane**. All three are load-bearing and
+  none substitutes for another: `check:docs` holds the document to the example, `check:packaging`
+  proves that example compiles against the packed tarballs, and only the browser lane observes the
+  loop actually running. Deleting that scenario would leave both `verify` gates green while the
+  end-to-end half of the claim quietly stopped being tested — and the browser lane is a **separate
+  CI job**, so `verify` passing says nothing about it.
+- A consumer's first step is a build, not an install. That is a real cost and is the thing a release
+  task would remove.
+
+**Reversal rule.** If an owner later rules that §6 requires a registry install, that is an
+**amendment to this ADR and to `roadmap.md`'s exit note, plus a release task** — not a
+reinterpretation of either. The reading is recorded here precisely so that changing it has to be
+done out loud.

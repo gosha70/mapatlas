@@ -8,38 +8,89 @@ specific failure modes are cheap to avoid once named.
 
 ## Where the work is
 
-**T7.2 — getting started.** `tasks.md` has its scope and acceptance criteria, and `roadmap.md` has
-Phase 7's exit — which T7.2 is the **last planned task before**. **Survey both before planning
-anything**; nothing here pre-plans it, deliberately, because the survey is the next session's and
-it should meet the task on its own terms.
+**Every planned task is closed. What is left is Phase 7's exit, and it is a ruling rather than a
+build.** `roadmap.md` states that exit as *"the success criteria in `PRD.md` §6 are demonstrably met
+end-to-end, offline"* — delegating the criteria themselves to §6, and adding one qualifier of its
+own: **end-to-end, offline**. That qualifier adds no import requirement. T7.2 was the last planned
+task, and all four of Phase 7's now carry a Done record; the backlog as a whole does not, which is
+the first recorded item below.
 
-Three things it will inherit and should know before it starts.
+**The one thing standing between here and that exit is not a missing feature.** §6's first
+criterion is that *"a developer can embed the React `<MapCanvas>` + recorder + event composer and
+get the full record→pin→photo→review loop working in an afternoon, reading only `api.md`"*, and
+`tasks.md` states T7.2's acceptance as *"a new consumer following the doc reaches a working
+map+event loop."* That is now true for a reader who **builds from a checkout** — `specs/api.md` §0
+takes them there, the example is compiled against the packed packages and run in a browser, and
+following the document by hand produces a project that typechecks and builds. It is **not** true for
+a reader who runs `npm install @mapatlas/react`: the packages are not published. Every one is
+`0.0.0`, the registry has none of them, and there is no release workflow.
 
-- **A known demo-surface gap, and it is *not* silently assigned to T7.2.** The engine publishes
-  import, and T7.1c proves an export → import round trip through the demo's storage seam — but the
-  **demo exposes export with no import affordance**. Documentation can *expose* that fact; it
-  cannot make the demo satisfy it, and no amount of prose closes a missing control.
+**That is a decision for the owner, and nothing here pre-empts it.** Either §6 is satisfied by a
+documented, checked, build-from-source path — in which case Phase 7 exits and publishing is
+post-v1 — or it is not, in which case a **release task** is the last thing before the exit and it is
+a real one: versioning, provenance, org ownership and a publish workflow, none of which a
+documentation task should decide in passing. `api.md` §0 states the situation plainly rather than
+glossing it, so whichever way the ruling goes, no reader is misled in the meantime.
 
-  **Whether Phase 7 requires it is undecided, and T7.2's survey has to decide it.** `PRD.md` §6's
-  demo criterion is *"records a trip and events fully offline, persists across reload, and exports
-  valid GeoJSON"* — export only. Export **and** import appear in §4 item 14 and in §5's *In* list,
-  but those sections are titled *"Core user stories (engine capabilities)"* and *"Scope (v1 = the
-  engine)"* — they are the engine's, and the engine has them and tests them in `core`. So "the demo
-  must offer import" is a reading, not a requirement anything states. T7.2 either finds it is required and says where that is
-  written, hands it to a follow-up task, or records it as an accepted limitation of the demo — but
-  decides in the open, rather than leaving it to be discovered after the last planned task is
-  called done. If the answer is that it *is* required, that is an amendment to `PRD.md` or
-  `roadmap.md`, not a note in a survey.
-- **The demo is the doc's subject, and every planned demo task is closed.** The record → pin →
-  photo → review loop,
-  GeoJSON export, a trip list, hand authoring, a telemetry channel, an offline region and an
-  offline app shell are all built and all have browser evidence — with the open question above the
-  only surface anything has flagged. T7.2 is derived from `api.md` and from what the demo already
-  does; it is not a licence to add product to make the prose easier.
-- **Eviction-aware re-download, quota UI and download resume remain unbuilt and unowned.** T6.1
-  fenced them out, T6.2's survey answered them as questions rather than scope, `architecture.md`'s
-  claim that the store "supports eviction-aware re-download" was removed because nothing implements
-  it, and no task since has taken any of them on.
+Three things are recorded and unowned. None is assigned to anybody; each is named so it is not
+discovered after the last planned task is called done.
+
+- **`tasks.md` under-records what is built.** It carries a **Done** record for 13 of its 49 tasks.
+  The first in document order is T4.6, and Phases 0–3 — 28 tasks, every one of them built, tested
+  and shipping inside the packed tarballs — carry none, as does T5.5, whose replay cursor
+  `TripReview` renders today. The README's status block is projected from those records and says so
+  in its own words: *a zero means no Done record, not no completed work*. **Backfilling them is a
+  real task and a hazardous one** — every existing record cites PRs, commits and plans, and writing
+  37 of them from memory is exactly the mistake 7c exists to stop. Whoever takes it on reads the
+  history, not the recollection.
+- **There is no release path.** Six packages at `0.0.0`, `publishConfig.access: public` on each, no
+  publish workflow, nothing on the registry. `check:packaging` proves the *artifact* a consumer
+  would get is sound; it says nothing about how one would get it.
+- **Eviction-aware re-download, quota UI and download resume remain unbuilt.** T6.1 fenced them
+  out, T6.2's survey answered them as questions rather than scope, `architecture.md`'s claim that
+  the store *"supports eviction-aware re-download"* was removed because nothing implements it, and
+  no task since has taken any of them on.
+
+And one intermittent failure is **already tracked, in issue #30** — read it before spending an
+hour on this, because two hours have been spent already. It records the same test,
+`scripts/fixture/build.test.mjs > … > reads each admitted cell once, by its own id, in the order
+coverage returned them`, failing with a **byte-identical signature on two different commits**: run
+`34083663330` on `9c05be6` during PR #28, and run `34152303724` on `fcd5194` during PR #31. Each
+passed on re-run with no code change. A third occurrence, run `34490218769` on `d8410f0` during
+PR #42, carries the same signature again and likewise passed unchanged.
+
+That a failure reproduces byte-for-byte across three different commits is much stronger evidence
+than any one of them: `0 sample(s) covered by none and 3955 by more than one, over 46x113` means
+the 35×113 crop for `N45E007` lands **entirely inside** the 46×113 crop for `N45E006`, where the
+two should sit side by side. It is not an edge row and not noise. The issue records the `cropFor`
+epsilon as the only lead and marks it unproven, and records `readCrops` double-pushing as
+**checked and eliminated** — an async generator cannot be iterated twice. A green re-run is
+evidence that it is intermittent, not that it is fine.
+
+### T7.2 is closed (2026-09-10, PRs #41, #42 and #43)
+
+`specs/api.md` §0 is the getting-started path, and it shows code that runs: six of its seven fenced
+blocks are the same bytes as a file under `examples/quick-start`, and the seventh — the install
+command — is generated from the packages this repository builds. `check:docs` fails the build when
+either drifts, in either direction. `tasks.md` holds the authoritative Done record;
+`specs/plans/t7-2-getting-started.md` is history now, not a work plan.
+
+**ADR-0041** records the boundary the whole task turned on: the example is built and run as a
+**packed consumer**, never through the workspace, in two lanes that cannot be one — `check:packaging`
+compiles it in a job with no browser, and `e2e/quick-start.e2e.ts` runs it from a build made by the
+project's own vite. Neither may fall back to a `paths` entry, a project reference or a vite alias.
+An example that only builds inside this repository proves the example works *here*, which is not the
+claim anyone is making.
+
+**Map data is explicit consumer-supplied configuration.** The example points at a same-origin
+`/basemap.pmtiles` and the browser lane cuts a synthetic archive and serves it there. Removing the
+configured source must take the named-colour oracle to zero — if the map still paints without it,
+the example is drawing from something the reader was never given.
+
+**The demo's missing import affordance is ruled an accepted limitation**, not a Phase 7 exit
+requirement, and §0 states it: the engine publishes `geoJSONToTrack` (§10), `core` tests it, and
+`app-channel.e2e.ts` drives an export → import round trip through the demo's own storage seam. The
+question T7.1c's close-out left open is therefore closed, in the open, as it asked.
 
 ### T7.1c is closed (2026-09-09, PR #38, merged as `c36d151`)
 
@@ -280,6 +331,27 @@ the check. Read the source before you build on it, and say so when it turns out 
 
 Related: 7b below is what happens when the *evidence* is allowed to grow to fit the failures instead.
 
+### 7d. A command in a document is a claim; run it
+
+A fenced block that a reader is invited to copy is an assertion about what happens when they do,
+and reading it proves nothing. T7.2's install block was generated from the right constants, matched
+its projection byte for byte, and was wrong twice.
+
+`npm pack packages/core` does not pack `packages/core`. npm reads a bare path as a **package spec**
+and resolves it as the GitHub shorthand `packages/core`, failing with *"Repository not found"*; only
+`./packages/core` is seen as a path. And the block moved between two directories — build in the
+checkout, install in the reader's project — without ever saying so, which would have installed the
+engine back into the workspace that had just built it. The walkthrough that "proved" the block
+worked had silently supplied the missing `cd`, which is precisely what a reader would not.
+
+Both were found by executing the block with real paths and looking at where the files landed, and
+neither could have been found any other way: the projector was consistent, the gate was green, and
+the prose was accurate. **Generation makes a block impossible to drift; it does not make it
+correct.** Run it, then check the side effects — not just the exit code.
+
+Related: 7c above is the same rule for a *quoted* claim. Citation establishes provenance;
+verification establishes truth.
+
 ### 7b. A tolerated-difference list grown from failures is a spot-check wearing a rule's clothes
 
 T7.1b's equivalence comparison declares the fields it will not compare — the GPS values only a
@@ -330,6 +402,19 @@ throughout**, so it will meet this again on its first offline round-trip test.
   `ls-remote` immediately after committing can be raced.
 - **Verify claims about state with a command rather than from memory.** Three ledger claims in
   one session resolved differently than stated.
+- **Search the issues before investigating a recurring CI failure** — by the failing test's name
+  and by the distinctive part of the error text, not by a guess at what someone would have called
+  it. A failure that has happened before usually has a record, and that record holds the leads
+  already ruled out. Add the new occurrence to the existing issue rather than repeating the
+  investigation: issue #30's fixture flake was diagnosed twice, the second time reaching the same
+  lead and re-testing a hypothesis the issue already recorded as eliminated.
+- **`git checkout <path>` restores from the *index*, not from HEAD.** With a file staged and then
+  edited, it silently discards the unstaged edits and leaves the staged version — which looks like
+  a successful restore. Mutation-testing a file that already carries staged review fixes is exactly
+  the shape that bites: the mutant is reverted and so are the fixes. **Copy the file to a scratch
+  path before mutating it and restore from there**, and verify with `cmp` or a hash rather than
+  trusting that the restore did what it looked like. An untracked file is worse: `git checkout`
+  reports nothing at all and changes nothing.
 - **Mutation-test every guard**: break the subject, confirm the test goes red. A guard whose
   mutation survives is either dead code or untested; both matter.
 - **Do not add unobservable defensive code.** If removing a guard leaves the suite green, it is a

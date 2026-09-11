@@ -1441,6 +1441,104 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
 - **T7.2 Getting started.** Docs derived from `api.md`: embed the loop in an afternoon. _AC:_
   a new consumer following the doc reaches a working map+event loop.
 
+  **Done** (2026-09-10, PRs #41, #42 and #43, merged as `57a17c0`, `7173616` and `7856071`).
+  Plan: [`specs/plans/t7-2-getting-started.md`](plans/t7-2-getting-started.md), whose bars were set
+  against `main` at `3cc2256` before any implementation, and which carries a dated amendment for
+  one required mutation that could not reach the assertion it named.
+
+  **Every fenced block in the quick start is checked; none of it is illustrative.**
+  `specs/api.md` §0 is the documentation target, because `PRD.md` §6 asks for the loop *"reading
+  only `api.md`"* and a second page would make the answer two documents. Six of its seven fenced
+  blocks are the same bytes as a file under `examples/quick-start`; the seventh, the install
+  command, is generated from the packages this repository builds. `check:docs` fails the build when
+  either kind drifts, in both directions — so there is no third category of code that is allowed to
+  be wrong.
+
+  Each criterion, and what discharges it:
+
+  - **A real example, not a snippet.** `examples/quick-start` is a source tree outside the npm
+    workspaces, so nothing here links it. It mounts `MapCanvas`, records with `useTrackRecorder`,
+    pins an event through `EventComposer` with a photo, and renders track, event and photo through
+    `TripReview` — all from published entry points.
+  - **Built and run as a consumer, twice, against the same packed artifacts.**
+    `scripts/consumer-project.mjs` describes the project once — pack the five packages, install
+    them `--install-strategy=nested`, pin every third-party version from the root manifest, copy
+    the example in — and both lanes build it with that one function. `check:packaging` runs the
+    project's own `tsc` against the example's own `tsconfig.json` in a job with no browser;
+    `scripts/serve-example.mjs` builds it with the project's own vite and serves it for
+    `e2e/quick-start.e2e.ts`. **Neither lane may fall back to a workspace alias** (ADR-0041).
+  - **The loop observed, each step on its own evidence.** `e2e/quick-start.e2e.ts` attributes the
+    map to a named colour only the example's own style paints, the recording to a distance only a
+    multi-fix track has, the photo to an image the review resolved through the store, and the write
+    to the consumer's own IndexedDB — read through `DEFAULT_DATABASE_NAME` and `STORE`, which the
+    package publishes, rather than a hand-written schema.
+  - **Map data is the reader's.** The example points at a same-origin `/basemap.pmtiles` and the
+    browser lane cuts a synthetic archive and serves it there. No repository-only URL appears in a
+    copyable block, and no public tile host is named — `CLAUDE.md` forbids both bundled tiles and
+    egress the consumer did not configure.
+  - **The obligation `EventComposer` hands over is discharged.** The composer seals itself before
+    `onSave`, so a rejected event write would strand the photo and leave the composition open with
+    Stop disabled. The example gives the blob back, reports a failed release as *unconfirmed*
+    rather than guessing, and closes the composition either way; two scenarios hold both paths.
+  - **The root README no longer asserts what nothing can check.** *"Phase 0 complete; core
+    implementation begins in Phase 1"* and *"No product runtime logic exists yet"* are gone. Status
+    lives in one generated block projected from this file, and the caveat beside the numbers is
+    generated with them.
+  - **The import limitation is visible.** §0 states that the demo exports and offers no import
+    affordance, that `geoJSONToTrack` is published (§10), and that `app-channel.e2e.ts` drives the
+    round trip — so a consumer who needs import is not blocked by the engine.
+
+  **What this does not discharge, stated rather than implied.** The packages are **not published**:
+  every one is `0.0.0`, the registry has none of them, and there is no release workflow. So the
+  criterion is met for a reader who builds from a checkout — the quick start's install block is the
+  tarball route, generated from the same lists both lanes install from, and following the document
+  by hand gives `tsc --noEmit` and `vite build` clean in a scratch project — and it is **not** met
+  for a reader who runs `npm install @mapatlas/react`, which resolves nothing. The document says so
+  plainly rather than glossing it. Whether that satisfies `PRD.md` §6, and therefore Phase 7's
+  exit, is a ruling this task does not make; a release path is unowned.
+
+  **The import affordance is an accepted limitation of the demo, not a Phase 7 exit requirement**,
+  and the plan records where that is written: `roadmap.md`'s Phase 7 exit delegates its criteria to
+  §6 and adds only *"end-to-end, offline"* — no import requirement either way — §6's demo criterion
+  is export only, and import appears in §4 item 14 and §5's *In* list
+  — sections about the **engine**, which has it and tests it. Ruled in the open, as T7.1c's
+  close-out asked.
+
+  **Falsified, not asserted.** Every mutation below turned a named assertion red. On the example
+  and its lanes: `MapCanvas` given no sources, and the configured archive replaced by one nobody
+  supplied — both taking the named-colour count to exactly zero; a recording given no fix beyond
+  the browser's initial position, reporting `0.00 km` and one stored point; the photo dropped
+  before `addEvent`, leaving the review blank while the event is still stored — distinguishable
+  from an event never written, which only the storage probe catches; and, on the rejected-write
+  path, the release removed, the composition left open, the failure swallowed, and the unconfirmed
+  result discarded. On the gate: a signature changed in the document and in the example, failing
+  identically; an unbacked block added inside the quick start; a readable file under the example
+  that is not shipped, and a path traversing out of it; an example file the section never shows; a
+  Done record added to and removed from this file; and the generated blocks edited by hand,
+  indented, and deleted.
+
+  **One check in that set is a control that must stay green**, and it is not a falsifier: the same
+  unbacked block added **elsewhere in `api.md`** leaves the gate clean. `api.md`'s other blocks are
+  declarations, not mirrors of any file, and a gate that claimed them would be asserting that the
+  contract restates an example rather than the other way round.
+
+  **Two mutants are recorded as non-kills, because a mutant that never mutated says nothing about
+  an oracle.** The plan's *"the recorder never started"* dies at the scenario's wait for
+  `data-status="recording"`, several steps before any review exists, so it cannot reach the
+  distance oracle; and a first replacement — cutting the fix list to one entry — still leaves two
+  positions, because `test.use({ geolocation })` supplies one. The plan carries both, struck
+  through rather than deleted.
+
+  **Two commands were wrong until they were run**, and both were in a block presented as copyable.
+  `npm pack packages/core` reads the bare path as a package spec and resolves it as the GitHub
+  shorthand, failing with *"Repository not found"*; and the block moved between two directories
+  without saying so, which would have installed the engine back into the checkout that built it.
+  Executing the document, rather than reading it, is what found both.
+
+  **The boundary.** Nothing under `packages/` or `apps/demo/` changed across all three commits —
+  `git diff --name-only 3cc2256..7856071` names 26 files and none of them is in either tree. ADR-0041
+  records the packed-consumer boundary and why the two lanes cannot be one.
+
 ## Global definition of done (every task)
 `build` + `typecheck` (strict) + `lint` + `test` green · isolation & SPDX scans green ·
 public API changes mirrored into `api.md` · consequential decisions appended to `decisions.md`.

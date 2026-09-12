@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# T8.1 — the fixture-build flake (issue #30), increment 2.0.
+#
+# **Manual only.** `workflow_dispatch` is the sole trigger, deliberately: this exists to read a
+# runner's environment, and a job that also fired on push or pull request would add CI cost to
+# every change and become a source of runs nobody is reading — which is the habit issue #30 already
+# warns about.
+#
+# **It measures and does nothing else.** No loop, no repeated suite, no rate. `specs/plans/`
+# separates the measurement from the reproduction attempts on purpose: the runner's
+# `availableParallelism()` is not recorded in any log this repository has, and 2a cannot match a
+# number nobody has read. A loop mode is added only if the local attempt (2a) comes back null, at
+# the budget the plan fixed in advance.
+#
+# **Remove it, or record why it is kept, when T8.1 closes.** A probe left behind after the thing it
+# probes is understood is a workflow nobody can explain.
+name: T8.1 flake probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  environment:
+    name: measure the runner's environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # The same setup as the `gates` job, so the runtime read here is the runtime that has failed
+      # four times rather than whatever this workflow happened to resolve.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # `npm ci` because the report names the **installed** Vitest, not the declared range: those
+      # are different facts and only the first one ran.
+      - name: Install
+        run: npm ci
+
+      - name: Report the environment
+        run: npm run report:environment

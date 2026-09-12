@@ -55,6 +55,22 @@ const write = process.argv.includes("--write");
 const read = (path) => readFileSync(join(ROOT, path), "utf8");
 
 /**
+ * Build the projections, reporting a refusal as a gate failure rather than as a stack.
+ *
+ * `taskStatus` fails closed on a task written outside a `## Phase` heading, and that is a
+ * *finding* — the entry would be missing from the README's status block — so it has to read like
+ * one. An uncaught throw here would print a stack trace above a message nobody scrolls to.
+ */
+function projected(build) {
+  try {
+    return build();
+  } catch (error) {
+    console.error(`check:docs — ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
+
+/**
  * The projections, per document.
  *
  * Named per document rather than globally: a region only makes sense where it was put, and a
@@ -80,7 +96,9 @@ const documents = [
   },
   {
     path: "README.md",
-    projections: new Map([["status", renderStatus(taskStatus(read("specs/tasks.md")))]]),
+    projections: new Map([
+      ["status", projected(() => renderStatus(taskStatus(read("specs/tasks.md"))))],
+    ]),
   },
 ];
 
@@ -92,11 +110,11 @@ if (write) {
     const lines = before.split("\n");
     // Back to front, so replacing one region cannot shift the line numbers of the next.
     for (const region of generatedRegions(before).reverse()) {
-      const projected = projections.get(region.name);
-      if (projected === undefined) continue;
+      const text = projections.get(region.name);
+      if (text === undefined) continue;
       // The same `framed` the gate compares against, so the writer cannot produce something the
       // gate then rejects.
-      lines.splice(region.from, region.to - region.from - 1, ...framed(projected).split("\n"));
+      lines.splice(region.from, region.to - region.from - 1, ...framed(text).split("\n"));
     }
     const after = lines.join("\n");
     if (after !== before) {

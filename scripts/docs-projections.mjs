@@ -45,13 +45,16 @@ const DONE = /\*\*Done\*\*/;
 export function taskStatus(markdown) {
   const phases = [];
   let phase;
+  /** The most recent `##` heading, so a refusal can name where the stray entry actually sits. */
+  let section;
   let task;
 
-  for (const line of markdown.split("\n")) {
+  for (const [index, line] of markdown.split("\n").entries()) {
     const heading = PHASE.exec(line);
     if (heading !== null) {
       phase = { number: heading[1], title: heading[2], tasks: [], done: [] };
       phases.push(phase);
+      section = line;
       task = undefined;
       continue;
     }
@@ -59,10 +62,36 @@ export function taskStatus(markdown) {
     // section, and reading its prose as task bodies would attribute its words to the last task.
     if (line.startsWith("## ")) {
       phase = undefined;
+      section = line;
       task = undefined;
       continue;
     }
-    if (phase === undefined) continue;
+
+    /**
+     * **A task outside a phase is refused, not skipped.**
+     *
+     * The projection counts phases, so a task recorded under any other heading was previously
+     * dropped in silence — and the README's status block, whose whole purpose is to stop the front
+     * page under-reporting, would have under-reported it. A gate that loses work quietly is worse
+     * than no gate: the numbers stay plausible while the backlog and the page disagree.
+     *
+     * Failing closed keeps the phase model intact rather than widening it. If a section really
+     * should be counted, it is given a `## Phase N — …` heading; if it should not, its entries are
+     * not written in task form. Either way the choice is made deliberately and out loud.
+     */
+    if (phase === undefined) {
+      const stray = TASK.exec(line);
+      if (stray !== null) {
+        throw new Error(
+          `tasks.md line ${String(index + 1)}: ${stray[1]} is written as a task but sits under ` +
+            `${section === undefined ? "no heading" : `"${section}"`}, which is not a ` +
+            `"## Phase N — …" section. The README's status block counts phases, so this entry ` +
+            `would be absent from it — give the section a Phase heading, or do not write the ` +
+            `entry in task form.`,
+        );
+      }
+      continue;
+    }
 
     const entry = TASK.exec(line);
     if (entry !== null) {

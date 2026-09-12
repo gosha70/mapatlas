@@ -1539,6 +1539,52 @@ task: keep the gates green, DCO-sign commits, SPDX-header new files. `AC` = acce
   `git diff --name-only 3cc2256..7856071` names 26 files and none of them is in either tree. ADR-0041
   records the packed-consumer boundary and why the two lanes cannot be one.
 
+## Phase 8 — Follow-ups (post-v1, recorded and unscheduled)
+
+Real work that is **not** part of M1 — `PRD.md` §6 requires none of it, and Phase 7 exited without
+it (`roadmap.md`). Recorded here with acceptance criteria so it stops living only in `CONTINUE.md`
+and can be picked up like anything else. Unowned and unordered.
+
+- **T8.1 Fixture-build flake.** `scripts/fixture/build.test.mjs` — *"reads each admitted cell once,
+  by its own id, in the order coverage returned them"* — fails intermittently in CI with a
+  byte-identical signature: `0 sample(s) covered by none and 3955 by more than one, over 46x113`.
+  Three occurrences on three different commits (`9c05be6` PR #28, `fcd5194` PR #31, `d8410f0`
+  PR #42), each green on re-run with no code change. Tracked in **issue #30**, which holds the
+  leads and what has been eliminated — read it before investigating. _AC:_ the cause is identified
+  and the failure is made **reproducible on demand** before it is fixed; the fix is falsified by a
+  mutation that reproduces the original signature. A change that merely stops the failure being
+  observed does not discharge this — an intermittent test that has gone quiet is indistinguishable
+  from one that was fixed, which is the property that makes this worth a task at all.
+
+  What the arithmetic already pins down, so nobody re-derives it: the two crops are 46×113
+  (`N45E006`) and 35×113 (`N45E007`) and should sit side by side; `3955 = 35 × 113` is exactly the
+  second crop's whole area, with zero gaps over a union that is exactly the first crop's extent —
+  so the second crop is landing **entirely inside** the first. Eliminated: `readCrops`
+  double-pushing (an async generator cannot be iterated twice), the `cropFor` epsilon landing on a
+  knife edge (both boundaries are exact lattice integers), and test-order dependence inside the
+  file (fifteen shuffled runs).
+
+- **T8.2 Per-package READMEs.** Five of the six packages ship **no README at all** — only
+  `@mapatlas/maplibre` has one, and `check-packaging.mjs` asserts merely that it *exists* in the
+  packed tarball, so its install snippet, stylesheet import and `setWorkerUrl` call are prose as
+  far as any gate is concerned. A consumer arriving from a registry listing at any of the other
+  five finds nothing. Found by T7.2's survey and deliberately fenced out of it: hiding a
+  six-package documentation sweep inside a one-criterion getting-started task would have made
+  neither honest. _AC:_ every package ships a README; **every code block in one is checked** the
+  way `api.md` §0's are — mirrored from a compiled source or generated from this repository, via
+  `check:docs`, whose rules already exist and are per-document; and `check-packaging` asserts the
+  README ships for **each** package rather than for one. A block that cannot be checked is not
+  presented as something to copy.
+
+- **T8.3 `/lab` retirement audit.** The root app supersedes `/lab` as the product demonstration,
+  but `/lab` remains an evidence fixture: five merged browser scenarios run through it, and T6.1's
+  offline evidence with them. _AC:_ each lab-owned browser assertion is either **mapped to an
+  equivalent root-app oracle** — named, one to one — or **deliberately retired** with the reason
+  recorded; `/lab` is removed only once no assertion depends on it, and the equivalence is shown by
+  the mapping rather than by the suite staying green, since deleting a scenario also leaves it
+  green. If some assertion cannot be expressed against the root app, that is a finding about the
+  app's observability and is reported rather than resolved by keeping `/lab` indefinitely.
+
 ## Global definition of done (every task)
 `build` + `typecheck` (strict) + `lint` + `test` green · isolation & SPDX scans green ·
 public API changes mirrored into `api.md` · consequential decisions appended to `decisions.md`.

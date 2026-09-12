@@ -26,6 +26,7 @@
     "check:packaging": "node scripts/check-packaging.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "docs:write": "node scripts/check-docs.mjs --write",
+    "report:environment": "node scripts/report-environment.mjs",
     "verify": "npm run build && npm run typecheck && npm run lint && npm run test:coverage && npm run scan:isolation && npm run scan:spdx && npm run format:check && npm run check:docs && npm run check:packaging",
     "test:coverage": "vitest run --coverage",
     "test:browser": "playwright test",

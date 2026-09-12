@@ -3,6 +3,18 @@
 > Bars set 2026-09-12, **before any candidate fix**, against `main` at `5f0c05d` (the merge of
 > PR #46). Every survey finding below was read out of the code, the issue or the CI logs at that
 > commit and is cited; nothing is repeated forward from a plan or a conversation.
+>
+> **Amended 2026-09-12 (after increment 1), in increment 2's sequencing only.** The plan had 2a
+> measure the runner's worker count "from a CI run" and placed the `workflow_dispatch` workflow in
+> 2b, which cannot both be true: nothing in this repository prints that number, so the only vehicle
+> for the measurement *is* that workflow. The workflow therefore lands **first**, and a **minimal
+> first dispatch** measures the environment before any loop is run.
+>
+> **This is a correction to the experiment's execution order and not to its acceptance criterion.**
+> Nothing about the bars, the budgets, the α split or the stop-without-fix rule changes. In
+> particular the workflow landing early is **not** a statement that local reproduction has been
+> tried and failed — 2a has not run — and the CI *loop* is still reached only if 2a comes back
+> null.
 
 ## What is settled — cite, do not re-open
 
@@ -170,25 +182,51 @@ is exactly what the acceptance criterion was written to forbid.
    arrives already diagnosed instead of producing a fifth copy of the same sentence. It is also the
    only increment that can be falsified without first solving the problem.
 
-2. **Attempt reproduction, first locally under the controlled variables and then in CI.** Two
-   bounded attempts, in this order, each with its budget fixed before it starts.
+2. **Attempt reproduction — measure the environment, then match it locally, then only if that is
+   null, loop in CI.** Three steps, in this order. **2a and 2b are the reproduction attempts and
+   each carries a discovery budget, fixed before it starts**; **2.0 runs no loop and has no
+   budget**, because a measurement is not an attempt to reproduce anything and giving it a run
+   count would blur the very distinction this amendment exists to draw.
+
+   **2.0 — the measurement dispatch.** The `workflow_dispatch`-only workflow lands here, **because
+   it is the only vehicle this repository has for reading the runner's environment** and for no
+   other reason. Its first invocation is **minimal**: it runs no loop and reports
+
+   - **`os.availableParallelism()`, raw**, as the runner reports it — the number itself, not a
+     conclusion drawn from it;
+   - the **Node version**, the **Vitest version**, `process.platform` and `process.arch`.
+
+   **The Vitest worker count is labelled `computed`, not observed**, unless the workflow actually
+   sees worker identities: `resolveMaxWorkers` returns `Math.max(availableParallelism() - 1, 1)`
+   for a non-watch run (`cli-api.CnMVyzaz.js:3833`), and applying that formula is a derivation from
+   a version of Vitest that could change under us. A derived number presented as a measured one is
+   the kind of claim this plan exists to refuse. If a later step needs it observed, it observes it.
 
    **2a — local, controlling what can be controlled.** Node **v24.20.0** rather than v24.11.1, and
-   the runner's worker count rather than 13 — *measured* from a CI run first, since no log this
-   repository has records it, and then imposed locally with `--maxWorkers`. The **whole suite**,
-   because every occurrence has been a full-suite run and none has been the file alone. The
-   platform difference stands and is stated with the result: this controls two known variables, it
-   does not reproduce the environment.
+   `--maxWorkers` set to the count 2.0 reported, explicitly rather than by default. The **whole
+   suite**, because every occurrence has been a full-suite run and none has been the file alone.
+   Budget as declared above. The platform difference stands and is stated with the result: this
+   controls two known variables, it does not reproduce the environment.
 
-   **2b — CI, if 2a does not reproduce.** Authorized by the reviewer: a **`workflow_dispatch`-only**
-   job that runs the full suite on a fixed budget and reports exact-signature counts. It **never
-   runs on push or pull request** — a loop that fired automatically would multiply the CI cost of
-   every change and would itself become a source of red runs nobody is reading. It is removed, or
-   explicitly kept with a reason, when T8.1 closes.
+   **2b — the CI loop, invoked only if 2a is null.** The *same* workflow, run again for the
+   predeclared **100-run** budget. That number was fixed before any of this was attempted and is
+   **not chosen after seeing 2a's result** — a budget picked once the outcome is known is the
+   selectable bar this plan spent its longest section refusing.
 
-   *Observable, either way:* the exact signature, produced by a named command, with a rate measured
-   against the predeclared budget. *If neither attempt reproduces*, the increment's output is the
-   bound and the eliminations, recorded on #30, and the task reports rather than proceeds.
+   Throughout, the workflow is **`workflow_dispatch`-only** and **never runs on push or pull
+   request**: a loop that fired automatically would multiply the CI cost of every change and become
+   a source of red runs nobody reads. At T8.1's close-out it is **removed, or explicitly kept with
+   a reason recorded** — not left behind because nobody remembered it.
+
+   *Observable for 2.0:* the runner's environment, reported as facts — raw
+   `os.availableParallelism()`, the Node version, the Vitest version, `process.platform` and
+   `process.arch` — with the Vitest worker count printed **beside them and labelled `computed`**.
+   It produces no signature and no rate, and claiming one for it would be inventing an attempt
+   that did not happen.
+
+   *Observable for 2a and 2b:* the exact signature, produced by a named command, with a rate
+   measured against that step's predeclared budget. *If neither reproduces*, the increment's output
+   is the bound and the eliminations, recorded on #30, and the task reports rather than proceeds.
 
 3. **The fix, falsified by the reproduction.** Only with a rate in hand. *Observable:* the
    reproduction command fails with the fix reverted and passes with it applied, over a run count

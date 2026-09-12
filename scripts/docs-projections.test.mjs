@@ -64,6 +64,46 @@ describe("taskStatus", () => {
   });
 
   /**
+   * **A task outside a phase is refused rather than dropped.**
+   *
+   * The projection counts phases, so an entry under any other heading used to vanish from the
+   * README's status block in silence — from the block whose entire purpose is to stop the front
+   * page under-reporting. Plausible numbers and a disagreeing backlog is the worst of the
+   * available outcomes, so the parser fails closed instead.
+   */
+  it("refuses a task written under a heading that is not a phase", () => {
+    expect(() =>
+      taskStatus(md("## Follow-ups", "- **T8.4 Something.** recorded outside a phase")),
+    ).toThrow(/T8\.4 is written as a task but sits under "## Follow-ups"/);
+  });
+
+  it("names the line, so the entry can be found rather than hunted for", () => {
+    expect(() =>
+      taskStatus(md("# Backlog", "", "## Follow-ups", "- **T8.4 Something.** x")),
+    ).toThrow(/line 4/);
+  });
+
+  /** Before any heading at all is the same failure, and says so rather than naming nothing. */
+  it("refuses a task before the first heading", () => {
+    expect(() => taskStatus(md("- **T0.1 Root.** x"))).toThrow(/sits under no heading/);
+  });
+
+  /** Prose under a non-phase heading is untouched: only task-shaped entries are refused. */
+  it("leaves a section that contains no task entries alone", () => {
+    const status = taskStatus(
+      md(
+        "## Phase 7 — Demo",
+        "- **T7.1 Demo.** x",
+        "  **Done**.",
+        "## Global definition of done (every task)",
+        "`build` + `typecheck` green; consequential decisions appended to `decisions.md`.",
+      ),
+    );
+    expect(status.done).toBe(1);
+    expect(status.phases).toHaveLength(1);
+  });
+
+  /**
    * **Why the rendered sentence may not say a convention *started* anywhere.** This value is
    * document order and nothing else: backfill a record onto an older task and it moves. A block
    * that had claimed the convention began at T4.6 would, after this edit, assert a history that

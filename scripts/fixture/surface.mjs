@@ -36,6 +36,74 @@ export class SurfaceError extends Error {
 }
 
 /**
+ * Where every crop was actually placed, and which pairs of them overlap.
+ *
+ * **Appended to the failure because four identical sentences taught nothing** (T8.1 increment 1,
+ * issue #30). The counting pass says a union was double-written and by how much; it cannot say
+ * *which* crop landed where, so each occurrence has had the arithmetic reconstructed by hand — from
+ * the union's dimensions, the crops' known sizes, and a guess at which one moved. All of that is in
+ * scope right here, at the throw.
+ *
+ * **Pairs are computed, not enumerated.** Reporting every pair as overlapping would be right
+ * whenever exactly two crops are joined and wrong the moment there are three, and it would make the
+ * report unable to distinguish the crop that moved from the one it landed on. A pair is listed only
+ * when its rectangles genuinely intersect, and the intersection is named.
+ *
+ * Crops carry no tile id at this seam — `readTile` returns a grid, not a labelled cell — so a crop
+ * is identified by its index in the array it was supplied in, which is `sourceCells` order, and by
+ * its origin, which is what makes it recognisable. Numbers are printed at full round-trip
+ * precision: the failure this exists for turns on an origin being wrong by a few samples, and a
+ * rounded coordinate would hide exactly that.
+ *
+ * @param {{ crop: { west: number, north: number, width: number, height: number }, col: number,
+ *   row: number }[]} placed
+ * @param {number} minCol
+ * @param {number} minRow
+ * @returns {string}
+ */
+function placementReport(placed, minCol, minRow) {
+  const at = (p) => ({ col: p.col - minCol, row: p.row - minRow });
+  const lines = placed.map((p, index) => {
+    const { col, row } = at(p);
+    return (
+      `  [${String(index)}] ${String(p.crop.width)}x${String(p.crop.height)} at ` +
+      `col ${String(col)}..${String(col + p.crop.width - 1)}, ` +
+      `row ${String(row)}..${String(row + p.crop.height - 1)}, ` +
+      `origin (${String(p.crop.west)}, ${String(p.crop.north)})`
+    );
+  });
+
+  const pairs = [];
+  for (let i = 0; i < placed.length; i += 1) {
+    for (let j = i + 1; j < placed.length; j += 1) {
+      const a = at(placed[i]);
+      const b = at(placed[j]);
+      const colFrom = Math.max(a.col, b.col);
+      const colTo = Math.min(a.col + placed[i].crop.width, b.col + placed[j].crop.width) - 1;
+      const rowFrom = Math.max(a.row, b.row);
+      const rowTo = Math.min(a.row + placed[i].crop.height, b.row + placed[j].crop.height) - 1;
+      if (colFrom > colTo || rowFrom > rowTo) continue;
+      pairs.push(
+        `  [${String(i)}] and [${String(j)}] overlap over ` +
+          `col ${String(colFrom)}..${String(colTo)}, row ${String(rowFrom)}..${String(rowTo)}`,
+      );
+    }
+  }
+
+  return [
+    "",
+    "",
+    "crops as placed (columns and rows relative to the union's origin):",
+    ...lines,
+    "",
+    // A gap with no overlap is a real outcome — a hole rather than a double-write — and saying so
+    // is more useful than an empty heading a reader has to interpret.
+    pairs.length === 0 ? "no two crops overlap; the union is not covered" : "overlapping pairs:",
+    ...pairs,
+  ].join("\n");
+}
+
+/**
  * Join per-cell crops into one decoded elevation grid.
  *
  * @param {Array<{ width: number, height: number, west: number, north: number, pixelScaleDeg: number, rgb: Uint8Array }>} crops
@@ -104,8 +172,13 @@ export function stitchSurface(crops) {
   }
   if (gaps > 0 || overlaps > 0) {
     throw new SurfaceError(
+      // **This first line is preserved byte for byte** (T8.1 increment 1). Four occurrences of the
+      // intermittent failure in issue #30 were matched to each other by exactly this sentence, and
+      // improving it would orphan that history and every search built on it. Everything the
+      // diagnosis needs is **appended** below it instead.
       `the crops do not tile their union: ${String(gaps)} sample(s) covered by none and ` +
-        `${String(overlaps)} by more than one, over ${String(width)}x${String(height)}`,
+        `${String(overlaps)} by more than one, over ${String(width)}x${String(height)}` +
+        placementReport(placed, minCol, minRow),
     );
   }
 

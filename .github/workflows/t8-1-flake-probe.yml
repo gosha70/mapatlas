@@ -7,11 +7,16 @@
 # every change and become a source of runs nobody is reading — which is the habit issue #30 already
 # warns about.
 #
-# **It measures and does nothing else.** No loop, no repeated suite, no rate. `specs/plans/`
-# separates the measurement from the reproduction attempts on purpose: the runner's
-# `availableParallelism()` is not recorded in any log this repository has, and 2a cannot match a
-# number nobody has read. A loop mode is added only if the local attempt (2a) comes back null, at
-# the budget the plan fixed in advance.
+# **Step 2a came back null, so this now runs the loop** (200 local runs under the matched runtime
+# and worker count, no hits, bounding the local rate at 1.487%). It runs the full suite **exactly
+# 100 times**, the budget the plan fixed before any of this was attempted — there is deliberately
+# **no run-count input**, because a budget chosen at dispatch time is a probabilistic bar selected
+# after the result is known. Changing it means editing `scripts/flake-probe.mjs` under review.
+#
+# It reports the environment first, keeps going after a hit so the outcome is a **rate** rather than
+# an occurrence, counts exact-signature hits and unrelated failures separately, and prints the full
+# output — including the placement report added in PR #48 — for every one of either. A job that
+# times out, or a run that fails for an unrelated reason, **cannot** produce a clean-null claim.
 #
 # **Remove it, or record why it is kept, when T8.1 closes.** A probe left behind after the thing it
 # probes is understood is a workflow nobody can explain.
@@ -24,10 +29,13 @@ permissions:
   contents: read
 
 jobs:
-  environment:
-    name: measure the runner's environment
+  probe:
+    name: 100 full-suite runs, looking for the exact signature
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 100 runs at roughly 40 s each is a little over an hour; the ceiling is generous so that a
+    # slow runner reports a result rather than a timeout — and a timeout, if it happens, kills the
+    # job before any verdict is printed, which is what stops one being claimed.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
 
@@ -43,5 +51,12 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Report the environment
-        run: npm run report:environment
+      # The same `tsc --build` the gates job runs before its Test step, so what is repeated below is
+      # what has actually been failing rather than a differently-prepared tree.
+      - name: Build
+        run: npm run build
+
+      # Reports the environment, then loops. One step rather than two: the runner prints the
+      # environment before run 1, so it is in the log even if the loop is later cut short.
+      - name: Probe
+        run: npm run probe:flake

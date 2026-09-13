@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { BUILD_STAGES, BuildError, runBuild } from "./build.mjs";
+import { observeCrop } from "./crop-trace.mjs";
 import { CoverageError, requiredTiles } from "./coverage.mjs";
 import { clipBoundsToTile, encodeRasterTile } from "./deps.mjs";
 import { productionEnvelope, tilesInRange } from "./mercator.mjs";
@@ -90,7 +91,7 @@ function cropFor(tileId, region, elevationAt) {
       rgb[i + 2] = blue;
     }
   }
-  return {
+  const crop = {
     width: cols,
     height: rows,
     west: col0 * SPACING,
@@ -98,6 +99,17 @@ function cropFor(tileId, region, elevationAt) {
     pixelScaleDeg: SPACING,
     rgb,
   };
+  // Diagnostic only (T8.1, issue #30). This is the construction site on the path that has been
+  // failing intermittently: `west` and `width` are both derived from `col0` here, so a report in
+  // which they disagree has to have acquired that disagreement somewhere, and this is the first
+  // place that can be ruled in or out.
+  observeCrop(crop, "construction", {
+    tileId,
+    clippedTo: [west, south, east, north],
+    col0,
+    row0,
+  });
+  return crop;
 }
 
 /**
@@ -448,6 +460,62 @@ describe("every source cell is read, and read as itself", () => {
 
     expect(error.stage).toBe("elevation");
     expect(calls.readTile).toEqual(["N45E006"]);
+  });
+
+  /**
+   * **The instrument, end to end, through the build that actually fails.** (T8.1, issue #30.)
+   *
+   * The three observations live in three different files — the crop's construction here, the
+   * build's `readCrops`, and `stitchSurface`'s own entry — and the unit tests for the trace call
+   * `observeCrop` themselves, so deleting any one of those production call sites leaves them
+   * green. What is asserted here is the wiring: that a real `runBuild` failure carries all three
+   * stages, under the indices the placement report uses, with the divergence between the right
+   * pair of them.
+   *
+   * The overlap is **deterministic**, and it is the eastern crop that moves rather than the
+   * western one. Moving the western crop east would take it out of the declared region, and the
+   * build would then fail at the floor with no samples to judge — before it ever reached the
+   * stitch. Moving the eastern crop onto the western origin leaves both cells contributing to
+   * the floor and reproduces the arrangement issue #30 reports: two crops, one origin.
+   */
+  it("carries every observation of a crop into the failure the build reports", async () => {
+    const westOrigin = 25154 * SPACING;
+    const { deps } = seamHarness({
+      readTile: (id) => {
+        const crop = cropFor(id, SEAM_REGION, slope);
+        // After construction, so the construction snapshot records what was built and the later
+        // stages record what the stitch is handed. This is the shape of the failure, produced on
+        // purpose; it is not a claim about how the intermittent one arises.
+        if (id === "N45E007") crop.west = westOrigin;
+        return crop;
+      },
+    });
+
+    const error = await catchBuild(() => runBuild(PATHS, deps));
+
+    expect(error.stage).toBe("tiles");
+    const message = error.message;
+    expect(message).toContain(
+      "the crops do not tile their union: 0 sample(s) covered by none and 3955 by more than one",
+    );
+    // Every stage, for the crop that moved, naming the file each one lives in by what it knows.
+    expect(message).toContain(
+      `construction: tileId N45E007, clippedTo [7, 45.49066791484954, 7.009555121527778, ` +
+        `45.5220216747714], col0 25200, row0 -163879, 35x113, origin (7, 45.52194444444444)`,
+    );
+    expect(message).toContain(
+      `after readTile: tileId N45E007, envelope [6.987026909722222, 45.49066791484954, ` +
+        `7.009555121527778, 45.5220216747714], 35x113, origin (${String(westOrigin)}, `,
+    );
+    expect(message).toContain(
+      `stitchSurface entry: index 1, 35x113, origin (${String(westOrigin)}, 45.52194444444444)`,
+    );
+    expect(message).toContain(
+      `first divergence between "construction" and "after readTile": west 7 -> ${String(westOrigin)}`,
+    );
+    // And the crop that did not move says so, rather than being left out.
+    expect(message).toContain("[0] observed 3 time(s):");
+    expect(message).toContain("no field changed between observations");
   });
 
   it("judges the floor on the declared region, not on the envelope it had to read", async () => {

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { buildCog, fetchRangeOver } from "./cog-fixture.mjs";
 
+import { cropTrace } from "./crop-trace.mjs";
+
 import { decodeElevation } from "./terrarium.mjs";
 import {
   HEADER_WINDOW_BYTES,
@@ -263,6 +265,39 @@ describe("the crop window selects exactly the samples inside the bounds", () => 
 
 describe("reading a crop", () => {
   const bounds = [6.25, 45.25, 6.75, 45.75];
+
+  /**
+   * **The production construction hook, held here rather than assumed.** (T8.1, issue #30.)
+   *
+   * The origin this reader returns is built from the header's tiepoint and the window's first
+   * column, and the width from the same window — so a report in which the two disagree has to
+   * have acquired that disagreement somewhere, and this is the first place it can be ruled in or
+   * out. The hook records both at the point they are decided; without a test here, deleting it
+   * would leave every other test in the suite green and cost the diagnostic its first stage on
+   * the only path that reads a real object.
+   */
+  it("records what it built the crop from, at the point it built it", async () => {
+    const bytes = buildCog({ samples: (c, r) => 3000 + c * 10 + r });
+    const { fetchRange } = fetchRangeOver(bytes);
+
+    const crop = await readTerrariumCrop("N45E006", bounds, { fetchRange });
+
+    expect(cropTrace(crop)).toStrictEqual([
+      {
+        stage: "construction",
+        tileId: "N45E006",
+        clippedTo: [6.25, 45.25, 6.75, 45.75],
+        col0: 1,
+        row0: 1,
+        width: 2,
+        height: 2,
+        west: 6.25,
+        north: 45.75,
+        pixelScaleDeg: crop.pixelScaleDeg,
+        payloadBytes: 12,
+      },
+    ]);
+  });
 
   it("terrarium-encodes the samples the bounds select, in row-major order from the north-west", async () => {
     const elevation = (c, r) => 3000 + c * 10 + r;

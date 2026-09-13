@@ -10,6 +10,7 @@ import {
   assertStringsBackedByLicence,
 } from "./licence.mjs";
 import { contourTiles, levelsFor, traceContours } from "./contour.mjs";
+import { observeCrop } from "./crop-trace.mjs";
 import { productionEnvelope, tilesInRange } from "./mercator.mjs";
 import { assertMinimumElevation, parseRegionDeclaration } from "./region.mjs";
 import { SOURCE_SAMPLE_SPACING_DEG } from "./source.mjs";
@@ -707,6 +708,9 @@ async function* readCrops(tileIds, readTile, envelope, region, collected) {
     // against anything narrower asks a cell east of the declared region for a box that does not
     // intersect it.
     const crop = await readTile(tileId, envelope);
+    // Diagnostic only (T8.1, issue #30): what this cell's crop held the moment the build received
+    // it, against the id it was asked for and the extent it was asked over.
+    observeCrop(crop, "after readTile", { tileId, envelope });
     collected.push(crop);
 
     // Judge the floor against the **declared region**. The envelope exists so that output tiles

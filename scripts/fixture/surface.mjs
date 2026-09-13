@@ -22,6 +22,7 @@
  * must be written exactly once. A gap and a double-write are both detected by the same pass.
  */
 
+import { observeCrop, traceReport } from "./crop-trace.mjs";
 import { decodeGrid } from "./resample.mjs";
 
 /** How far a crop origin may sit from the global lattice, in samples, before it is misaligned. */
@@ -113,6 +114,10 @@ export function stitchSurface(crops) {
   if (!Array.isArray(crops) || crops.length === 0) {
     throw new SurfaceError("cannot build a source surface from no crops");
   }
+  // Before anything reads a field, so that whatever the crops hold on arrival is on the record
+  // even if the very next check is the one that refuses them (T8.1, issue #30).
+  for (const [index, crop] of crops.entries()) observeCrop(crop, "stitchSurface entry", { index });
+
   const scale = crops[0].pixelScaleDeg;
   for (const crop of crops) {
     if (crop.pixelScaleDeg !== scale) {
@@ -178,7 +183,8 @@ export function stitchSurface(crops) {
       // diagnosis needs is **appended** below it instead.
       `the crops do not tile their union: ${String(gaps)} sample(s) covered by none and ` +
         `${String(overlaps)} by more than one, over ${String(width)}x${String(height)}` +
-        placementReport(placed, minCol, minRow),
+        placementReport(placed, minCol, minRow) +
+        traceReport(crops),
     );
   }
 

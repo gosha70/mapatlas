@@ -507,14 +507,32 @@ describe("every source cell is read, and read as itself", () => {
       `after readTile: tileId N45E007, envelope [6.987026909722222, 45.49066791484954, ` +
         `7.009555121527778, 45.5220216747714], 35x113, origin (${String(westOrigin)}, `,
     );
-    expect(message).toContain(
-      `stitchSurface entry: index 1, 35x113, origin (${String(westOrigin)}, 45.52194444444444)`,
-    );
+    const moved = (stage) =>
+      `${stage}: index 1, 35x113, origin (${String(westOrigin)}, 45.52194444444444)`;
+    expect(message).toContain(moved("after the floor check"));
+    expect(message).toContain(moved("before the spacing check"));
+    expect(message).toContain(moved("stitchSurface entry"));
     expect(message).toContain(
       `first divergence between "construction" and "after readTile": west 7 -> ${String(westOrigin)}`,
     );
+
+    // **Asserted in order, not merely present.** Two observations that both fire but in the wrong
+    // sequence would print a trace whose divergence is attributed to the wrong span — which is the
+    // only thing this instrument is for. The order is the order of the call sites, so it is the
+    // call sites this pins.
+    const sequence = [
+      "construction: tileId N45E007",
+      "after readTile: tileId N45E007",
+      moved("after the floor check"),
+      moved("before the spacing check"),
+      moved("stitchSurface entry"),
+    ].map((line) => message.indexOf(line));
+    expect(sequence).not.toContain(-1);
+    expect([...sequence].sort((a, b) => a - b)).toStrictEqual(sequence);
+
     // And the crop that did not move says so, rather than being left out.
-    expect(message).toContain("[0] observed 3 time(s):");
+    expect(message).toContain("[0] observed 5 time(s):");
+    expect(message).toContain("[1] observed 5 time(s):");
     expect(message).toContain("no field changed between observations");
   });
 

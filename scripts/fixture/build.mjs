@@ -226,6 +226,14 @@ export async function runBuild(paths, deps, options = {}) {
     ),
   );
 
+  // Diagnostic only (T8.1, issue #30). The instrumented probe narrowed the divergence to the span
+  // between the read and the stitch; this observation bounds the floor-check portion of it. The
+  // floor check is not the only reader in that span — the spacing loop below reads every crop, and
+  // so does `stitchSurface` — so this says which side of the floor check the value survived, and
+  // nothing more.
+  for (const [index, crop] of crops.entries())
+    observeCrop(crop, "after the floor check", { index });
+
   const addresses = [...tilesInRange(declaration.bounds, declaration.minZoom, declaration.maxZoom)];
 
   /**
@@ -335,6 +343,12 @@ export async function runBuild(paths, deps, options = {}) {
       : await at("licence", () => deps.readJson(paths.basemapNoticePath));
 
   const { surface, rasterTiles } = await at("tiles", () => {
+    // Diagnostic only (T8.1, issue #30). The other end of the same split: everything between the
+    // floor check and here is address and notice work that never names a crop, so a value that is
+    // still right at this line and wrong at the stitch narrows the window to this block alone.
+    for (const [index, crop] of crops.entries()) {
+      observeCrop(crop, "before the spacing check", { index });
+    }
     for (const crop of crops) {
       if (crop.pixelScaleDeg !== SOURCE_SAMPLE_SPACING_DEG) {
         // The halo was sized from the declared spacing before any header was read. A source at

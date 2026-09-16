@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { BUILD_STAGES, BuildError, runBuild } from "./build.mjs";
-import { observeCrop } from "./crop-trace.mjs";
+import { cropTrace, observeCrop } from "./crop-trace.mjs";
 import { CoverageError, requiredTiles } from "./coverage.mjs";
 import { clipBoundsToTile, encodeRasterTile } from "./deps.mjs";
 import { productionEnvelope, tilesInRange } from "./mercator.mjs";
@@ -465,12 +465,14 @@ describe("every source cell is read, and read as itself", () => {
   /**
    * **The instrument, end to end, through the build that actually fails.** (T8.1, issue #30.)
    *
-   * The three observations live in three different files — the crop's construction here, the
-   * build's `readCrops`, and `stitchSurface`'s own entry — and the unit tests for the trace call
-   * `observeCrop` themselves, so deleting any one of those production call sites leaves them
-   * green. What is asserted here is the wiring: that a real `runBuild` failure carries all three
-   * stages, under the indices the placement report uses, with the divergence between the right
-   * pair of them.
+   * The observation sites are spread across three files — the crop's construction here, several
+   * points in `build.mjs` (each pass of `readCrops`, after the floor check, before the spacing
+   * check), and `stitchSurface`'s own entry — and the unit tests for the trace call `observeCrop`
+   * themselves, so deleting any one of those production call sites leaves them green. What is
+   * asserted here is the wiring: that a real `runBuild` failure carries the **complete staged
+   * path** for both crops — every stage, in order, under the indices the placement report uses,
+   * including the first crop's observations from the pass that reads the second — with the
+   * divergence named between the right pair of them.
    *
    * The overlap is **deterministic**, and it is the eastern crop that moves rather than the
    * western one. Moving the western crop east would take it out of the declared region, and the
@@ -503,37 +505,108 @@ describe("every source cell is read, and read as itself", () => {
       `construction: tileId N45E007, clippedTo [7, 45.49066791484954, 7.009555121527778, ` +
         `45.5220216747714], col0 25200, row0 -163879, 35x113, origin (7, 45.52194444444444)`,
     );
-    expect(message).toContain(
-      `after readTile: tileId N45E007, envelope [6.987026909722222, 45.49066791484954, ` +
-        `7.009555121527778, 45.5220216747714], 35x113, origin (${String(westOrigin)}, `,
-    );
+    const ENVELOPE =
+      "envelope [6.987026909722222, 45.49066791484954, 7.009555121527778, 45.5220216747714]";
     const moved = (stage) =>
       `${stage}: index 1, 35x113, origin (${String(westOrigin)}, 45.52194444444444)`;
+    expect(message).toContain(
+      `after readTile (reading N45E007): index 1, ${ENVELOPE}, 35x113, ` +
+        `origin (${String(westOrigin)}, 45.52194444444444)`,
+    );
+    expect(message).toContain(moved("after regionWindow (reading N45E007)"));
+    expect(message).toContain(moved("after samplesIn consumed (reading N45E007)"));
     expect(message).toContain(moved("after the floor check"));
     expect(message).toContain(moved("before the spacing check"));
     expect(message).toContain(moved("stitchSurface entry"));
     expect(message).toContain(
-      `first divergence between "construction" and "after readTile": west 7 -> ${String(westOrigin)}`,
+      `first divergence between "construction" and "after readTile (reading N45E007)": ` +
+        `west 7 -> ${String(westOrigin)}`,
     );
+
+    /**
+     * **The crop that is not being read is observed too**, and this is the assertion that pins it.
+     * The crop that moves in the real failure is the *first* one, which is read, judged and
+     * consumed before the second cell is fetched at all — so an instrument that observed only the
+     * pass's own crop would be blind to a change occurring while the second cell is read or its
+     * samples consumed, which is exactly the span the probe pointed at.
+     */
+    const held = (stage) =>
+      `${stage}: index 0, 46x113, origin (6.987222222222222, 45.52194444444444)`;
+    expect(message).toContain(
+      `after readTile (reading N45E007): index 0, ${ENVELOPE}, 46x113, ` +
+        `origin (6.987222222222222, 45.52194444444444)`,
+    );
+    expect(message).toContain(held("after regionWindow (reading N45E007)"));
+    expect(message).toContain(held("after samplesIn consumed (reading N45E007)"));
 
     // **Asserted in order, not merely present.** Two observations that both fire but in the wrong
     // sequence would print a trace whose divergence is attributed to the wrong span — which is the
     // only thing this instrument is for. The order is the order of the call sites, so it is the
     // call sites this pins.
-    const sequence = [
+    const inOrder = (lines) => {
+      const at = lines.map((line) => message.indexOf(line));
+      expect(at).not.toContain(-1);
+      expect([...at].sort((a, b) => a - b)).toStrictEqual(at);
+    };
+    inOrder([
       "construction: tileId N45E007",
-      "after readTile: tileId N45E007",
-      moved("after the floor check"),
-      moved("before the spacing check"),
-      moved("stitchSurface entry"),
-    ].map((line) => message.indexOf(line));
-    expect(sequence).not.toContain(-1);
-    expect([...sequence].sort((a, b) => a - b)).toStrictEqual(sequence);
+      "after readTile (reading N45E007): index 1",
+      "after regionWindow (reading N45E007): index 1",
+      "after samplesIn consumed (reading N45E007): index 1",
+      "after the floor check: index 1",
+      "before the spacing check: index 1",
+      "stitchSurface entry: index 1",
+    ]);
+    // The first crop's whole path, both passes included and in pass order rather than interleaved.
+    // Listed complete, not sampled: an ordering oracle that skips stages cannot notice a stage
+    // that moved into one of the gaps it skipped.
+    inOrder([
+      "construction: tileId N45E006",
+      "after readTile (reading N45E006): index 0",
+      "after regionWindow (reading N45E006): index 0",
+      "after samplesIn consumed (reading N45E006): index 0",
+      "after readTile (reading N45E007): index 0",
+      "after regionWindow (reading N45E007): index 0",
+      "after samplesIn consumed (reading N45E007): index 0",
+      "after the floor check: index 0",
+      "before the spacing check: index 0",
+      "stitchSurface entry: index 0",
+    ]);
 
-    // And the crop that did not move says so, rather than being left out.
-    expect(message).toContain("[0] observed 5 time(s):");
-    expect(message).toContain("[1] observed 5 time(s):");
+    // Ten observations of the crop read first, seven of the crop read second: the difference is
+    // the first crop's second pass, which is the whole point of observing all of them.
+    expect(message).toContain("[0] observed 10 time(s):");
+    expect(message).toContain("[1] observed 7 time(s):");
     expect(message).toContain("no field changed between observations");
+  });
+
+  /**
+   * **"Consumed" and "abandoned" are different stages, and the difference is asserted.**
+   * (T8.1, issue #30.) The floor check stops at the first non-finite sample, which closes the
+   * iterable early — and a report that labelled that "consumed" would tell a reader the crop's
+   * samples had all been read when they had not, in the one span the evidence points at. Read off
+   * the crop's own trace rather than off a failure message, because this build fails at the floor
+   * and never reaches the stitch that prints one.
+   */
+  it("says when a crop's samples were abandoned rather than consumed", async () => {
+    const read = [];
+    const { deps } = seamHarness({
+      readTile: (id) => {
+        const crop = cropFor(id, SEAM_REGION, slope);
+        // One sample's worth of payload for a 46x113 crop: the scan runs off the end, decodes a
+        // non-finite value and the floor check stops there.
+        if (id === "N45E006") crop.rgb = crop.rgb.subarray(0, 3);
+        read.push(crop);
+        return crop;
+      },
+    });
+
+    const error = await catchBuild(() => runBuild(PATHS, deps));
+
+    expect(error.stage).toBe("elevation");
+    const stages = cropTrace(read[0]).map((snapshot) => snapshot.stage);
+    expect(stages).toContain("after samplesIn abandoned (reading N45E006)");
+    expect(stages).not.toContain("after samplesIn consumed (reading N45E006)");
   });
 
   it("judges the floor on the declared region, not on the envelope it had to read", async () => {

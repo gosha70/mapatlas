@@ -738,6 +738,9 @@ async function* readCrops(tileIds, readTile, envelope, region, collected) {
     // against anything narrower asks a cell east of the declared region for a box that does not
     // intersect it.
     const crop = await readTile(tileId, envelope);
+    // The far side of the seam's async return, before this pass's crop joins the list: it observes
+    // the crops the build already held, which is where the change has been seen (T8.1, issue #30).
+    observeAll(`after awaiting readTile (reading ${tileId})`);
     // Pushed before the observation so that the crop just read is one of the crops observed.
     collected.push(crop);
     observeAll(`after readTile (reading ${tileId})`, { envelope });

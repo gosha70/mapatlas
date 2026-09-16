@@ -145,6 +145,8 @@ function harness(overrides = {}) {
     discarded: [],
     archived: [],
   };
+  /** Crops this seam has already handed back, so each call can observe the earlier ones. */
+  const handedBack = [];
   const files = {
     "LICENCE.txt": LICENCE,
     "region.json": JSON.stringify(overrides.region ?? REGION),
@@ -164,11 +166,52 @@ function harness(overrides = {}) {
       calls.probe.push(id);
       return (overrides.probe ?? (() => ({ status: 200 })))(id);
     },
+    /**
+     * **The seam the divergence happens inside** (T8.1, issue #30).
+     *
+     * Every instrumented occurrence puts the first crop's change between its own samples being
+     * consumed and this call returning for the *second* cell — so the observations here cut that
+     * interval into its parts: entering the seam, the two bookkeeping pushes the fake already
+     * made, the construction of the second crop, **this instrument's own push onto `handedBack`**,
+     * and the async return that follows. That third push is new code in the middle of the span
+     * under investigation; leaving it inside an observed interval would mean a divergence there
+     * could be the array write or the promise resolution, with the report unable to say which.
+     *
+     * The crops already handed back are what is observed, because the crop that moves is one of
+     * those, not the one being built. The population is fixed by the entry *count* so that every
+     * stage in this call observes the same crops — an observation set that grew mid-seam would make
+     * "the same crop at two stages" quietly mean two different things.
+     *
+     * The production reader is deliberately untouched: the failing path is this fake, and the real
+     * `readTerrariumCrop` is never on it.
+     */
     readTile: async (id, bounds) => {
+      // A count, not a copy. Cloning the list would be an allocation of this instrument's own,
+      // sitting before the first observation — so a divergence that first appeared at `entering
+      // readTile` could be the clone rather than the generator resuming and dispatching the call.
+      // The bound is a primitive captured on entry; the later push cannot move it.
+      const earlierCount = handedBack.length;
+      const observeReturned = (stage) => {
+        for (let index = 0; index < earlierCount; index += 1) {
+          observeCrop(handedBack[index], stage, { index });
+        }
+      };
+      observeReturned(`entering readTile (${id})`);
       calls.readTile.push(id);
       calls.readBounds.push(bounds);
       const region = overrides.region ?? REGION;
-      return (overrides.readTile ?? ((tileId) => cropFor(tileId, region, slope)))(id);
+      const make = overrides.readTile ?? ((tileId) => cropFor(tileId, region, slope));
+      observeReturned(`before cropFor (${id})`);
+      const crop = make(id);
+      // Still synchronous, before the async function's return wraps this in a promise: a change
+      // seen here happened while the crop was being built, and one seen only after the caller's
+      // `await` happened across the resolution.
+      observeReturned(`after cropFor returned (${id})`);
+      handedBack.push(crop);
+      // This instrument's own write, bracketed on both sides, so it cannot hide inside the
+      // async-return interval it sits in.
+      observeReturned(`after registering the crop (${id})`);
+      return crop;
     },
     encodeRasterTile: (surface, z, x, y) => {
       // Counted, then delegated to the production binding: several tests assert real payload
@@ -538,6 +581,13 @@ describe("every source cell is read, and read as itself", () => {
     );
     expect(message).toContain(held("after regionWindow (reading N45E007)"));
     expect(message).toContain(held("after samplesIn consumed (reading N45E007)"));
+    // The seam's own interior, and the async boundary that follows it: the five points the
+    // divergence in issue #30 has to fall between.
+    expect(message).toContain(held("entering readTile (N45E007)"));
+    expect(message).toContain(held("before cropFor (N45E007)"));
+    expect(message).toContain(held("after cropFor returned (N45E007)"));
+    expect(message).toContain(held("after registering the crop (N45E007)"));
+    expect(message).toContain(held("after awaiting readTile (reading N45E007)"));
 
     // **Asserted in order, not merely present.** Two observations that both fire but in the wrong
     // sequence would print a trace whose divergence is attributed to the wrong span — which is the
@@ -559,12 +609,19 @@ describe("every source cell is read, and read as itself", () => {
     ]);
     // The first crop's whole path, both passes included and in pass order rather than interleaved.
     // Listed complete, not sampled: an ordering oracle that skips stages cannot notice a stage
-    // that moved into one of the gaps it skipped.
+    // that moved into one of the gaps it skipped. The five middle entries are the ones that split
+    // the interval issue #30's occurrences fall in, and their order is what makes the split mean
+    // anything — reversed, the report would attribute the change to the wrong side of the seam.
     inOrder([
       "construction: tileId N45E006",
       "after readTile (reading N45E006): index 0",
       "after regionWindow (reading N45E006): index 0",
       "after samplesIn consumed (reading N45E006): index 0",
+      "entering readTile (N45E007): index 0",
+      "before cropFor (N45E007): index 0",
+      "after cropFor returned (N45E007): index 0",
+      "after registering the crop (N45E007): index 0",
+      "after awaiting readTile (reading N45E007): index 0",
       "after readTile (reading N45E007): index 0",
       "after regionWindow (reading N45E007): index 0",
       "after samplesIn consumed (reading N45E007): index 0",
@@ -573,9 +630,10 @@ describe("every source cell is read, and read as itself", () => {
       "stitchSurface entry: index 0",
     ]);
 
-    // Ten observations of the crop read first, seven of the crop read second: the difference is
-    // the first crop's second pass, which is the whole point of observing all of them.
-    expect(message).toContain("[0] observed 10 time(s):");
+    // Fifteen observations of the crop read first, seven of the crop read second: the difference
+    // is the first crop's second pass — including the five inside the seam, where the crop being
+    // built is not yet one of the crops observed.
+    expect(message).toContain("[0] observed 15 time(s):");
     expect(message).toContain("[1] observed 7 time(s):");
     expect(message).toContain("no field changed between observations");
   });

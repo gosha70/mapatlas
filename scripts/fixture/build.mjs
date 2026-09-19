@@ -10,7 +10,6 @@ import {
   assertStringsBackedByLicence,
 } from "./licence.mjs";
 import { contourTiles, levelsFor, traceContours } from "./contour.mjs";
-import { observeCrop } from "./crop-trace.mjs";
 import { productionEnvelope, tilesInRange } from "./mercator.mjs";
 import { assertMinimumElevation, parseRegionDeclaration } from "./region.mjs";
 import { SOURCE_SAMPLE_SPACING_DEG } from "./source.mjs";
@@ -226,14 +225,6 @@ export async function runBuild(paths, deps, options = {}) {
     ),
   );
 
-  // Diagnostic only (T8.1, issue #30). The instrumented probe narrowed the divergence to the span
-  // between the read and the stitch; this observation bounds the floor-check portion of it. The
-  // floor check is not the only reader in that span — the spacing loop below reads every crop, and
-  // so does `stitchSurface` — so this says which side of the floor check the value survived, and
-  // nothing more.
-  for (const [index, crop] of crops.entries())
-    observeCrop(crop, "after the floor check", { index });
-
   const addresses = [...tilesInRange(declaration.bounds, declaration.minZoom, declaration.maxZoom)];
 
   /**
@@ -343,12 +334,6 @@ export async function runBuild(paths, deps, options = {}) {
       : await at("licence", () => deps.readJson(paths.basemapNoticePath));
 
   const { surface, rasterTiles } = await at("tiles", () => {
-    // Diagnostic only (T8.1, issue #30). The other end of the same split: everything between the
-    // floor check and here is address and notice work that never names a crop, so a value that is
-    // still right at this line and wrong at the stitch narrows the window to this block alone.
-    for (const [index, crop] of crops.entries()) {
-      observeCrop(crop, "before the spacing check", { index });
-    }
     for (const crop of crops) {
       if (crop.pixelScaleDeg !== SOURCE_SAMPLE_SPACING_DEG) {
         // The halo was sized from the declared spacing before any header was read. A source at
@@ -717,33 +702,12 @@ export async function runBuild(paths, deps, options = {}) {
  * @returns {AsyncIterable<{ tileId: string, elevationsM: Iterable<number> }>}
  */
 async function* readCrops(tileIds, readTile, envelope, region, collected) {
-  /**
-   * Diagnostic only (T8.1, issue #30). **Every crop collected so far, not only the one this pass
-   * read.** The probe at head 6ba0169 put the divergence inside this generator, and the crop that
-   * moves is the *first* one — which is read, judged and consumed before the second cell is even
-   * fetched. A value that changes while a later cell is being read or its samples consumed belongs
-   * to the earlier crop, so observing only the current one would miss precisely the case the
-   * evidence points at.
-   *
-   * The reading cell is part of the stage name rather than a field, so that the same crop observed
-   * on two passes produces two distinguishable stages and a divergence can name which pass it fell
-   * in.
-   */
-  const observeAll = (stage, known = {}) => {
-    for (const [index, crop] of collected.entries()) observeCrop(crop, stage, { index, ...known });
-  };
-
   for (const tileId of tileIds) {
     // Read against the **envelope**. Coverage admitted these cells over it, so reading them
     // against anything narrower asks a cell east of the declared region for a box that does not
     // intersect it.
     const crop = await readTile(tileId, envelope);
-    // The far side of the seam's async return, before this pass's crop joins the list: it observes
-    // the crops the build already held, which is where the change has been seen (T8.1, issue #30).
-    observeAll(`after awaiting readTile (reading ${tileId})`);
-    // Pushed before the observation so that the crop just read is one of the crops observed.
     collected.push(crop);
-    observeAll(`after readTile (reading ${tileId})`, { envelope });
 
     // Judge the floor against the **declared region**. The envelope exists so that output tiles
     // are complete rasters, and it reaches a tile's width beyond the region — which around any
@@ -752,9 +716,8 @@ async function* readCrops(tileIds, readTile, envelope, region, collected) {
     // build first failed at 554 m on exactly that. ADR-0024 makes the declared region the
     // subject, and the archive advertises those same bounds.
     const window = regionWindow(crop, region);
-    observeAll(`after regionWindow (reading ${tileId})`);
     if (window === null) continue;
-    yield { tileId, elevationsM: observedSamples(crop, window, tileId, observeAll) };
+    yield { tileId, elevationsM: samplesIn(crop, window) };
   }
   // No count of contributing cells is kept. The envelope contains the region by construction, so
   // at least one crop always intersects it — and were that ever false, yielding nothing reaches
@@ -811,33 +774,6 @@ function regionWindow(crop, region) {
   const rowEnd = Math.min(crop.height, first(crop.north - region[1]));
   if (colEnd <= col0 || rowEnd <= row0) return null;
   return { col0, cols: colEnd - col0, row0, rows: rowEnd - row0 };
-}
-
-/**
- * `samplesIn`, with an observation of every collected crop once the consumer is done with it.
- *
- * Diagnostic only (T8.1, issue #30). The samples are handed to the floor check lazily, so "after
- * the floor check read this crop" is a point inside the consumer's loop, not a line in this file.
- * Wrapping the iterable puts the observation exactly where the consumption ends.
- *
- * **Consumed and abandoned are different stages, and both are recorded.** `finally` also runs when
- * a consumer breaks or throws, and a stage silently missing in that case would read like a point
- * the build never reached rather than one it reached and left early.
- *
- * @param {{ width: number, rgb: Uint8Array }} crop
- * @param {{ col0: number, cols: number, row0: number, rows: number }} window
- * @param {string} tileId
- * @param {(stage: string) => void} observeAll
- * @returns {Iterable<number>}
- */
-function* observedSamples(crop, window, tileId, observeAll) {
-  let completed = false;
-  try {
-    yield* samplesIn(crop, window);
-    completed = true;
-  } finally {
-    observeAll(`after samplesIn ${completed ? "consumed" : "abandoned"} (reading ${tileId})`);
-  }
 }
 
 /**

@@ -27,7 +27,6 @@
 import { inflateSync } from "node:zlib";
 
 import { parseTileId } from "./coverage.mjs";
-import { observeCrop } from "./crop-trace.mjs";
 import { parseBounds } from "./region.mjs";
 import { encodeElevation } from "./terrarium.mjs";
 
@@ -463,7 +462,7 @@ export async function readTerrariumCrop(id, bounds, deps) {
     }
   }
 
-  const crop = {
+  return {
     width: window.cols,
     height: window.rows,
     west: header.originLon + window.col0 * header.pixelScaleDeg,
@@ -471,14 +470,4 @@ export async function readTerrariumCrop(id, bounds, deps) {
     pixelScaleDeg: header.pixelScaleDeg,
     rgb,
   };
-  // Diagnostic only (T8.1, issue #30): the origin is built here from the header's tiepoint and the
-  // window's first column, and the width from the same window. Recording both at the point they
-  // are decided is what lets a later report say whether they already disagreed.
-  observeCrop(crop, "construction", {
-    tileId: id,
-    clippedTo: bounds,
-    col0: window.col0,
-    row0: window.row0,
-  });
-  return crop;
 }

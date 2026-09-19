@@ -270,6 +270,159 @@ count are two controlled variables — and the count is measured because no log 
 assumed from a core count nobody has read. Neither is an invitation to change what CI runs or what
 `vitest.config.ts` sets.
 
+## Amendment, 2026-09-17 — increment 2c: a controlled runtime-mode experiment
+
+**Status: proposed. No implementation is authorised by this section.**
+
+### Why the plan changes here
+
+Increment 2's loop reproduced the failure and increments 1, 2b and the diagnostics that followed
+narrowed it to one call: the first crop's stored `west` changes while `cropFor` constructs the
+second crop. Each of these is excluded by observation — the generator resuming and dispatching the
+call; the fake reader's two `calls.readTile`/`calls.readBounds` pushes; the diagnostic's own
+`handedBack.push`; the async return, promise resolution and microtask resumption; and the build's
+own `collected.push` in `readCrops`.
+
+**The construction observation inside `cropFor` is not excluded.** The reproducing trace bracketed
+the whole call — correct before entry, wrong after return — and that `observeCrop` sits inside the
+bracket. The finer probe that would have separated it returned zero hits, so it settled nothing. It
+remains one of the candidate operations inside `cropFor`, alongside the envelope and clip, the index
+arithmetic, the typed-array allocation, the sample loop and the object literal.
+
+Then the method ran out. Probe `35178802590` at `c20b417`, with ten diagnostic stages inside that
+window, returned **0 hits in 100 complete runs** — one-sided 95% upper bound 2.951% — against ten hits at
+the previous head. The two ran as **separate GitHub Actions jobs**: their *recorded* environment
+fields matched (`availableParallelism 4`, node v24.20.0, vitest 4.1.11, linux/x64) and their mean
+run times were 18.74 s and 18.8 s, but the physical runner and its load were uncontrolled in both. Whether the observations suppressed
+the failure or the rate drifted again cannot be separated by that result or by repeating it, and
+each added stage does real work inside the very interval it measures. **Positional narrowing at the
+JavaScript level is therefore closed**: a finer cut occupies more of what it is cutting.
+
+What T8.1's acceptance criterion asks for is the **cause**, and no further position supplies one.
+This amendment replaces "cut the interval again" with "vary one property of the runtime and measure
+whether the failure depends on it".
+
+### 2c — the experiment
+
+**One distinction, and only one: default Node against `--jitless`.** No semi-space sizing, no GC
+flags, no worker-count change, no coverage change. A run that varied two things at once could not
+attribute a difference to either, and this plan has already paid once for a comparison nobody
+predeclared.
+
+- **Instrumentation is removed first.** Every hot-path stage observation added after increment 1's
+  placement report comes out — the `cropFor` interior, the seam interior, the `readCrops` passes,
+  the floor-check and spacing-check points. What remains is the placement report itself, which is
+  deterministic and sits at the throw rather than in the window. **The four original occurrences
+  predate it**: they were matched to each other by the preserved signature line, and the placement
+  report was added afterwards to make later occurrences legible. **The removal is a precondition, not a step of the experiment**: measuring a
+  runtime distinction on a build whose measured rate is 0/100 would measure nothing.
+- **The arms differ in one thing: the spawned environment.** Both run the identical command the
+  existing probe runs, `npm run test:coverage`, with identical argv; the `--jitless` arm adds the
+  flag through `NODE_OPTIONS` in the child's environment and nothing else. Delivering it by
+  substituting a different runner command would make the arms differ in more than runtime mode, so
+  the runner asserts both the argv (identical) and the environment (differing only in that flag).
+- **Equal fixed budgets of `N = 60` per arm, one dispatch, one job, one tree.** 60 runs default and
+  60 runs `--jitless`, the number fixed in source with no dispatch input, alternating arm by arm so
+  that drift over the job's duration falls on both arms rather than on one. One job, so that neither
+  arm can land on a different machine from the other; the machine itself is still uncontrolled, as
+  it is for every run in this record.
+- **Counted separately**, with the exact-signature matcher and the intact-budget conditions
+  unchanged from the existing probe. **An unrelated failure or an instrument fault in *either* arm
+  makes the whole experiment inconclusive**: no Fisher comparison is computed and no statement about
+  runtime mode is permitted. Not "inconclusive in that arm" — that wording would leave room to
+  compare a filtered or unequal pair of samples, which is precisely the comparison equal fixed
+  budgets exist to prevent.
+- **The default arm is the control and it must reproduce.** If the default arm returns zero, the
+  experiment is **inconclusive** and says nothing about `--jitless`, however the other arm comes
+  out. Stated before the run precisely because the tempting reading of a double null — "the flag
+  fixed it" — is exactly the one this design must refuse.
+
+### Predeclared comparison, and the wording it permits
+
+Fixed before the dispatch, so that nothing is chosen after seeing counts:
+
+- **Test:** Fisher's exact test, two-sided, on the 2×2 of hits and misses in the two arms.
+- **Threshold:** `α = 0.05` for this one comparison. No other comparison is entitled to it; the
+  probe-to-probe rate comparisons already on issue #30 stay labelled exploratory and post-hoc.
+- **Budget, fixed here rather than at dispatch:** `N = 60` per arm.
+
+  The design rate is **13%**, the rate measured at `025cdbe` — the last probe carrying only
+  increment 1's placement report, which is the shape 2c restores. The later 10%, 2% and 0% figures
+  were all measured on builds carrying hot-path stage tracing that 2c removes.
+
+  Against a true rate of zero in the `--jitless` arm, the two-sided Fisher exact test at `α = 0.05`
+  rejects when the default arm shows **≥ 6 hits** in 60. Under `Binomial(60, 0.13)` that has
+  probability **80.876%**, which is the design power. `N = 59` gives 79.566%, so 60 is the minimum
+  equal-arm budget meeting an 80% bar. Recomputing this from any later observed rate is not
+  permitted; the number is fixed by this amendment.
+
+  **Convention:** two-sided Fisher exact by the *sum of tables no more probable than the observed
+  one* (`p = Σ P(table) over tables with P ≤ P(observed)`), on exact hypergeometric probabilities in
+  double precision. The same convention produced 80.876% and 79.566% above, and it is the one the
+  runner must implement and assert against a fixture.
+- **Reporting, in three tiers, so no field is chosen after seeing the result.**
+
+  **Always, whatever happened:** each arm's **raw counts** — runs completed, exact signatures,
+  unrelated failures, instrument failures — and, where an arm was contaminated, which arm and by
+  what. Raw counts are observations; they are entitled to be reported in every outcome.
+
+  **Only for an intact arm:** that arm's hit **rate** and its exact two-sided 95% Clopper–Pearson
+  interval. **A contaminated arm gets neither**, because it has no valid denominator to compute
+  them from: an instrument failure can truncate output, so an apparent non-hit there may be an
+  unobserved hit, and an unrelated suite failure means that run did not complete the same Bernoulli
+  trial as the runs beside it. A rate over such a set is an inference the data does not support,
+  and printing one is not made safe by withholding the Fisher test.
+
+  **Only when both arms are intact *and* the default control reproduced:** the Fisher p-value and
+  the **predeclared 80.876% design power**.
+
+  **Otherwise the Fisher test is not computed at all** — not computed and then withheld. A p-value
+  *is* a comparison of the two modes, so producing one where the control returned zero, or where an
+  arm was contaminated, would be making exactly the comparison those rules forbid and then declining
+  to quote it. There is no number to suppress if it was never calculated.
+
+  **No post-hoc "achieved power"** in any outcome — computed from the observed rates, it adds
+  nothing to the counts and the p-value it is derived from.
+- **If the control reproduces and `p ≤ 0.05`:** the permitted statement is *"the failure rate
+  differs between default and `--jitless` on this runner"* — nothing about optimisation being the
+  cause, and nothing about which optimisation.
+- **If the control reproduces and `p > 0.05`:** the permitted statement is *"this budget did not
+  distinguish the two runtime modes"*. Not "the runtime mode makes no difference".
+- **If the control does not reproduce:** *"inconclusive; the control did not reproduce"*, and no
+  statement about `--jitless` at all.
+
+### What this does not do
+
+It does not identify a mechanism, and a significant result would **not** show this repository's
+JavaScript to be free of defects. `--jitless` changes timing, allocation behaviour and execution
+throughout the suite, any of which could expose or mask a defect that is ordinary JavaScript. What
+such a result licenses is narrower: that the reproduction rate depends on the runtime mode under
+this experiment, which makes runtime mode a variable worth narrowing next. Escalating upstream would
+need a minimal reproducer and stronger causal evidence than a rate difference.
+
+`M = 51` stays **frozen and unused** throughout. It was derived from the **pre-trace, minimally
+instrumented** probe at `025cdbe` — which carried increment 1's placement report and nothing else —
+and 2c's default arm is the first comparable control since.
+
+**Exactly when 2c transfers it.** `M = 51` is the count at which a *reverted-fix* validation is
+expected to see at least one exact-signature failure. The default arm runs 60, not 51, so
+reproducing somewhere in 60 is not the same evidence. The rule:
+
+- **at least one exact-signature hit within the default arm's first 51 runs** → `M = 51` transfers,
+  and the reverted half of a later validation may be run at 51;
+- **hits only in default runs 52–60** → 2c has reproduced and its own comparison stands, but `M`
+  does **not** transfer: a 51-run reverted validation was not shown able to falsify anything, and
+  the budget has to be re-derived from this arm's measured rate under review;
+- **no hits at all** → the control did not reproduce, the experiment is inconclusive, and `M` stays
+  frozen.
+
+This is checkable only if the runner records **each hit's index within its own arm**, so it does
+that, and the split is read off those indices rather than off the totals.
+
+The lattice-placement candidate stays parked. It is symptom immunity rather than a cause fix, and
+merging it would stop the placement report being emitted at all, which is what every result above
+was read from.
+
 ## Required mutations
 
 Each must turn a named assertion red:
@@ -287,3 +440,30 @@ Each must turn a named assertion red:
 - **and, once a reproduction exists:** the fix reverted → the reproduction command fails at the
   measured rate; the fix applied → it passes over the derived run count. Without these two, the
   task is not done, whatever the suite says.
+
+**For increment 2c**, each must turn a named assertion red:
+
+- **both labelled arms actually run default Node** — the `--jitless` arm spawned without the flag in
+  its environment → an assertion on the **environment each arm is spawned with** fails. Two arms
+  that silently ran the same mode would produce a null the design would read as "no difference";
+- **the flag delivered by changing the command rather than the environment** — an arm spawning
+  something other than `npm run test:coverage` → an assertion that both arms spawn the identical
+  argv fails. Changing the command would make the arms differ in more than runtime mode;
+- **alternation replaced by grouped execution** — all 60 default runs then all 60 `--jitless` runs →
+  an assertion on the arm sequence fails. Grouping puts any drift over the job's duration entirely
+  on one arm, which is the confound alternation exists to spread;
+- **a default-arm null allowed to reach the comparison** — given a zero control, the verdict must
+  return *inconclusive* **without the Fisher test having been called**. Asserted on the call, not
+  on the wording: a runner that computed a p-value and then declined to print it has already made
+  the comparison the control rule forbids, and the oracle is a counting or spy assertion that the
+  test was never invoked;
+- **a contaminated arm accepted** — an unrelated failure or an instrument fault in either arm must
+  make the **whole experiment** inconclusive, with no Fisher comparison computed and no runtime-mode
+  statement permitted; a verdict that reported "inconclusive in that arm" and compared the rest
+  fails this;
+- **a contaminated arm still given a rate** — a verdict that correctly withholds the Fisher test but
+  publishes a rate or a Clopper–Pearson interval for the contaminated arm fails. Raw counts are
+  always reportable; an inferred rate over a set whose denominator is not a completed trial is not,
+  and suppressing the comparison does not make the arm's own rate sound;
+- **the fixed `N = 60` made dispatch-selectable** — a run-count input reaching the budget → the
+  argument guard fails, on the same reasoning as the existing probe's fixed `PLANNED_RUNS`.

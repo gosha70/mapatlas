@@ -1,18 +1,41 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, it } from "vitest";
 
+import { BuildError } from "./fixture/build.mjs";
+import { SurfaceError, stitchSurface } from "./fixture/surface.mjs";
 import {
-  PLANNED_RUNS,
+  RECORDED_FIRST_LINES,
   SIGNATURE,
   classifyRun,
   interpretSpawn,
-  refusedArguments,
-  runProbe,
-  verdict,
-  zeroHitUpperBound,
+  isRecordedFailure,
+  readableResults,
+  unrelatedFailures,
 } from "./flake-probe.mjs";
 
-const text = (v) => verdict(v).lines.join("\n");
+/**
+ * The recorded failure, **raised by the production code** rather than typed out: a 46x113 crop
+ * with a 35x113 crop laid over its first 35 columns is a union of 46x113 with no gap and
+ * 35 x 113 = 3955 samples written twice — the recorded numbers exactly. So what is judged below
+ * is the message `stitchSurface` really builds, diagnostics and all, and then the message
+ * `BuildError` really builds around it at the stage where a build calls it.
+ */
+function realSurfaceError() {
+  const crop = (width, height) => ({
+    width,
+    height,
+    west: 7,
+    north: 45.9,
+    pixelScaleDeg: 1 / 3600,
+    rgb: new Uint8Array(width * height * 3),
+  });
+  try {
+    stitchSurface([crop(46, 113), crop(35, 113)]);
+  } catch (error) {
+    return error;
+  }
+  throw new Error("stitchSurface did not refuse the overlapping crops");
+}
 
 describe("classifyRun", () => {
   it("counts a failing run carrying the exact signature", () => {
@@ -62,180 +85,6 @@ describe("classifyRun", () => {
     const esc = String.fromCharCode(27);
     const output = `${esc}[31mSurfaceError: ${SIGNATURE}${esc}[39m`;
     expect(classifyRun({ exitCode: 1, output })).toBe("signature");
-  });
-});
-
-describe("the budget", () => {
-  /**
-   * Not an input, and asserted so: a run count chosen at dispatch time is a probabilistic bar
-   * selected after the result is known, which the plan refuses at length.
-   */
-  it("is the predeclared 100 runs", () => {
-    expect(PLANNED_RUNS).toBe(100);
-  });
-});
-
-describe("verdict", () => {
-  const full = { planned: 100, completed: 100, signature: 0, other: 0 };
-
-  it("reports a bound, not an absence, on a clean full-budget null", () => {
-    const result = verdict(full);
-    expect(result.clean).toBe(true);
-    expect(result.reproduced).toBe(false);
-    expect(text(full)).toContain("NOT REPRODUCED");
-    expect(text(full)).toContain("upper bound on the per-run rate: 2.951%");
-    expect(text(full)).toContain("no fix follows");
-  });
-
-  it("reports an actionable reproduction with its observed rate", () => {
-    const hit = { ...full, signature: 2 };
-    expect(verdict(hit).reproduced).toBe(true);
-    expect(verdict(hit).actionable).toBe(true);
-    expect(text(hit)).toContain("REPRODUCED");
-    expect(text(hit)).toContain("0.0200");
-    expect(text(hit)).toContain("A fix may now be attempted");
-  });
-
-  /**
-   * **A hit is an observation; it is not automatically a licence to fix.** A fix has to be
-   * falsified against a *rate*, and a rate measured over a short or contaminated budget is not
-   * one. The observation is preserved either way — it is real, and it belongs on issue #30 — but
-   * `actionable` stays false and the runner goes red.
-   */
-  it.each([
-    ["the budget was cut short", { ...full, completed: 40, signature: 1 }],
-    ["an unrelated failure also occurred", { ...full, signature: 1, other: 3 }],
-  ])("records a hit but refuses to authorise a fix when %s", (_name, counts) => {
-    const result = verdict(counts);
-    expect(result.reproduced).toBe(true);
-    expect(result.actionable).toBe(false);
-    expect(result.clean).toBe(false);
-    expect(text(counts)).toContain("OBSERVED BUT INCONCLUSIVE");
-    expect(text(counts)).toContain("no fix follows");
-    expect(text(counts)).not.toContain("A fix may now be attempted");
-  });
-
-  /**
-   * **A probe that stopped early has not shown the signature is absent** — it has shown it did not
-   * finish asking. It is reached when `runProbe` gives up because the suite could not be launched;
-   * a workflow timeout is *not* this case, since a killed job never reaches `verdict` at all. And
-   * it is the outcome most likely to be read as "fine" by someone skimming.
-   */
-  it("refuses to claim a null when the budget was not spent", () => {
-    const short = { ...full, completed: 60 };
-    expect(verdict(short).clean).toBe(false);
-    expect(text(short)).toContain("INCONCLUSIVE");
-    expect(text(short)).not.toContain("upper bound");
-  });
-
-  /** An unrelated failure means some runs did not ask this probe's question at all. */
-  it("refuses to claim a null when an unrelated failure occurred", () => {
-    const dirty = { ...full, other: 1 };
-    expect(verdict(dirty).clean).toBe(false);
-    expect(text(dirty)).toContain("INCONCLUSIVE");
-    expect(text(dirty)).not.toContain("upper bound");
-  });
-
-  /** A hit is still a hit when the budget was cut short or something else also broke. */
-  it("names both reasons when a hit arrives on a short and contaminated budget", () => {
-    const both = { planned: 100, completed: 70, signature: 1, other: 2 };
-    expect(text(both)).toContain("OBSERVED BUT INCONCLUSIVE");
-    expect(text(both)).toContain("only 70 of 100 runs completed");
-    expect(text(both)).toContain("2 run(s) failed for an unrelated reason");
-  });
-});
-
-describe("zeroHitUpperBound", () => {
-  it("matches the bound 2a reported for its 200 runs", () => {
-    expect(zeroHitUpperBound(200) * 100).toBeCloseTo(1.487, 3);
-  });
-
-  it("loosens as the budget shrinks, which is why the budget is fixed in advance", () => {
-    expect(zeroHitUpperBound(100)).toBeGreaterThan(zeroHitUpperBound(200));
-  });
-});
-
-describe("runProbe", () => {
-  /** A runner whose script says what each call returns, so the loop's behaviour is observable. */
-  const scripted = (kinds) => {
-    const calls = [];
-    const runSuite = (run) => {
-      calls.push(run);
-      const kind = kinds[run - 1] ?? "passed";
-      if (kind === "unspawnable")
-        return { spawned: false, reason: "npm is not on PATH", exitCode: 1, output: "" };
-      if (kind === "signature") return { exitCode: 1, output: `SurfaceError: ${SIGNATURE}` };
-      if (kind === "other") return { exitCode: 1, output: "a different test failed" };
-      return { exitCode: 0, output: "ok" };
-    };
-    return { calls, runSuite };
-  };
-
-  /**
-   * **The central requirement of step 2b, and the one a mutation could quietly remove.** The
-   * deliverable is a rate, so the loop must keep going after a hit; a `break` on first success
-   * would report one hit over an unknown number of runs and no test of the counts alone would
-   * notice. The injected runner proves every planned invocation happened.
-   */
-  it("keeps running after a hit, for the whole budget", () => {
-    const { calls, runSuite } = scripted(["signature"]);
-    const counts = runProbe({ planned: 10, runSuite });
-    expect(calls).toHaveLength(10);
-    expect(calls.at(-1)).toBe(10);
-    expect(counts).toMatchObject({ planned: 10, completed: 10, signature: 1, other: 0 });
-    expect(verdict(counts).actionable).toBe(true);
-  });
-
-  it("counts hits and unrelated failures apart, across the whole budget", () => {
-    const { runSuite } = scripted(["signature", "other", "passed", "signature"]);
-    expect(runProbe({ planned: 6, runSuite })).toMatchObject({
-      completed: 6,
-      signature: 2,
-      other: 1,
-    });
-  });
-
-  /**
-   * A suite that cannot be started is not a suite that failed: counting it as an unrelated failure
-   * would let a machine that can run nothing report a hundred of them. Stopping here is **the**
-   * path that makes a partial `completed` reachable — `runProbe` otherwise always spends its whole
-   * budget, and a workflow timeout produces no counts at all, because a killed job never reaches
-   * `verdict`.
-   */
-  it("stops when the suite cannot be started, and says how far it got", () => {
-    const { calls, runSuite } = scripted(["passed", "unspawnable"]);
-    const counts = runProbe({ planned: 10, runSuite });
-    expect(calls).toHaveLength(2);
-    expect(counts).toMatchObject({ completed: 1, other: 0, aborted: "npm is not on PATH" });
-    expect(verdict(counts).clean).toBe(false);
-    expect(verdict(counts).lines.join("\n")).toContain("only 1 of 10 runs completed");
-  });
-
-  it("reports each run to the caller, so a hit's output can be printed in full", () => {
-    const seen = [];
-    const { runSuite } = scripted(["signature"]);
-    runProbe({ planned: 2, runSuite, onRun: (event) => seen.push(event) });
-    expect(seen.map((one) => one.kind)).toStrictEqual(["signature", "passed"]);
-    expect(seen[0].output).toContain(SIGNATURE);
-  });
-});
-
-describe("refusedArguments", () => {
-  it("proceeds when given none", () => {
-    expect(refusedArguments([])).toBeUndefined();
-  });
-
-  /**
-   * Found the hard way in review: `npm run probe:flake -- --help` printed no help and started the
-   * full loop, because the runner ignored its arguments. An hour of runner time should not begin
-   * because of a typo, and there is no argument that could ever be right — the budget is fixed in
-   * source precisely so it cannot be chosen at the command line.
-   */
-  it.each([["--help"], ["--runs=5"], ["100"]])("refuses %s, and says why", (arg) => {
-    const refusal = refusedArguments([arg]);
-    expect(refusal).toContain("takes no arguments");
-    expect(refusal).toContain(JSON.stringify(arg));
-    expect(refusal).toContain("exactly 100 times");
   });
 });
 
@@ -317,57 +166,166 @@ describe("interpretSpawn, on a child that did not exit on its own terms", () => 
     expect(result.truncated).toBeUndefined();
     expect(classifyRun(result)).toBe(kind);
   });
-
-  /** The whole point: a hit inside a killed run cannot authorise a fix. */
-  it("cannot authorise a fix, even carrying a hit", () => {
-    const killed = () =>
-      interpretSpawn({
-        pid: 1,
-        status: null,
-        signal: "SIGKILL",
-        stdout: `SurfaceError: ${SIGNATURE}`,
-        stderr: "",
-      });
-    const counts = runProbe({ planned: 2, runSuite: killed });
-    expect(counts).toMatchObject({ completed: 2, signature: 2, other: 0, instrument: 2 });
-    const result = verdict(counts);
-    expect(result.reproduced).toBe(true);
-    expect(result.actionable).toBe(false);
-    expect(result.lines.join("\n")).toContain("interrupted or had their output truncated");
-  });
 });
 
-describe("a run the instrument interrupted", () => {
-  const truncatedHit = () => ({
-    truncated: true,
-    reason: "stdout maxBuffer length exceeded",
-    exitCode: 1,
-    output: `SurfaceError: ${SIGNATURE}`,
+describe("unrelatedFailures", () => {
+  /** A failure in the shape `probe-results-reporter.mjs` writes. */
+  const failure = (where, ...messages) => ({ kind: "test", where, messages });
+  const theHit = failure("build-fixture > builds", `${SIGNATURE}\n  placement: …`);
+
+  it("finds nothing unrelated in a run whose only failure is the recorded one", () => {
+    expect(unrelatedFailures({ exitCode: 1, results: { failures: [theHit] } })).toStrictEqual([]);
   });
 
   /**
-   * The hit happened and is recorded; what the truncation costs is the *rate*. A fix falsified
-   * against a run measured partly through a broken instrument is not falsified against anything.
+   * **The masking this exists to close.** `classifyRun` calls this run a `signature`, correctly,
+   * and being one of three kinds it can say nothing more; what failed beside the hit has to be
+   * asked separately or it is never asked.
    */
-  it("counts the hit, marks the instrument, and refuses to authorise a fix", () => {
-    const counts = runProbe({
-      planned: 3,
-      runSuite: (run) => (run === 1 ? truncatedHit() : { exitCode: 0, output: "ok" }),
-    });
-    expect(counts).toMatchObject({ completed: 3, signature: 1, other: 0, instrument: 1 });
-    const result = verdict(counts);
-    expect(result.reproduced).toBe(true);
-    expect(result.actionable).toBe(false);
-    expect(result.lines.join("\n")).toContain("interrupted or had their output truncated");
+  it("names what failed beside a hit, and not the hit", () => {
+    const results = {
+      failures: [
+        theHit,
+        failure("some.test > a test", "expected 1 to be 2"),
+        failure("a hook", "x"),
+      ],
+    };
+
+    expect(unrelatedFailures({ exitCode: 1, results })).toStrictEqual([
+      "some.test > a test",
+      "a hook",
+    ]);
   });
 
-  /** A truncated run that carried no hit is an instrument failure and not an unrelated one. */
-  it("does not also count it as an unrelated failure", () => {
-    const counts = runProbe({
-      planned: 2,
-      runSuite: () => ({ truncated: true, exitCode: 1, output: "something else broke" }),
-    });
-    expect(counts).toMatchObject({ other: 0, instrument: 2 });
-    expect(verdict(counts).clean).toBe(false);
+  /** On the same terms as `classifyRun`: the line has to end where the recorded one ends. */
+  it("does not take a longer line for the recorded failure", () => {
+    const results = { failures: [failure("wider", `${SIGNATURE}0`)] };
+    expect(unrelatedFailures({ exitCode: 1, results })).toStrictEqual(["wider"]);
+  });
+
+  /**
+   * **The same masking, one level down.** Vitest attaches a teardown's error to the test it ran
+   * after, so the recorded failure and an unrelated `afterEach` error are one entry with two
+   * messages. Shown in review with a real subprocess: clearing the entry on *some* message
+   * carrying the signature gave `signature=1, other=0`, and Fisher was called.
+   */
+  it("names an unrelated error on the same test as the recorded failure", () => {
+    const sameTest = failure(
+      "build-fixture > builds",
+      `${SIGNATURE}\n  placement: …`,
+      "teardown failed",
+    );
+    const either = failure("build-fixture > builds", "teardown failed", SIGNATURE);
+
+    expect(unrelatedFailures({ exitCode: 1, results: { failures: [sameTest] } })).toStrictEqual([
+      "build-fixture > builds — another error beside the recorded failure",
+    ]);
+    // Whichever order they arrive in.
+    expect(unrelatedFailures({ exitCode: 1, results: { failures: [either] } })).toHaveLength(1);
+    // And two errors that are both the recorded failure are still only the recorded failure.
+    const twice = failure("build-fixture > builds", SIGNATURE, `${SIGNATURE}\n  placement: …`);
+    expect(unrelatedFailures({ exitCode: 1, results: { failures: [twice] } })).toStrictEqual([]);
+  });
+
+  it("counts a failed test that carries no message at all", () => {
+    const results = { failures: [theHit, { kind: "test", where: "silent", messages: [] }] };
+    expect(unrelatedFailures({ exitCode: 1, results })).toStrictEqual(["silent"]);
+  });
+
+  /** A coverage threshold, say: the command failed and no test did. Not the recorded failure. */
+  it("treats a failing exit with nothing recorded as unrelated", () => {
+    expect(unrelatedFailures({ exitCode: 1, results: { failures: [] } })).toStrictEqual([
+      expect.stringMatching(/exit 1 with no failed test/),
+    ]);
+    expect(unrelatedFailures({ exitCode: 0, results: { failures: [] } })).toStrictEqual([]);
+  });
+});
+
+describe("readableResults", () => {
+  it("accepts what the reporter writes and refuses anything else", () => {
+    expect(readableResults({ reason: "passed", failures: [] })).toBe(true);
+    expect(readableResults({ failures: [{ where: "a", messages: ["b"] }] })).toBe(true);
+    expect(readableResults(undefined)).toBe(false);
+    expect(readableResults({})).toBe(false);
+    expect(readableResults({ failures: [{ where: "a" }] })).toBe(false);
+    // Vitest's own JSON reporter, which is not the instrument: see the reporter for why.
+    expect(readableResults({ testResults: [], success: true })).toBe(false);
+  });
+});
+
+describe("isRecordedFailure, on the recorded failure as production raises it", () => {
+  const surfaceError = realSurfaceError();
+  const buildError = new BuildError("tiles", surfaceError);
+
+  it("is looking at the real thing: a SurfaceError, with its placement report appended", () => {
+    expect(surfaceError).toBeInstanceOf(SurfaceError);
+    expect(surfaceError.message.split("\n").length).toBeGreaterThan(1);
+    expect(buildError.message.split("\n").length).toBeGreaterThan(1);
+  });
+
+  /**
+   * **One identity, two representations, both derived from production.** If `stitchSurface`
+   * rewords its first line or `BuildError` relabels a stage, this fails — which is what keeps the
+   * two accepted forms from becoming a second, independently maintained signature.
+   */
+  it("accepts exactly the two first lines production produces, and they are built on SIGNATURE", () => {
+    expect(RECORDED_FIRST_LINES).toStrictEqual([
+      surfaceError.message.split("\n")[0],
+      buildError.message.split("\n")[0],
+    ]);
+    expect(RECORDED_FIRST_LINES[0]).toBe(SIGNATURE);
+    expect(RECORDED_FIRST_LINES[1].endsWith(SIGNATURE)).toBe(true);
+  });
+
+  it("recognises both, with the diagnostics that follow the first line", () => {
+    expect(isRecordedFailure(surfaceError.message)).toBe(true);
+    expect(isRecordedFailure(buildError.message)).toBe(true);
+    // A real hit, as a real build reports it, contaminates nothing.
+    const results = {
+      failures: [{ kind: "test", where: "build", messages: [buildError.message] }],
+    };
+    expect(unrelatedFailures({ exitCode: 1, results })).toStrictEqual([]);
+  });
+
+  /**
+   * **Every one of these ends a line the way the recorded line ends**, so the log classifier —
+   * rightly, and unchanged — calls the run a hit. None of them *is* the recorded failure, and an
+   * end-anchored match exempted all of them from contaminating it (shown in review: `rebuild
+   * failed: <signature>` was a clean hit and reached Fisher).
+   */
+  it.each([
+    ["an arbitrary prefix", `rebuild failed: ${SIGNATURE}`, "signature"],
+    [
+      "the same failure relabelled at another stage",
+      new BuildError("contours", surfaceError).message,
+      "signature",
+    ],
+    ["the production prefix twice over", new BuildError("tiles", buildError).message, "signature"],
+    ["the signature on a later line", `cleanup failed after:\n${SIGNATURE}`, "signature"],
+    [
+      "the production form on a later line",
+      `cleanup failed after:\n${buildError.message}`,
+      "signature",
+    ],
+    ["leading whitespace", ` ${SIGNATURE}`, "signature"],
+    // Not even a logged hit: the line no longer ends where the recorded one ends.
+    ["trailing text", `${SIGNATURE} (again)`, "other"],
+  ])("refuses %s as the recorded failure", (_, message, logged) => {
+    expect(isRecordedFailure(message)).toBe(false);
+    // The log classifier is unchanged, and for most of these it says hit — which is the point:
+    // the hit is kept, and the error still contaminates the run it is in.
+    expect(classifyRun({ exitCode: 1, output: `Error: ${message}\n` })).toBe(logged);
+
+    const results = { failures: [{ kind: "test", where: "somewhere", messages: [message] }] };
+    expect(unrelatedFailures({ exitCode: 1, results })).toHaveLength(1);
+  });
+
+  it("says why, when an error only carries the line", () => {
+    const results = {
+      failures: [{ kind: "test", where: "somewhere", messages: [`rebuild failed: ${SIGNATURE}`] }],
+    };
+    expect(unrelatedFailures({ exitCode: 1, results })).toStrictEqual([
+      "somewhere — carries the signature line, but is not the recorded failure",
+    ]);
   });
 });

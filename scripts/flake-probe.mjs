@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Classifying and summarising a run of the flake probe (T8.1 step 2b).
+ * What one spawned run of the suite *was* — the low-level seam, and nothing above it.
  *
- * Step 2a matched two of the three environment differences locally and came back null over its
- * full 200-run budget, which bounds the rate here at 1.487% and settles nothing about the runner.
- * So the same probe runs the predeclared 100-run budget where the failure has actually been seen.
+ * Four things live here and no more: the signature the probe is looking for, the rule that says
+ * which of the three kinds a run was, the list of what *else* failed in it, and the reading of a
+ * `spawnSync` result. Every budget,
+ * schedule, gate and statistic belongs to the experiment being run, and those are in
+ * `flake-experiment.mjs`; this module is what both the 2b single-arm probe and 2c's two-arm
+ * comparison have had in common, and duplicating it into a second runner is the one thing that
+ * would put two different definitions of "the recorded failure" into the repository.
  *
- * **The budget is not an input.** Exactly `PLANNED_RUNS`, written down here, because a run count
- * chosen at dispatch time is a probabilistic bar selected after the fact — the thing T8.1's plan
- * spends its longest section refusing. Changing it means editing this file under review.
- *
- * Pure, and separate from the loop that drives it, on `isolation-rules.mjs`'s terms: a verdict
- * that can only be checked by spending an hour of CI is a verdict nobody checks.
+ * Pure, and separate from the loop that drives it, on `isolation-rules.mjs`'s terms: a
+ * classification that can only be checked by spending an hour of CI is one nobody checks.
  */
 
 /**
@@ -30,9 +30,6 @@
 export const SIGNATURE =
   "the crops do not tile their union: 0 sample(s) covered by none and 3955 by more than one, " +
   "over 46x113";
-
-/** The budget, fixed before the attempt and not selectable at dispatch. */
-export const PLANNED_RUNS = 100;
 
 /**
  * What one run of the suite was.
@@ -52,9 +49,115 @@ export const PLANNED_RUNS = 100;
  */
 export function classifyRun({ exitCode, output }) {
   if (exitCode === 0) return "passed";
-  return output.split(/\r?\n/).some((line) => bare(line).trimEnd().endsWith(SIGNATURE))
-    ? "signature"
-    : "other";
+  return carriesSignature(output) ? "signature" : "other";
+}
+
+/** Whether some line of `text` ends with the recorded failure — the one definition of a match. */
+export function carriesSignature(text) {
+  return text.split(/\r?\n/).some((line) => bare(line).trimEnd().endsWith(SIGNATURE));
+}
+
+/** How `BuildError` labels the tiles stage, which is where `stitchSurface` runs in a real build. */
+const TILES_STAGE_PREFIX = 'fixture build failed at stage "tiles": ';
+
+/**
+ * The first line of the recorded failure's **own message**, in the only two forms it has.
+ *
+ * **One identity, two representations — not two signatures.** The log and the structured results
+ * describe the same failure and both are built on `SIGNATURE`; what differs is how much each can
+ * demand. A log line arrives behind whatever the reporter printed before it (`SurfaceError: `,
+ * `BuildError: `, a stack frame's indent), so `carriesSignature` can only anchor the *end* of a
+ * line. A structured message arrives bare, so here the **whole first line** is known: either the
+ * sentence as `stitchSurface` throws it, or that sentence behind the exact label `BuildError`
+ * gives the tiles stage — which is the form a real build fails with, and the reason "equals
+ * `SIGNATURE`" alone would reject every genuine hit. `flake-probe.test.mjs` derives both from the
+ * real `SurfaceError` and `BuildError`, so a change to either wording fails there.
+ */
+export const RECORDED_FIRST_LINES = Object.freeze([SIGNATURE, `${TILES_STAGE_PREFIX}${SIGNATURE}`]);
+
+/**
+ * Whether one structured error message **is** the recorded failure.
+ *
+ * Stricter than `carriesSignature`, deliberately and only here. The end-anchored match is what
+ * decides a *hit*, and that is unchanged; this decides whether an error is **exempt from
+ * contaminating** the run, and an end-anchored match exempts too much: `rebuild failed:
+ * <signature>` ends the way the recorded line ends, and so does an unrelated error that merely
+ * quotes the signature on a later line. Both were accepted as clean hits and reached Fisher (shown
+ * in review). The diagnostics appended after the first line are untouched by this — only the first
+ * line is identity.
+ *
+ * @param {string} message
+ */
+export function isRecordedFailure(message) {
+  const [firstLine] = message.split(/\r?\n/);
+  return RECORDED_FIRST_LINES.includes(firstLine);
+}
+
+/**
+ * Whether `results` is what `probe-results-reporter.mjs` writes, as far as this module reads it.
+ *
+ * @param {unknown} results
+ * @returns {results is { failures: { where: string, messages: string[] }[] }}
+ */
+export function readableResults(results) {
+  return (
+    typeof results === "object" &&
+    results !== null &&
+    Array.isArray(results.failures) &&
+    results.failures.every((one) => typeof one?.where === "string" && Array.isArray(one?.messages))
+  );
+}
+
+/**
+ * What failed in a run **besides** the recorded failure.
+ *
+ * **`classifyRun` answers one question and cannot answer two.** It says whether the recorded
+ * failure is in the run, and a run in which the recorded failure *and* an unrelated test both
+ * failed is — correctly — a hit. But that run did not complete the same trial as the runs beside
+ * it, and counting it as a clean hit lets a contaminated arm through to the comparison: shown in
+ * review with a real fixture, which tallied `signature=1, other=0` and reached Fisher. The kinds
+ * are mutually exclusive; contamination is not. So this is asked separately, of the structured
+ * results rather than of the text.
+ *
+ * **Every error is judged, not every entry.** One entry can hold several errors: Vitest attaches
+ * a teardown's error to the test it ran after, so a test that throws the recorded failure and
+ * whose `afterEach` then throws something else is *one* failed test with *two* messages. Clearing
+ * the entry because some message in it carried the signature cleared the other error with it —
+ * the same masking, one level down, and shown in review the same way: `signature=1, other=0`,
+ * Fisher called. So an entry is the recorded failure only if **every** error in it is; any other
+ * error in it is unrelated, and a failure with no message at all cannot be the recorded one.
+ *
+ * **And "is" means `isRecordedFailure`, not `carriesSignature`.** A run whose log carries the
+ * signature is a hit and stays one; an error that only *carries* the line — behind an arbitrary
+ * prefix, or on a later line — is not the recorded failure, and contaminates the run it is in.
+ *
+ * **A failing exit with nothing failed is unrelated too.** A coverage threshold, or anything else
+ * that fails the command outside a test, leaves an empty list and a non-zero exit; whatever that
+ * was, it was not the recorded failure.
+ *
+ * @param {{ exitCode: number,
+ *   results: { failures: { where: string, messages: string[] }[] } }} run
+ * @returns {string[]} where each unrelated failure was, empty when there is none
+ */
+export function unrelatedFailures({ exitCode, results }) {
+  if (exitCode !== 0 && results.failures.length === 0) {
+    return [
+      `exit ${String(exitCode)} with no failed test, hook, module or unhandled error recorded`,
+    ];
+  }
+  return results.failures
+    .filter(
+      (one) =>
+        one.messages.length === 0 || !one.messages.every((message) => isRecordedFailure(message)),
+    )
+    .map((one) => {
+      if (one.messages.some((message) => isRecordedFailure(message))) {
+        return `${one.where} — another error beside the recorded failure`;
+      }
+      return one.messages.some((message) => carriesSignature(message))
+        ? `${one.where} — carries the signature line, but is not the recorded failure`
+        : one.where;
+    });
 }
 
 /** Colour codes, stripped so the comparison is about the sentence rather than about vitest's ink. */
@@ -106,163 +209,4 @@ export function interpretSpawn(spawn) {
   }
 
   return { exitCode, output };
-}
-
-/**
- * Why an argument is refused rather than ignored.
- *
- * The probe takes none — the budget is deliberately not selectable — and it ignored anything it
- * was given, so `npm run probe:flake -- --help` silently started an hour-long loop instead of
- * printing help. Anything on the command line is therefore a mistake about what this does, and the
- * cheapest response is to say so before spending the runner time.
- *
- * @param {string[]} args everything after the script name
- * @returns {string | undefined} why it was refused, or `undefined` to proceed
- */
-export function refusedArguments(args) {
-  if (args.length === 0) return undefined;
-  return (
-    `this probe takes no arguments, and was given ${args.map((a) => JSON.stringify(a)).join(" ")}. ` +
-    `It runs the suite exactly ${String(PLANNED_RUNS)} times — a budget fixed in ` +
-    `scripts/flake-probe.mjs rather than chosen at the command line — and nothing else. ` +
-    `Run it with no arguments.`
-  );
-}
-
-/**
- * Drive the suite `planned` times and count what happened.
- *
- * **The runner is injected**, so the one behaviour that matters most here can be tested without
- * spending an hour of CI: that the loop **keeps going after a hit**. The deliverable is a rate,
- * and a probe that stopped at its first success would report one hit over an unknown number of
- * runs — which cannot falsify a fix in either direction.
- *
- * **A run that could not be spawned is not a run.** `npm` missing, or a fork that fails outright,
- * is not a failing suite: counting it as `other` would let a machine that can run nothing at all
- * report a hundred unrelated failures. The loop stops and reports how far it got, which is the
- * path that makes a partial `completed` reachable.
- *
- * @param {{ planned: number, runSuite: (run: number) => { spawned?: boolean, reason?: string,
- *   exitCode: number, output: string }, onRun?: (event: object) => void }} options
- * @returns {{ planned: number, completed: number, signature: number, other: number,
- *   aborted: string | undefined }}
- */
-export function runProbe({ planned, runSuite, onRun }) {
-  let completed = 0;
-  let signature = 0;
-  let other = 0;
-  let instrument = 0;
-  let aborted;
-
-  for (let run = 1; run <= planned; run += 1) {
-    const result = runSuite(run);
-    if (result.spawned === false) {
-      aborted = result.reason ?? "the suite could not be started";
-      break;
-    }
-    completed += 1;
-    const kind = classifyRun(result);
-    // A hit inside a truncated run still happened, and is still counted. What the truncation costs
-    // is the *rate*: `instrument` keeps the result non-actionable, so the hit is recorded and no
-    // fix is authorised by it.
-    if (kind === "signature") signature += 1;
-    else if (kind === "other" && result.truncated !== true) other += 1;
-    if (result.truncated === true) instrument += 1;
-    onRun?.({ run, kind, output: result.output, truncated: result.truncated === true });
-  }
-
-  return { planned, completed, signature, other, instrument, aborted };
-}
-
-/**
- * One-sided upper bound on the per-run rate, given no hits in `runs` runs.
- *
- * The same 95% bound 2a reported. It is what a null result is *entitled* to say; "we ran it a lot
- * and it was fine" is not.
- */
-export function zeroHitUpperBound(runs, alpha = 0.05) {
-  return 1 - Math.pow(alpha, 1 / runs);
-}
-
-/**
- * The probe's verdict.
- *
- * **Two claims are hedged, not one.** A *clean null* requires the whole budget to have been spent
- * and no unrelated failure — a probe that stopped early, or whose runs broke for another reason,
- * has not shown the signature is absent, only that it did not finish asking. And an *actionable*
- * reproduction requires the same two things: a fix has to be falsified against a rate, and a rate
- * measured over a short or contaminated budget is not one. A hit on run 3 of a probe that then
- * failed to spawn is a real observation and is reported as such — it is not a licence to start
- * fixing.
- *
- * `completed < planned` is reached when the suite could not be spawned at all and `runProbe`
- * stopped. It is **not** how a workflow timeout arrives: a killed job never reaches this function,
- * which is why the workflow's own header says a timeout prevents a verdict rather than producing
- * one.
- *
- * @param {{ planned: number, completed: number, signature: number, other: number,
- *   instrument?: number }} counts
- * @returns {{ reproduced: boolean, actionable: boolean, clean: boolean, lines: string[] }}
- */
-export function verdict({ planned, completed, signature, other, instrument = 0 }) {
-  const reproduced = signature > 0;
-  const finished = completed === planned;
-  const intact = finished && other === 0 && instrument === 0;
-  const actionable = reproduced && intact;
-  const clean = intact && signature === 0;
-
-  const lines = [
-    "--- T8.1 2b result ---",
-    `planned runs        ${String(planned)}`,
-    `runs completed      ${String(completed)}`,
-    `exact signature     ${String(signature)}`,
-    `other failures      ${String(other)}`,
-    `instrument failures ${String(instrument)}`,
-    "",
-  ];
-
-  const spoiled = [
-    finished ? undefined : `only ${String(completed)} of ${String(planned)} runs completed`,
-    other > 0 ? `${String(other)} run(s) failed for an unrelated reason` : undefined,
-    instrument > 0
-      ? `${String(instrument)} run(s) were interrupted or had their output truncated`
-      : undefined,
-  ].filter((one) => one !== undefined);
-
-  if (actionable) {
-    lines.push(
-      `REPRODUCED: the exact signature appeared ${String(signature)} time(s) in ` +
-        `${String(completed)} run(s) — an observed rate of ` +
-        `${(signature / completed).toFixed(4)}.`,
-      "The placement report for each hit is above. A fix may now be attempted, and must be",
-      "falsified in both directions against this reproduction.",
-    );
-    return { reproduced, actionable, clean, lines };
-  }
-
-  if (reproduced) {
-    lines.push(
-      `OBSERVED BUT INCONCLUSIVE: the exact signature appeared ${String(signature)} time(s), and`,
-      `that observation stands — but ${spoiled.join(", and ")}, so the rate is not measured over`,
-      "a clean budget. Record the hit and its placement report; no fix follows from this run.",
-    );
-    return { reproduced, actionable, clean, lines };
-  }
-
-  if (spoiled.length > 0) {
-    lines.push(
-      `INCONCLUSIVE: ${spoiled.join(", and ")}. A probe that did not finish asking, or whose runs`,
-      "did not all ask this question, has not shown the signature is absent — and no bound",
-      "follows from it.",
-    );
-    return { reproduced, actionable, clean, lines };
-  }
-
-  lines.push(
-    `NOT REPRODUCED: no exact signature in ${String(completed)} complete runs, and no unrelated`,
-    "failures. One-sided 95% upper bound on the per-run rate: " +
-      `${(zeroHitUpperBound(completed) * 100).toFixed(3)}%.`,
-    "This is a bound, not an absence, and no fix follows from it.",
-  );
-  return { reproduced, actionable, clean, lines };
 }

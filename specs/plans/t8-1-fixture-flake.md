@@ -272,7 +272,21 @@ assumed from a core count nobody has read. Neither is an invitation to change wh
 
 ## Amendment, 2026-09-17 — increment 2c: a controlled runtime-mode experiment
 
-**Status: proposed. No implementation is authorised by this section.**
+**Status: Design revised 2026-09-19; implementation under review; dispatch requires separate
+approval.** The amendment was drafted 2026-09-17. What the owner ruled on 2026-09-19 is the
+*design*, in two parts, and neither is an approval of the implementation: the worker transport
+(the marker, turned into the workers' `execArgv`), and **the symmetric exclusions as a revised
+experimental scope, with their limitation recorded** — `N = 60` stays fixed, and that approval
+**does not validate transferring the old `M` bound** (see "Exactly when 2c makes it eligible").
+
+PR #57 restored the baseline — the seven diagnostic paths back to `025cdbe` byte for byte,
+leaving increment 1's placement report and nothing above it. That restoration is what makes 2c
+measurable: a control arm on a build whose measured rate was 0/100 would measure nothing. The
+implementation is `scripts/flake-experiment.mjs` (the experiment: schedule, tallies, statistics,
+gates, reporting) driven by `scripts/run-flake-probe.mjs` (the sole executable), over the shared
+seam in `scripts/flake-probe.mjs` (`SIGNATURE`, `classifyRun`, `interpretSpawn`) that both the 2b
+probe and this comparison have always had in common. **Dispatch is a separate ruling and is not
+authorised by this section.**
 
 ### Why the plan changes here
 
@@ -316,11 +330,61 @@ predeclared.
   predate it**: they were matched to each other by the preserved signature line, and the placement
   report was added afterwards to make later occurrences legible. **The removal is a precondition, not a step of the experiment**: measuring a
   runtime distinction on a build whose measured rate is 0/100 would measure nothing.
-- **The arms differ in one thing: the spawned environment.** Both run the identical command the
-  existing probe runs, `npm run test:coverage`, with identical argv; the `--jitless` arm adds the
-  flag through `NODE_OPTIONS` in the child's environment and nothing else. Delivering it by
-  substituting a different runner command would make the arms differ in more than runtime mode, so
-  the runner asserts both the argv (identical) and the environment (differing only in that flag).
+- **The arms differ in one thing: the runtime the test workers run in.** Both spawn the identical
+  command the existing probe runs, `npm run test:coverage`, with identical argv. The difference
+  travels as an environment marker, `MAPATLAS_PROBE_RUNTIME_MODE`, which `vitest.config.ts` turns
+  into the workers' `execArgv`. Delivering it by substituting a different runner command would make
+  the arms differ in more than runtime mode.
+
+  **Two earlier transports were tried and both failed while passing every assertion over the
+  constructed environment**, which is why the check below is a real subprocess and not a shape
+  test. `NODE_OPTIONS=--jitless` is permitted by Node but disables WebAssembly process-wide, and
+  Vite's parent then throws `ReferenceError: WebAssembly is not defined` before a single test runs
+  — every variant run an unrelated failure, every experiment contaminated. Vitest 4.1.11 silently
+  discards `poolOptions.forks.execArgv`, so the worker ran default Node and the two arms were the
+  same mode: a null the design would have read as "no difference". Only `test.execArgv` reaches the
+  worker, and it leaves the parent unflagged, which is what the parent needs.
+
+  **The marker is set in both arms**, differing only in value. It also governs one exclusion, of
+  two files a worker without WebAssembly cannot run — for different reasons, each measured by
+  running the file under a jitless worker. `scripts/generate-service-worker.test.mjs` fails **as a
+  whole module, at import**: the script it tests imports Vite, which throws `ReferenceError:
+  WebAssembly is not defined`, and none of its tests is collected.
+  `scripts/serve-archives.test.mjs` imports no Vite; five of its tests call `fetch()`, and Node's
+  `fetch` fails with the same `ReferenceError` as its cause. They are excluded from **both** arms,
+  because excluding them from one would add "which tests ran" as a second difference.
+
+  **What that does to the design rate, stated rather than assumed away.** `025cdbe`, where the 13%
+  was measured, selected **95** test files. This tree selects 97 — it adds
+  `flake-experiment.test.mjs` and `runtime-mode.fixture.test.mjs` — and while probing excludes the
+  two above: **95 again, with two members exchanged**, not "two files smaller". An earlier version
+  of this paragraph said the control arm reproducing "is what would show it did not matter". It
+  would not. A control hit establishes that the failure **reproduces on this revised suite**; it
+  says nothing about whether the *rate* is unchanged. The 80.876% design power is **conditional on
+  a 13% control rate**, which this suite is not known to have. If the true rate here is lower, the
+  likely cost is a null control and a spent dispatch, which the gate reports as inconclusive — not
+  a false conclusion. The owner approved this as a revised experimental scope on 2026-09-19 with
+  that limitation recorded, `N = 60` unchanged.
+
+- **Proven by a real subprocess before every `verify`.** `check:runtime-mode` spawns both arms
+  through the real config and reads what the worker got: that each completes Vitest, that the
+  default worker carries no flag and has WebAssembly, and that the jitless worker carries the flag
+  and has none. It spawns **what the runner spawns**: both come through `scripts/spawn-arm.mjs`,
+  the one spawn path, with the environment `spawnPlan` builds for that arm, and only the command
+  differs (the fixture alone rather than the whole suite).
+
+- **Every measured run is certified against the arm the runner scheduled, not against itself.**
+  Inside the worker, `runtime-mode.fixture.test.mjs` can only compare the worker's environment with
+  the worker's flags. That catches a marker that arrives without its flag (the `poolOptions` case)
+  and **not** a marker that never arrives: no marker and no flag agree, and the run is green in
+  default Node under either arm's label — shown in review by a runner whose spawn call delivered
+  no environment, which passed every gate with both arms running the 97-file unmarked suite. The
+  measured command's output carries nothing from inside a worker, so the facts travel as a file:
+  the runner names a fresh certificate path per run (`MAPATLAS_PROBE_CERTIFICATE`), the fixture
+  writes `{marker, jitless, wasm}` there, and the runner judges them against the arm **it**
+  scheduled (`certificateProblems`). **A missing or mismatched certificate is an instrument
+  failure**, which contaminates its arm by the existing gate — so an environment that was never
+  delivered is red by absence rather than a silent comparison between an arm and itself.
 - **Equal fixed budgets of `N = 60` per arm, one dispatch, one job, one tree.** 60 runs default and
   60 runs `--jitless`, the number fixed in source with no dispatch input, alternating arm by arm so
   that drift over the job's duration falls on both arms rather than on one. One job, so that neither
@@ -404,15 +468,28 @@ need a minimal reproducer and stronger causal evidence than a rate difference.
 instrumented** probe at `025cdbe` — which carried increment 1's placement report and nothing else —
 and 2c's default arm is the first comparable control since.
 
-**Exactly when 2c transfers it.** `M = 51` is the count at which a *reverted-fix* validation is
-expected to see at least one exact-signature failure. The default arm runs 60, not 51, so
-reproducing somewhere in 60 is not the same evidence. The rule:
+**The revised scope does not carry `M` with it** (owner's ruling, 2026-09-19). `M = 51` was derived
+from the 13% rate on `025cdbe`'s suite, and 2c's control arm runs a suite with different
+membership; approving the symmetric exclusions did **not** validate transferring the old bound to
+it. The rule below is the *precondition* 2c can establish — that a 51-run validation could have
+seen the failure at all — and meeting it makes `M` eligible for transfer under a separate ruling,
+not transferred.
 
-- **at least one exact-signature hit within the default arm's first 51 runs** → `M = 51` transfers,
-  and the reverted half of a later validation may be run at 51;
+**Exactly when 2c makes it eligible.** `M = 51` is the count at which a *reverted-fix* validation
+is expected to see at least one exact-signature failure. The default arm runs 60, not 51, so
+reproducing somewhere in 60 is not the same evidence. **Nothing below transfers `M` or authorises
+a validation at 51**; the most 2c can do is make `M` eligible, and the transfer is the owner's
+separate ruling. The rule:
+
+- **at least one exact-signature hit within the default arm's first 51 runs** → `M = 51` becomes
+  **eligible** for transfer, and no more than that. The hit shows a 51-run validation *could* have
+  seen the failure on this suite; it does **not** show that the old rate bound applies to it, since
+  `M` was derived from a 13% rate on a suite with different membership. `M` stays frozen, and no
+  reverted validation may be run at 51, until the owner rules;
 - **hits only in default runs 52–60** → 2c has reproduced and its own comparison stands, but `M`
-  does **not** transfer: a 51-run reverted validation was not shown able to falsify anything, and
-  the budget has to be re-derived from this arm's measured rate under review;
+  is **not eligible** and does not transfer: a 51-run reverted validation was not shown able to
+  falsify anything, and the budget has to be re-derived from this arm's measured rate under
+  review;
 - **no hits at all** → the control did not reproduce, the experiment is inconclusive, and `M` stays
   frozen.
 
@@ -443,12 +520,73 @@ Each must turn a named assertion red:
 
 **For increment 2c**, each must turn a named assertion red:
 
-- **both labelled arms actually run default Node** — the `--jitless` arm spawned without the flag in
-  its environment → an assertion on the **environment each arm is spawned with** fails. Two arms
-  that silently ran the same mode would produce a null the design would read as "no difference";
-- **the flag delivered by changing the command rather than the environment** — an arm spawning
-  something other than `npm run test:coverage` → an assertion that both arms spawn the identical
-  argv fails. Changing the command would make the arms differ in more than runtime mode;
+- **both labelled arms actually run default Node** — the marker not reaching the worker, by any
+  route → `check:runtime-mode` fails, because it spawns both arms and reads the worker's own
+  `execArgv` and `typeof WebAssembly` rather than the environment handed to the child. A shape
+  assertion is **not** sufficient here and is not accepted as this falsifier: two transports have
+  already passed one while the worker ran the wrong runtime;
+- **the arm's environment not delivered to the child at all** — the spawn call handing the child
+  the inherited environment in place of the plan's → `check:runtime-mode` fails, because it comes
+  through the same spawn path as the runner and a child that was told no certificate path writes no
+  certificate. In a measured run the same fault leaves every run uncertified, and both arms
+  contaminated;
+- **the certificate compared against its own marker instead of the scheduled arm** — a
+  self-consistent certificate from the other arm accepted → an assertion that
+  `certificateProblems` refuses it fails. Agreement between a worker's marker and its flags is what
+  a misdelivered run also shows;
+- **a signature masking an unrelated failure in the same run** — the tally's kinds made mutually
+  exclusive again, so a run carrying the recorded failure *and* another failure counts
+  `signature: 1, other: 0` → an assertion that such a run keeps its hit, counts as unrelated as
+  well, contaminates its arm and never reaches Fisher fails; and `check:runtime-mode` fails,
+  because it makes a real fixture fail several ways at once — among them the recorded failure, an
+  unrelated test, an unrelated `describe`-level hook — and requires each to be accounted for. The hook
+  is there because Vitest's own JSON reporter records **nothing** for it (measured on 4.1.11),
+  which is why the structured results come from `scripts/probe-results-reporter.mjs` instead;
+- **a signature masking another error *on the same test*** — an entry cleared because *some* error
+  in it carries the signature. Vitest attaches a teardown's error to the test it ran after, so the
+  recorded failure and an unrelated `afterEach` error arrive as one entry with two messages, and
+  clearing the entry clears both (shown in review: `signature=1, other=0`, Fisher called) → an
+  assertion that every error in an entry is judged fails, and `check:runtime-mode` fails, because
+  its fixture's fourth failure is exactly this and must be named. `afterAll`, an unhandled
+  rejection and a module failing at import, each beside a hit, were probed with real subprocesses
+  as well and are recorded as entries of their own;
+- **an error that only *carries* the signature exempted from contamination** — the structured
+  check made end-anchored again, or loosened to any prefix or any line. **The log and the structured
+  results are two representations of one identity, built on the one `SIGNATURE` constant, and they
+  can demand different amounts.** A log line arrives behind whatever was printed before it
+  (`SurfaceError: `, `BuildError: `), so the *hit* is decided by a line **ending** with the
+  signature — unchanged. A structured message arrives bare, so whether an error is **exempt from
+  contaminating** its run is decided by its **whole first line**, which must be one of exactly two:
+  the signature as `stitchSurface` throws it, or the signature behind the exact label `BuildError`
+  gives the tiles stage, `fixture build failed at stage "tiles": ` — the form a real build fails
+  with, which is why demanding the bare signature would contaminate every genuine hit. The
+  appended diagnostics are not part of the identity. `rebuild failed: <signature>`, another
+  stage's label, the label twice, or the signature on a later line all remain **logged hits** and
+  all **contaminate** (the first was shown in review as a clean hit reaching Fisher) → assertions
+  over the real `SurfaceError`/`BuildError` path fail, which also derive both accepted first lines
+  from production so that a rewording there fails rather than drifts; and `check:runtime-mode`
+  fails, whose fixture raises the recorded failure through production in both forms and must leave
+  exactly those two unnamed;
+- **a run's structured results not arriving** — the reporter not configured, or writing nowhere →
+  `check:runtime-mode` fails, and in a measured run every run is an instrument failure from run 1
+  rather than the gap being discovered at the first hit;
+- **the smoke check not run where it is required** — `ci.yml` runs individual scripts and never
+  `verify`, so the check is its own step in the `gates` job; ordinary CI exercises only the default
+  worker and would otherwise pass with the jitless branch of the config removed;
+- **an uncertified run counted as a trial** — a green run with no valid certificate left out of the
+  instrument tally → an assertion that it contaminates its arm, with Fisher never called, fails;
+- **the flag delivered by changing the command rather than the marker** — an arm spawning something
+  other than `npm run test:coverage` → an assertion that both arms spawn the identical argv fails.
+  Changing the command would make the arms differ in more than runtime mode;
+- **the marker set in only one arm** — the exclusion it governs would then apply to one arm and not
+  the other → an assertion that both arms are marked, with different values, fails. **That
+  assertion does not hold the property on its own**, and was once claimed to: the exclusion can be
+  keyed to the variant's *value*, leaving both arms marked and every unit test green while Vitest
+  collects 97 files for one arm and 95 for the other (shown in review). So:
+- **the two arms collecting different suites, by any route** — `check:runtime-mode` lists what
+  Vitest collects for each arm through the real config and fails unless the two sets are identical;
+  and it fails unless an ordinary unmarked run differs from an arm by **exactly** the two excluded
+  files, so the exclusion can neither leak into ordinary runs nor quietly grow;
 - **alternation replaced by grouped execution** — all 60 default runs then all 60 `--jitless` runs →
   an assertion on the arm sequence fails. Grouping puts any drift over the job's duration entirely
   on one arm, which is the confound alternation exists to spread;

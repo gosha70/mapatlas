@@ -1,22 +1,31 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# T8.1 — the fixture-build flake (issue #30), increment 2.0.
+# T8.1 — the fixture-build flake (issue #30), increment 2c.
 #
 # **Manual only.** `workflow_dispatch` is the sole trigger, deliberately: this exists to read a
 # runner's environment, and a job that also fired on push or pull request would add CI cost to
 # every change and become a source of runs nobody is reading — which is the habit issue #30 already
 # warns about.
 #
-# **Step 2a came back null, so this now runs the loop** (200 local runs under the matched runtime
-# and worker count, no hits, bounding the local rate at 1.487%). It runs the full suite **exactly
-# 100 times**, the budget the plan fixed before any of this was attempted — there is deliberately
-# **no run-count input**, because a budget chosen at dispatch time is a probabilistic bar selected
-# after the result is known. Changing it means editing `scripts/flake-probe.mjs` under review.
+# **It now runs the two-arm comparison.** Positional narrowing closed at `c20b417`, so the question
+# is no longer *where* the change happens but whether it depends on one property of the runtime:
+# default Node against `--jitless`, alternating, **60 runs per arm**. Both arms spawn the identical
+# `npm run test:coverage`; the difference travels as an environment marker that `vitest.config.ts`
+# turns into the test workers' `execArgv`, so only the worker running the suite is jitless and
+# Vite's parent starts normally. `npm run check:runtime-mode` — a required step of `ci.yml`, and
+# part of `npm run verify` — proves that transport with real subprocesses.
 #
-# It reports the environment first, keeps going after a hit so the outcome is a **rate** rather than
-# an occurrence, counts exact-signature hits and unrelated failures separately, and prints the full
-# output — including the placement report added in PR #48 — for every one of either. A job that
-# times out, or a run that fails for an unrelated reason, **cannot** produce a clean-null claim.
+# There is deliberately **no run-count input**: a budget chosen at dispatch time is a probabilistic
+# bar selected after the result is known. 60 is the smallest equal-arm budget clearing 80% power
+# against a zero-rate variant arm, and changing it means editing `scripts/flake-experiment.mjs`
+# under review.
+#
+# It reports the environment first, keeps going after a hit so the outcome is a pair of **rates**,
+# counts each arm separately with the run index of every hit, and prints the full output —
+# including the placement report from PR #48 — for each. An unrelated failure or an instrument
+# fault in *either* arm makes the whole experiment inconclusive, and a control arm that does not
+# reproduce says nothing about the variant however the variant came out. A job that times out kills
+# the run before any verdict is printed, which is what stops one being claimed.
 #
 # **Remove it, or record why it is kept, when T8.1 closes.** A probe left behind after the thing it
 # probes is understood is a workflow nobody can explain.
@@ -30,12 +39,15 @@ permissions:
 
 jobs:
   probe:
-    name: 100 full-suite runs, looking for the exact signature
+    name: 60 default + 60 --jitless runs, alternating
     runs-on: ubuntu-latest
-    # 100 runs at roughly 40 s each is a little over an hour; the ceiling is generous so that a
-    # slow runner reports a result rather than a timeout — and a timeout, if it happens, kills the
-    # job before any verdict is printed, which is what stops one being claimed.
-    timeout-minutes: 120
+    # Sized from measurement, not from a guess: running the real `npm run test:coverage` in both
+    # modes locally gave 5 s default against 13 s jitless — a 2.6x ratio, the optimising compiler
+    # being off. The last probe's runs took 14-19 s on a runner, so 60 + 60 runs is roughly
+    # 60x19 + 60x50 = 69 minutes at the pessimistic end, plus a few for install and build. Double
+    # that for headroom: a timeout kills the job before any verdict is printed, and an experiment
+    # whose control arm was cut short is contaminated and answers nothing.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
 

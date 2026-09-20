@@ -52,6 +52,13 @@ jobs:
       - name: Check — documentation drift
         run: npm run check:docs
 
+      # Its own step, and not part of `Test`: ordinary CI only ever runs the default worker, so
+      # without this the jitless branch of `vitest.config.ts` could be removed and every required
+      # job would still pass. It spawns nested Vitest runs, which is why it stays outside the
+      # command the T8.1 experiment measures. Remove it with the probe when T8.1 closes.
+      - name: Check — T8.1 probe instrument
+        run: npm run check:runtime-mode
+
       # Packs the real tarballs and installs them unhoisted, which is the one environment
       # every other gate cannot reach: inside this workspace an undeclared dependency
       # resolves anyway, and a consumer's would not.

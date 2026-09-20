@@ -1,42 +1,52 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Run the suite the predeclared number of times and report what happened (T8.1 step 2b).
+ * Run the two-arm runtime-mode experiment and report what happened (T8.1 increment 2c).
  *
  * Sequentially, and on purpose: the failure has only ever been seen in a single full-suite run on
- * a runner, and running two at once would change the contention this is trying to hold constant.
+ * a runner, and running two at once would change the contention this holds constant.
  *
- * **It does not stop at the first hit.** The deliverable is a *rate*, not an occurrence — a fix
- * has to be falsified against a measured rate, and a probe that stopped as soon as it succeeded
- * would leave `signature = 1` over an unknown number of runs.
+ * **It does not stop at the first hit.** The deliverable is a pair of *rates* compared against each
+ * other, not an occurrence.
  *
- * **Every hit is printed in full.** That is the point of the diagnostic added in PR #48: the run's
- * whole output goes to the log, so the placement report arrives with it and the fifth occurrence
- * says which crop landed where.
+ * **Every hit is printed in full**, so the placement report arrives in the log with it — the whole
+ * reason increment 1 exists.
  *
- * The rules are in `flake-probe.mjs` so the verdict can be checked without spending an hour of CI.
+ * The rules are in `flake-experiment.mjs` and the classification of one run is in
+ * `flake-probe.mjs`, so the verdict can be checked without spending two hours of CI.
  */
 
-import { spawnSync } from "node:child_process";
-
-import { environmentReport } from "./environment-report.mjs";
-import {
-  PLANNED_RUNS,
-  classifyRun,
-  interpretSpawn,
-  refusedArguments,
-  runProbe,
-  verdict,
-} from "./flake-probe.mjs";
 import { availableParallelism } from "node:os";
 import { createRequire } from "node:module";
 
+import { environmentReport } from "./environment-report.mjs";
+import {
+  CONTROL,
+  RUNS_PER_ARM,
+  VARIANT,
+  judgeRun,
+  refusedArguments,
+  refusedEnvironment,
+  report,
+  runExperiment,
+  verdict,
+} from "./flake-experiment.mjs";
+import { classifyRun, interpretSpawn } from "./flake-probe.mjs";
+import { spawnArm } from "./spawn-arm.mjs";
+
 const require = createRequire(import.meta.url);
 
-// Before anything is spawned: an hour of runner time should not start because of a typo.
+// Before anything is spawned: two hours of runner time should not start because of a typo.
 const refusal = refusedArguments(process.argv.slice(2));
 if (refusal !== undefined) {
   console.error(`probe:flake — ${refusal}`);
+  process.exit(2);
+}
+
+// And not at all if the control arm would not be a control.
+const environmentRefusal = refusedEnvironment(process.env);
+if (environmentRefusal !== undefined) {
+  console.error(`probe:flake — ${environmentRefusal}`);
   process.exit(2);
 }
 
@@ -50,47 +60,61 @@ for (const line of environmentReport({
 })) {
   console.log(line);
 }
-console.log(`\nrunning the full suite ${String(PLANNED_RUNS)} times, sequentially\n`);
+console.log(
+  `\nrunning the full suite ${String(RUNS_PER_ARM)} times per arm, alternating ` +
+    `${CONTROL} and ${VARIANT} (--jitless), sequentially\n`,
+);
 
-const counts = runProbe({
-  planned: PLANNED_RUNS,
-  // The command CI's `Test` step runs, so what is being repeated is what has actually failed.
-  runSuite: (run) => {
+const total = RUNS_PER_ARM * 2;
+
+const counts = runExperiment({
+  runsPerArm: RUNS_PER_ARM,
+  runSuite: ({ index, arm, armRun }) => {
+    // Identical argv for both arms; the flag is in the child's environment and nowhere else.
     const started = Date.now();
-    const spawn = spawnSync("npm", ["run", "test:coverage"], { encoding: "utf8", shell: false });
+    const { spawn, certificate, results } = spawnArm(arm, process.env);
     const seconds = ((Date.now() - started) / 1000).toFixed(1);
-    const result = interpretSpawn(spawn);
-    if (result.spawned === false) {
-      console.log(`run ${String(run)}/${String(PLANNED_RUNS)}: could not start (${seconds}s)`);
-      return result;
+    const where = `run ${String(index)}/${String(total)} [${arm} ${String(armRun)}/${String(RUNS_PER_ARM)}]`;
+    const interpreted = interpretSpawn(spawn);
+    if (interpreted.spawned === false) {
+      console.log(`${where}: could not start (${seconds}s)`);
+      return interpreted;
     }
+    // Judged here, against the arm this loop scheduled — the worker can only agree with itself.
+    const result = judgeRun({ arm, interpreted, certificate, results });
     const kind = classifyRun(result);
-    const note = result.truncated === true ? ` [interrupted: ${result.reason ?? "?"}]` : "";
-    console.log(`run ${String(run)}/${String(PLANNED_RUNS)}: ${kind}${note} (${seconds}s)`);
+    const note =
+      (result.truncated === true ? ` [interrupted: ${result.reason ?? "?"}]` : "") +
+      (result.unrelated.length === 0
+        ? ""
+        : ` [ALSO FAILED, unrelated: ${result.unrelated.join("; ")}]`) +
+      (result.instrumentFault === undefined ? "" : ` [INSTRUMENT: ${result.instrumentFault}]`);
+    console.log(`${where}: ${kind}${note} (${seconds}s)`);
     return result;
   },
-  onRun: ({ run, kind, output, truncated }) => {
-    if (kind === "passed" && !truncated) return;
+  onRun: ({ index, arm, armRun, kind, output, truncated, unrelated, instrumentFault }) => {
+    if (kind === "passed" && truncated !== true && instrumentFault === undefined) return;
     const what =
       kind === "signature"
-        ? "EXACT SIGNATURE"
-        : truncated
+        ? unrelated.length === 0
+          ? "EXACT SIGNATURE"
+          : "EXACT SIGNATURE, beside an unrelated failure"
+        : truncated === true
           ? "an interrupted run"
-          : "an unrelated failure";
-    console.log(`\n===== run ${String(run)}: ${what} — full output follows =====`);
+          : kind === "passed"
+            ? "a run with an instrument fault"
+            : "an unrelated failure";
+    const where = `run ${String(index)} (${arm} ${String(armRun)})`;
+    console.log(`\n===== ${where}: ${what} — full output follows =====`);
     console.log(output);
-    console.log(`===== end of run ${String(run)} =====\n`);
+    console.log(`===== end of ${where} =====\n`);
   },
 });
 
-if (counts.aborted !== undefined) {
-  console.log(`\nstopped after ${String(counts.completed)} run(s): ${counts.aborted}`);
-}
-
 const result = verdict(counts);
-console.log(`\n${result.lines.join("\n")}`);
+console.log(`\n${report(result).join("\n")}`);
 
-// Green only when the probe answered its own question: an actionable reproduction over a clean
-// budget, or a clean null. A hit on a short or contaminated budget is a real observation and is
-// still red, because it is not something a fix can be falsified against.
-if (!result.actionable && !result.clean) process.exit(1);
+// Green only when the experiment answered its own question: both arms intact and the control
+// reproduced, whichever way the comparison then came out. A contaminated budget or a null control
+// is a real observation and is still red, because nothing follows from it.
+if (result.comparison === undefined) process.exit(1);

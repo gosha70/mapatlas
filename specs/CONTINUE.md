@@ -29,7 +29,7 @@ than when someone picks them up.
 - **T8.1 — the fixture-build flake.** Tracked in **issue #30**; read it first. Its acceptance
   criterion is deliberately awkward: the failure must be made **reproducible on demand** before it
   is fixed, because a change that merely stops it being observed is indistinguishable from one that
-  fixed it.
+  fixed it. **In progress, and not closed** — see "T8.1: increment 2c ran" below for where it is.
 - **T8.2 — per-package READMEs.** Five of six packages ship none, and the sixth's code is checked by
   nothing. **Half the mechanism exists.** `check:docs`'s *generated projections* are per-document;
   its *mirror* rule — a fenced block being a file, byte for byte — is hard-wired to `api.md` §0,
@@ -57,6 +57,50 @@ they are not discovered as surprises.
   T6.2's survey answered them as questions rather than scope, `architecture.md`'s claim that the
   store *"supports eviction-aware re-download"* was removed because nothing implements it, and no
   task since has taken any of them on.
+
+### T8.1: increment 2c ran, and the rate differs by runtime mode (2026-09-20, PR #58)
+
+**T8.1 is open. No fix is authorised, and nothing below is one.** `specs/plans/t8-1-fixture-flake.md`
+is the work plan and holds the full record; issue #30 holds every probe result, this one included.
+
+**PR #58** (`a5903b2`, merged as `987ac20`) built the two-arm experiment: default Node against
+`--jitless`, 60 runs per arm, alternating, over the identical `npm run test:coverage`. The
+difference travels as `MAPATLAS_PROBE_RUNTIME_MODE`, which `vitest.config.ts` turns into the
+workers' `test.execArgv`. Five review rounds went into making it unable to lie: the runner judges
+each run's certificate against the arm **it** scheduled; a hit cannot hide what failed beside it;
+an error is exempt from contaminating a run only if its first line is exactly one of the two forms
+production produces; and `check:runtime-mode` — its own required step in `ci.yml`, because
+`ci.yml` never runs `verify` — proves all of that with real subprocesses.
+
+**The one approved dispatch:** run `35512357623`, head
+`987ac20fc6451961698f6062d90c9f214f64317d`, no inputs. **default 8/60** (hits at control runs 13,
+15, 34, 48, 49, 54, 55, 60; 13.333%, exact 95% CI 5.936%–24.592%), **`--jitless` 0/60** (CI
+0%–5.963%), no unrelated and no instrument failure in either arm. **Fisher exact, two-sided,
+p = 0.00609.** The permitted statement is *"the failure rate differs between default and
+`--jitless` on this runner"* — and nothing about optimisation being the cause. All eight hits
+carry the placement report already on #30, byte for byte; it is no new position.
+
+**13.3% is one sample on a suite of different membership**, not proof the rate is unchanged from
+`025cdbe`'s 13%.
+
+**`M = 51` is not transferred** (owner's ruling, 2026-09-20). Eligibility was met and was all 2c
+could establish. The revised suite's own one-sided 97.5% lower bound is 5.936%, which gives
+**`M = 61`** under the plan's formula: the defensible candidate **if a later validation uses this
+exact suite**, and otherwise the budget comes from a matched control. 51 is historical evidence.
+
+**Next, proposed and not authorised:** increment 2d, default against `--no-opt` — TurboFan
+disabled, Maglev and Sparkplug left running — on the same 95-file suite with the same gates. The
+plan's amendment carries the survey. **Ruled: `N = 60` per arm at `α = 0.05`, as a separately
+predeclared exploratory diagnostic** — 2c spent the only α the plan had granted, so the pair
+carries **no 5% family-wise guarantee**: ≤ 10% by Bonferroni, 9.75% only under independence. Its
+certificate records the worker's **full** `execArgv` and holds the arms to differing by exactly
+`--no-opt`, because a list of flags to look for passes `--max-opt=2` and `--no-opt --opt` alike. **The lattice-placement candidate stays
+parked in a stash**; it is symptom immunity, and merging it would stop the placement report that
+every result above was read from.
+
+The measured suite is **95 files while probing and 97 otherwise**: two files a worker without
+WebAssembly cannot run are excluded from both arms whenever the marker is set. Do not "fix" that
+as drift — `check:runtime-mode` asserts it, in both directions.
 
 ### T7.2 is closed (2026-09-10, PRs #41, #42 and #43)
 

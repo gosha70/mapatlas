@@ -278,6 +278,8 @@ approval.** The amendment was drafted 2026-09-17. What the owner ruled on 2026-0
 (the marker, turned into the workers' `execArgv`), and **the symmetric exclusions as a revised
 experimental scope, with their limitation recorded** — `N = 60` stays fixed, and that approval
 **does not validate transferring the old `M` bound** (see "Exactly when 2c makes it eligible").
+**2c has since run** — see "Result, 2026-09-20 — increment 2c" below, which also carries the
+owner's ruling on `M`.
 
 PR #57 restored the baseline — the seven diagnostic paths back to `025cdbe` byte for byte,
 leaving increment 1's placement report and nothing above it. That restoration is what makes 2c
@@ -475,6 +477,9 @@ it. The rule below is the *precondition* 2c can establish — that a 51-run vali
 seen the failure at all — and meeting it makes `M` eligible for transfer under a separate ruling,
 not transferred.
 
+*(Ruled 2026-09-20, after 2c ran: **not transferred**; see "The owner's ruling on `M`" below. The
+rule that follows is kept as written — it is what 2c was run against.)*
+
 **Exactly when 2c makes it eligible.** `M = 51` is the count at which a *reverted-fix* validation
 is expected to see at least one exact-signature failure. The default arm runs 60, not 51, so
 reproducing somewhere in 60 is not the same evidence. **Nothing below transfers `M` or authorises
@@ -499,6 +504,252 @@ that, and the split is read off those indices rather than off the totals.
 The lattice-placement candidate stays parked. It is symptom immunity rather than a cause fix, and
 merging it would stop the placement report being emitted at all, which is what every result above
 was read from.
+
+## Result, 2026-09-20 — increment 2c
+
+One dispatch, approved by the owner against the current `origin/main`, with no inputs. Recorded on
+issue #30 the same day. Implemented and merged as **PR #58** (`a5903b2`, merged as `987ac20`).
+
+- **Run [35512357623](https://github.com/gosha70/mapatlas/actions/runs/35512357623)**, job
+  `106082356056`, head **`987ac20fc6451961698f6062d90c9f214f64317d`**, 13:02:56Z → 13:49:20Z.
+  Runner: linux/x64, node v24.20.0, vitest 4.1.11, `availableParallelism 4`.
+- **default: 8 exact signatures in 60**, 0 other failures, 0 instrument failures; hits at control
+  runs 13, 15, 34, 48, 49, 54, 55, 60; rate 13.333%, exact 95% CI 5.936%–24.592%.
+- **`--jitless`: 0 in 60**, 0 other, 0 instrument; exact 95% CI 0.000%–5.963%.
+- **Fisher exact, two-sided: p = 0.00609**, against α = 0.05. Recomputed independently in exact
+  rational arithmetic: 0.0060900555….
+- **The permitted statement, and the only one:** *the failure rate differs between default and
+  `--jitless` on this runner.* Nothing about optimisation being the cause, and nothing about
+  which.
+
+**What was checked before the result was believed.** All 120 run lines present, in strict
+alternation, none carrying an interruption, a failure beside a hit, or an instrument fault — so
+every run's worker certified the arm it was scheduled in. All eight hits are the production form
+`BuildError: fixture build failed at stage "tiles": …`, each run `1 failed | 1931 passed | 1 todo`
+over 95 files. A second error line appearing exactly eight times in the log is the stderr of a
+*passing* test that throws on purpose (`event-composer.test.ts`, *"stays sealed when onSave
+throws"*); it is in every run, and the log prints full output only for hits.
+
+**The placement report is identical in all eight, and identical to the one already on #30**:
+`[0] 46x113` and `[1] 35x113`, both at origin `(7, 45.52194444444444)`. No new position. Five hits
+fell in *"reads each admitted cell once, by its own id, in the order coverage returned them"* and
+three in *"attributes each cell's samples to that cell"*.
+
+**13.3% is one sample, not proof of an unchanged rate.** It sits beside a 13% design rate measured
+on a suite of different membership, with an interval of 5.9%–24.6%. It shows the failure reproduces
+on the revised suite. The agreement of two point estimates is not evidence that the rate did not
+move.
+
+### The owner's ruling on `M`, 2026-09-20
+
+**`M = 51` is not transferred.** The eligibility precondition was met — the first control hit fell
+at run 13 — and eligibility was all 2c could establish. On the revised suite's **own** control the
+one-sided 97.5% lower bound is `p_lo = 5.936%`, and the established formula gives
+
+> `M = ceil( ln(0.025) / ln(1 − 0.05936) ) = ceil(60.28) = `**`61`**.
+
+**If a later validation uses this exact suite, 61 is the defensible candidate. If its suite
+changes, the budget is derived from a matched control.** 51 is kept as historical evidence only:
+it is what `025cdbe`'s 13/100 implied for `025cdbe`'s suite, and it is not a bar any future
+validation is entitled to.
+
+The runner's closing line — *"`M = 51` is ELIGIBLE to transfer … needs the owner's separate
+ruling"* — was correct when it was printed and is now answered. It is reworded or removed under
+2d's implementation review, not here: this document changes no code.
+
+## Amendment, 2026-09-20 — increment 2d: default Node against `--no-opt`
+
+**Status: proposed. No implementation and no dispatch is authorised by this section.** Prepared at
+the owner's direction after 2c's result, against `main` at `987ac20`.
+
+**Corrected in review, 2026-09-20, before it was committed — two defects in the experiment's
+validity, both the author's.** *The combined error accounting was wrong:* it credited a 2d test at
+`α = 0.025` with restoring a 5% ceiling across both experiments, computing `1 − 0.975²` as though
+2c had not already tested at 0.05. *And the certificate could certify the wrong runtime:* it
+proposed filtering the worker's arguments through a watch-list, which `--max-opt=2` passes while
+disabling TurboFan, and which sees "exactly `--no-opt`" in `--no-opt --opt` while TurboFan is back
+on. Both are corrected below, and the owner's ruling on the budget is recorded where the choice
+used to be.
+
+### Why this cut, and what it can and cannot say
+
+2c separated default Node from a runtime with **no** JIT at all. That is the widest cut available,
+and the rate differed across it. The next cut is the narrowest one that still removes a whole,
+named component: **`--no-opt`**.
+
+Read from the binary rather than remembered — `node --v8-options`, Node 24:
+
+```
+  --turbofan (use the Turbofan optimizing compiler)
+        type: bool  default: --turbofan
+  --opt (alias for --turbofan)
+        type: bool  default: --opt
+```
+
+`--maglev` and `--sparkplug` are both listed `default:` enabled. So `--no-opt` **disables
+TurboFan and leaves Ignition, Sparkplug and Maglev running.** Confirmed by behaviour and not only
+by help text: under `--allow-natives-syntax`, a hot function's `%GetOptimizationStatus` is
+`1010001` by default and `110001` under `--no-opt` — and under `--no-turbofan` it is the same
+`110001`, bit for bit.
+
+**What a difference would license:** *the failure rate differs between TurboFan-enabled and
+TurboFan-disabled execution on this runner.* **Not** "optimisation caused it", and not "TurboFan
+has a bug": disabling a tier changes which code runs, how long it takes to get hot, what is
+inlined and when garbage is collected, and any of those could expose or mask an ordinary defect
+in this repository's JavaScript. It narrows a variable. It does not name a mechanism.
+
+**What no difference would license:** *this budget did not distinguish the two modes* — as in 2c,
+and no more. If `--no-opt` still reproduces, the next cut can distinguish Maglev from Sparkplug.
+**That cut is deliberately not planned here**; it depends on a result that does not exist.
+
+### Survey — measured at `987ac20`, before anything was proposed
+
+Local Node is v24.11.1; the runner's was v24.20.0. Everything below is a claim about the local
+binary until the check re-establishes it on the runner, which is why the check does that.
+
+1. **`--no-opt` reaches the worker through `test.execArgv`**, the route 2c proved. A temporary
+   config merging `execArgv: ["--no-opt"]` over the real one gave a worker
+   `execArgv` ending `…,"--no-opt"`, against none without it.
+2. **The real measured command passes under it, with the same suite.** `vitest run --coverage`
+   with the marker set: **95 files, 1,932 tests + 1 todo, exit 0, in both modes**, at about the
+   same wall time (5 s and 4 s locally). Unlike `--jitless`, **no test needs excluding on its
+   account.** This was run because 2c's first transport was fine and its experiment would still
+   have been worthless — five tests failed under the variant, and only running the real command
+   found them.
+3. **Node refuses `--no-opt` in `NODE_OPTIONS`** — *"--no-opt is not allowed in NODE_OPTIONS"*. 2c
+   had to refuse that route itself; here Node does, and the experiment's own refusal stays
+   anyway, because it costs nothing and does not depend on a Node version's allow-list.
+4. **The flag's effect is observable only with `--allow-natives-syntax`**, which is itself a
+   runtime flag and **must never reach a measured arm**. 2c's variant could certify a
+   consequence from inside the worker — WebAssembly was gone. 2d's cannot.
+5. **`--no-opt` is one of several arguments that decide the same thing, and the last one wins.**
+   Measured with the same hot function: `--max-opt=2` gives `110001`, TurboFan off, *without*
+   `--no-opt` appearing anywhere; `--no-opt --opt` gives `1010001`, TurboFan **on**; `--opt
+   --no-opt` gives `110001`. So neither the presence of `--no-opt` nor the absence of a list of
+   known flags says which of these a worker was started as. **Only the whole startup argument
+   list distinguishes these tested command-line configurations; it cannot detect later in-process
+   flag changes** — see the second stated gap below.
+6. **The worker's whole argument list is small, stable, and differs by exactly one element.**
+   Read unfiltered from inside a worker, through the real config, twice for default:
+   `--experimental-import-meta-resolve`, `--require <vitest>/suppress-warnings.cjs`,
+   `--conditions node`, `--conditions development` — seven arguments, all Vitest 4.1.11's own,
+   identical across runs, with `NODE_OPTIONS` unset. The `--no-opt` worker's list is those seven
+   **followed by `--no-opt`**, and nothing else differs.
+
+### 2d — the experiment
+
+Everything 2c fixed stays fixed unless it is named here.
+
+- **The same 95-file suite, by the same exclusion.** The two excluded files would *run* under
+  `--no-opt` — they need WebAssembly, which it does not remove. They stay excluded **for suite
+  identity with 2c's control**, which is the only matched control on record and the suite `M = 61`
+  was derived on. The reason the exclusion exists has changed; the config comment has to say so.
+- **The arms differ in one thing: the workers' `execArgv`.** Identical argv, identical
+  `npm run test:coverage`, the marker set in both arms, `--no-opt` delivered through
+  `test.execArgv` and nowhere else.
+- **One table maps an arm to its flags**, and the experiment is fixed in source to the pair it
+  runs — `default` against `no-opt`. The runner still takes no arguments. `jitless` stays in the
+  table as the arm 2c ran, so 2c's record remains reproducible from this tree.
+- **Alternating, sequential, one job, one tree, fixed equal budgets, no dispatch input** — as 2c.
+- **Contamination gate, null-control gate, and "not computed" rather than "computed and
+  withheld"** — unchanged, with their existing falsifiers.
+- **The per-run certificate records the worker's *full* `execArgv`, verbatim, and the runner holds
+  the property directly** — not through a list of flags to look for, which fails open (survey
+  item 5). Three requirements, judged by the runner against the arm it scheduled:
+  1. **The `default` worker's arguments are exactly the expected list** — the seven Vitest itself
+     supplies (survey item 6), its one path taken relative to the project. *Exactly*, so the
+     control certifies that it carries **no** argument of its own, tier-changing or otherwise;
+     `--max-opt=2` is refused for being unexpected, not for being recognised. This fails
+     **closed**: a Vitest upgrade that changes its own arguments turns the check red, to be
+     re-read under review, rather than being waved through.
+  2. **The two arms' arguments differ by exactly `--no-opt`**: the variant's list is the control's
+     with that one element added and nothing else changed, in order. `--no-opt --opt` differs by
+     two elements and is refused, whatever a search for `--no-opt` would have said. This is a
+     property of the **pair**, so it is asserted on the pair — in `check:runtime-mode` with both
+     arms spawned, and in a measured run against the first control run, which the alternation
+     guarantees comes first.
+  3. **The worker's `NODE_OPTIONS` is unset**, recorded alongside.
+- **Any inherited `NODE_OPTIONS` is refused before anything is spawned** — all of it, not a search
+  within it for known flags. It reaches the Vite parent *and* every worker in both arms, and no
+  value of it is needed to run this experiment. That Node would itself reject `--no-opt` there
+  (survey item 3) covers one spelling on one Node version.
+- **The flag's *meaning* is certified by a real subprocess, in `check:runtime-mode`, outside every
+  measured run.** Plain `node --allow-natives-syntax`, a hot function, `%GetOptimizationStatus`,
+  three ways: default, `--no-opt`, `--no-turbofan`. Required: **default reaches a tier that
+  `--no-opt` does not**, and `--no-opt` equals `--no-turbofan`. The first half is what stops the
+  proof being vacuous — if the function never got hot, all three agree and nothing was shown. It
+  runs in `verify` and in `ci.yml`'s required step, so it is re-established on the runner's Node.
+
+  **The gap this leaves, stated:** the meaning is shown in a plain Node process and the delivery
+  in a Vitest worker, and nothing shows the meaning *inside* the worker. What bridges them is 2c:
+  a flag delivered by `test.execArgv` demonstrably took V8 effect there — WebAssembly vanished. A
+  worker is a Node child process given those arguments. Closing the gap outright would mean a
+  check-only config branch that puts `--allow-natives-syntax` into a worker; this plan judges
+  that more machinery, and one more way for the flag to leak into a measured arm, than the gap is
+  worth — and says so for the reviewer to overrule.
+
+  **A second gap, also stated:** arguments are not the only way to set a V8 flag.
+  `v8.setFlagsFromString` does it from code and leaves `execArgv` untouched. Nothing in this
+  repository calls it (searched at `987ac20`), and the certificate would not see it if something
+  did.
+
+### Predeclared comparison
+
+Test, convention, three-tier reporting and permitted wording: **as 2c**, with `--no-opt` for
+`--jitless` and the narrower statement above.
+
+**The owner's ruling, 2026-09-20: `N = 60` per arm, `α = 0.05`**, two-sided Fisher exact by the
+same convention — which, against a variant arm showing zero, **rejects on ≥ 6 default hits**
+(`p = 0.02741` at six, `0.05732` at five). Design power at the 13% design rate and a true variant
+rate of zero: **80.876%**, computed by this repository's own `designPower`.
+
+**2d is a separately predeclared *exploratory* diagnostic, and the pair of experiments carries no
+5% family-wise guarantee.** 2c's amendment says of its `α = 0.05`: *"No other comparison is
+entitled to it"* — and 2c has spent it. 2d tests at 0.05 again, in its own right. Across the two:
+
+| | chance of at least one false rejection across 2c and 2d |
+|---|---|
+| with no assumption (Bonferroni, the union bound) | **≤ 10%** |
+| only if the two tests are independent | 9.75% (`1 − 0.95²`) |
+
+The 10% is what this plan is entitled to claim; the 9.75% needs an assumption nothing here
+establishes — same suite, same hypothesis family, a result in one prompting the other. Neither
+test is in the fix-acceptance chain, whose 5% total is split elsewhere and is untouched by both.
+
+**Why not a stricter 2d.** Considered and rejected, with the arithmetic kept because the first
+draft got it wrong: testing 2d at `α = 0.025` costs power at `N = 60` (67.778%, rejecting at ≥ 7)
+or nine more runs per arm to hold 80% (`N = 69`, 80.932%) — and **buys no 5% ceiling either way**,
+because 2c's 0.05 is already spent: `1 − 0.95 × 0.975 = 7.375%` under independence, 7.5% without.
+No choice made for 2d can recover α that 2c used. A fixed-sequence argument — 2d runs only because
+2c rejected, so each may take the full α — **is not claimed**: the sequence was not declared
+before 2c's result.
+
+About 40 minutes of runner time: 120 runs at the ~19 s a default run took in 2c, `--no-opt` having
+cost nothing measurable locally.
+
+**The design rate stays 13%**, from `025cdbe`. 2c's control came out at 13.3%, and that is not
+used: recomputing a budget from a later observed rate is what 2c's amendment forbade, and the
+reason has not changed.
+
+**Power against zero is the optimistic case.** `--jitless` removed everything; `--no-opt` removes
+one tier. If the true `--no-opt` rate is reduced rather than zero, this budget's power is lower
+than the table says, and *"did not distinguish"* is the likelier honest outcome. That is an
+argument for reading a null carefully, not for a bigger budget chosen now.
+
+**2d says nothing about `M`.** Its control arm is 60 runs and the candidate is 61, so the 2c-style
+eligibility rule cannot even be evaluated inside it. Hit indices are still recorded. Whether 2d's
+control may later be pooled with 2c's — same suite, different day and runner — is **not decided
+here**.
+
+### Scope fence for 2d
+
+In: the arm table and the `no-opt` arm; the full-argument certificate and the pair assertion; the
+refusal of any inherited `NODE_OPTIONS`; the meaning check; the
+config's exclusion comment; the runner's `M` line; the workflow's header and job name.
+
+Out: the Maglev/Sparkplug cut; any fix; the lattice candidate; any change to the statistics, the
+gates, the reporter, the spawn path or the identity rule for the recorded failure; the
+quick-start gap recorded in T8.2's plan.
 
 ## Required mutations
 
@@ -605,3 +856,34 @@ Each must turn a named assertion red:
   and suppressing the comparison does not make the arm's own rate sound;
 - **the fixed `N = 60` made dispatch-selectable** — a run-count input reaching the budget → the
   argument guard fails, on the same reasoning as the existing probe's fixed `PLANNED_RUNS`.
+
+**For increment 2d**, each must turn a named assertion red. 2c's falsifiers all stay, re-run
+against the new arm where they name one:
+
+- **the `no-opt` arm running default Node** — the arm table ignored for `no-opt`, or the flag put
+  anywhere but `test.execArgv` → `check:runtime-mode` fails, because the worker's certificate
+  lacks `--no-opt`; and in a measured run every variant run is an instrument failure;
+- **`default + --max-opt=2`** — a tier-changing argument no list of known flags names, reaching the
+  control worker → the certificate is refused, the control's arguments not being exactly the
+  expected list. TurboFan is off in that worker and `--no-opt` appears nowhere, so a search for
+  flags passes it; this is the mutant that shows the control is held by what its startup
+  arguments *are*, rather than by which of them somebody thought to look for;
+- **`no-opt + --opt`** — the variant's `--no-opt` followed by the argument that undoes it → the
+  pair assertion fails, the arms differing by two elements and not by exactly `--no-opt`.
+  TurboFan is **on** in that worker while `--no-opt` is present, so a search for it passes;
+- **the same extra argument in *both* arms** — so that the pair still differs by exactly
+  `--no-opt` → refused by the control's exact list. Without it the pair assertion alone would
+  accept two arms that are both wrong in the same way;
+- **`--allow-natives-syntax` reaching a measured arm** — by the arm table or the environment →
+  refused as an unexpected argument, in either arm;
+- **the meaning check made vacuous** — the hot loop shortened until default never reaches TurboFan
+  → the check fails *because default did not get there*, rather than passing on three equal
+  statuses. A proof that cannot fail this way has shown nothing;
+- **`--no-opt` not meaning what this plan says** — the check's `--no-opt` process swapped for a
+  default one → fails, the two statuses being equal;
+- **the suite changing between 2c and 2d** — the exclusion dropped because the variant no longer
+  needs it → the existing collected-suite comparison fails, the arms no longer differing from an
+  unmarked run by exactly the two files;
+- **any `NODE_OPTIONS` inherited at all** — `--max-old-space-size=4096` as readily as a V8 flag →
+  the runner refuses to start. 2c's refusal looked for `--jitless` inside it and let everything
+  else through; that is the shape corrected here.

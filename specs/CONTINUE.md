@@ -31,7 +31,11 @@ than when someone picks them up.
   is fixed, because a change that merely stops it being observed is indistinguishable from one that
   fixed it.
 - **T8.2 — per-package READMEs.** Five of six packages ship none, and the sixth's code is checked by
-  nothing. `check:docs`'s rules are already per-document, so the mechanism exists.
+  nothing. **Half the mechanism exists.** `check:docs`'s *generated projections* are per-document;
+  its *mirror* rule — a fenced block being a file, byte for byte — is hard-wired to `api.md` §0,
+  one document and one section, and T8.2's increment 1 is the work that generalises it. An earlier
+  version of this line said the rules were already per-document; the T8.2 survey read the code and
+  found otherwise (`specs/plans/t8-2-package-readmes.md`, finding 3).
 - **T8.3 — the `/lab` retirement audit.** Each lab-owned browser assertion mapped to a root-app
   oracle or deliberately retired, shown by the mapping rather than by the suite staying green —
   deleting a scenario also leaves it green.

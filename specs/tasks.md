@@ -1576,6 +1576,11 @@ and can be picked up like anything else. Unowned and unordered.
   README ships for **each** package rather than for one. A block that cannot be checked is not
   presented as something to copy.
 
+  > **Corrected 2026-09-20, by T8.2's survey.** *"whose rules already exist and are per-document"*
+  > is true of `check:docs`'s generated projections and **not** of its mirror rule, which is
+  > hard-wired to `api.md` §0. Generalising it is T8.2's increment 1, not a given. The criterion is
+  > unchanged; see `specs/plans/t8-2-package-readmes.md`, finding 3.
+
 - **T8.3 `/lab` retirement audit.** The root app supersedes `/lab` as the product demonstration,
   but `/lab` remains an evidence fixture: five merged browser scenarios run through it, and T6.1's
   offline evidence with them. _AC:_ each lab-owned browser assertion is either **mapped to an

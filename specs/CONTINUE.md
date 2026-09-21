@@ -88,9 +88,10 @@ could establish. The revised suite's own one-sided 97.5% lower bound is 5.936%, 
 **`M = 61`** under the plan's formula: the defensible candidate **if a later validation uses this
 exact suite**, and otherwise the budget comes from a matched control. 51 is historical evidence.
 
-**Next, proposed and not authorised:** increment 2d, default against `--no-opt` — TurboFan
-disabled, Maglev and Sparkplug left running — on the same 95-file suite with the same gates. The
-plan's amendment carries the survey. **Ruled: `N = 60` per arm at `α = 0.05`, as a separately
+**Next: increment 2d, default against `--no-opt`** — TurboFan disabled, Maglev and Sparkplug left
+running — on the same 95-file suite with the same gates. **Implemented and under review; not
+dispatched, and dispatch needs the owner's separate approval.** The plan's amendment carries the
+survey. **Ruled: `N = 60` per arm at `α = 0.05`, as a separately
 predeclared exploratory diagnostic** — 2c spent the only α the plan had granted, so the pair
 carries **no 5% family-wise guarantee**: ≤ 10% by Bonferroni, 9.75% only under independence. Its
 certificate records the worker's **full** `execArgv` and holds the arms to differing by exactly

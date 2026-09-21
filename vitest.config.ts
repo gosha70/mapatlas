@@ -1,20 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 import { defineConfig } from "vitest/config";
 
+import { RUNTIME_MODES } from "./scripts/flake-experiment.mjs";
+
 /**
- * T8.1 increment 2c, and nothing else: the runtime mode the **test workers** run in.
+ * T8.1 increments 2c and 2d, and nothing else: the runtime mode the **test workers** run in.
  *
- * The experiment compares default Node against `--jitless` over the identical
- * `npm run test:coverage`, so the difference cannot travel in the command. It cannot travel in
- * `NODE_OPTIONS` either: Node allows `--jitless` there, but it disables WebAssembly for the whole
- * process and Vite's parent fails to start before a single test runs. It travels as this marker,
- * which Vitest turns into the workers' `execArgv` — the parent keeps WebAssembly and starts
- * normally, and only the worker running the suite is jitless.
+ * The experiment compares default Node against one other runtime mode — `--jitless` in 2c,
+ * `--no-opt` in 2d — over the identical `npm run test:coverage`, so the difference cannot travel
+ * in the command. It cannot travel in `NODE_OPTIONS` either: there a flag reaches Vite's parent as
+ * well, and `--jitless` stops the parent starting at all. It travels as this marker, which names
+ * an arm; the arm's flags become the workers' `execArgv`, the parent starts normally, and only the
+ * workers running the suite are in the other mode.
  *
  * Unset — which is every ordinary run, local and CI — this is `[]` and changes nothing.
  */
 const probeRuntimeMode = process.env.MAPATLAS_PROBE_RUNTIME_MODE;
-const workerExecArgv = probeRuntimeMode === "jitless" ? ["--jitless"] : [];
+// One table, the experiment's own: what an arm adds to the workers is defined once, and read here,
+// by the fixture inside the worker, and by the runner that judges what the worker recorded.
+const workerExecArgv = [...(RUNTIME_MODES[probeRuntimeMode ?? ""] ?? [])];
 
 /**
  * Two files the experiment cannot carry, excluded from **both** arms.
@@ -26,6 +30,12 @@ const workerExecArgv = probeRuntimeMode === "jitless" ? ["--jitless"] : [];
  * no Vite at all; five of its tests call `fetch()`, and Node's `fetch` fails with the same
  * `ReferenceError` as its cause. One failed module and five failed tests would make every variant
  * run an unrelated failure and every experiment contaminated.
+ *
+ * **In 2d the reason they are excluded has changed, and they stay excluded.** Both *run* under
+ * `--no-opt`, which does not take WebAssembly away. They are kept out **for suite identity with
+ * 2c's control** — the only matched control on record, and the suite the validation candidate
+ * `M = 61` was derived on. Letting them back in because the variant no longer needs them gone
+ * would change the measured suite between two experiments that are read side by side.
  *
  * **Excluded when the marker is set at all, whichever arm set it**, so the two arms still run the
  * identical suite and differ in exactly one thing. Excluding them from the variant alone would add

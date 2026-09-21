@@ -10,16 +10,19 @@ import {
   RUNTIME_MODE_ENV,
   SELFTEST_ENV,
   SELFTEST_MIXED,
-  M_TRANSFER_RUNS,
   RUNS_PER_ARM,
+  RUNTIME_MODES,
   VARIANT,
+  VITEST_WORKER_ARGUMENTS,
   certificateProblems,
   clopperPearson,
+  controlBaseline,
   designPower,
   fisherExactTwoSided,
   judgeRun,
   refusedArguments,
   refusedEnvironment,
+  relativeArguments,
   report,
   runExperiment,
   schedule,
@@ -44,6 +47,25 @@ const arm = ({ completed = 4, signature = 0, other = 0, instrument = 0, hitRuns 
 });
 
 const arms = (control, variant) => ({ [CONTROL]: control, [VARIANT]: variant });
+
+/** Where the pretended workers ran. */
+const ROOT = "/repo";
+/** What Vitest starts a worker with, as a worker under `ROOT` records it: one path, absolute. */
+const vitestsOwn = () =>
+  VITEST_WORKER_ARGUMENTS.map((one) => (one.startsWith("node_modules/") ? `${ROOT}/${one}` : one));
+/** The certificate a correctly started worker of `which` arm writes, plus any `extra` arguments. */
+const certificateOf = (which, extra = []) => ({
+  marker: which,
+  execArgv: [...vitestsOwn(), ...RUNTIME_MODES[which], ...extra],
+  nodeOptions: null,
+  wasm: RUNTIME_MODES[which].includes("--jitless") ? "undefined" : "object",
+});
+/** A control run's own arguments, as the runner keeps them once one has certified. */
+const BASELINE = [...VITEST_WORKER_ARGUMENTS];
+const against = { root: ROOT, baseline: BASELINE };
+/** `record` with one fact left out — what a certificate that never recorded it looks like. */
+const without = (record, fact) =>
+  Object.fromEntries(Object.entries(record).filter(([name]) => name !== fact));
 
 /** Where one run is told to write, as `spawn-arm.mjs` hands it to `spawnPlan`. */
 const pathsOne = {
@@ -194,20 +216,20 @@ describe("the arms differ in the runtime mode and in nothing else", () => {
    * one party that knows which arm it scheduled, and these are its judgments.
    */
   describe("certifying a run against the arm it was scheduled in", () => {
-    const certifiedDefault = { marker: CONTROL, jitless: false, wasm: "object" };
-    const certifiedJitless = { marker: VARIANT, jitless: true, wasm: "undefined" };
-
     it("accepts each arm's own certificate", () => {
-      expect(certificateProblems(CONTROL, certifiedDefault)).toStrictEqual([]);
-      expect(certificateProblems(VARIANT, certifiedJitless)).toStrictEqual([]);
+      expect(certificateProblems(CONTROL, certificateOf(CONTROL), against)).toStrictEqual([]);
+      expect(certificateProblems(VARIANT, certificateOf(VARIANT), against)).toStrictEqual([]);
+      // The arm 2c ran is still in the table, and still certifies — by its one visible
+      // consequence as well as by its arguments.
+      expect(certificateProblems("jitless", certificateOf("jitless"), against)).toStrictEqual([]);
     });
 
     /** The shape a run leaves when its environment never reached the child. */
     it("refuses a run that wrote no certificate", () => {
-      expect(certificateProblems(VARIANT, undefined)).toStrictEqual([
+      expect(certificateProblems(VARIANT, undefined, against)).toStrictEqual([
         expect.stringMatching(/no runtime-mode certificate was written/),
       ]);
-      expect(certificateProblems(CONTROL, undefined)).toHaveLength(1);
+      expect(certificateProblems(CONTROL, undefined, against)).toHaveLength(1);
     });
 
     /**
@@ -215,36 +237,145 @@ describe("the arms differ in the runtime mode and in nothing else", () => {
      * with the arm. A judgment that took its expectation from the marker would pass both.
      */
     it("refuses a self-consistent certificate from the other arm", () => {
-      expect(certificateProblems(VARIANT, certifiedDefault)).toHaveLength(3);
-      expect(certificateProblems(CONTROL, certifiedJitless)).toHaveLength(3);
-      expect(certificateProblems(VARIANT, certifiedDefault).join("\n")).toMatch(
-        /scheduled in the jitless arm, but the worker certified jitless=false/,
-      );
+      const asVariant = certificateProblems(VARIANT, certificateOf(CONTROL), against).join("\n");
+      expect(asVariant).toMatch(/certified marker="default" where "no-opt" was intended/);
+      expect(asVariant).toMatch(/does not differ from the control by exactly \["--no-opt"\]/);
+      expect(asVariant).toMatch(/lacks \["--no-opt"\]/);
+
+      const asControl = certificateProblems(CONTROL, certificateOf(VARIANT), against).join("\n");
+      expect(asControl).toMatch(/certified marker="no-opt" where "default" was intended/);
+      expect(asControl).toMatch(/not started with exactly Vitest's own arguments/);
+      expect(asControl).toMatch(/has \["--no-opt"\] besides/);
     });
 
     /** The `poolOptions.forks.execArgv` failure: the marker arrives and the flag does not. */
     it("refuses a marker that arrived without its flag", () => {
-      const problems = certificateProblems(VARIANT, {
-        marker: VARIANT,
-        jitless: false,
-        wasm: "object",
-      });
-      expect(problems).toHaveLength(2);
-      expect(problems.join("\n")).not.toMatch(/certified marker=/);
+      const problems = certificateProblems(
+        VARIANT,
+        { ...certificateOf(CONTROL), marker: VARIANT },
+        against,
+      );
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toMatch(/lacks \["--no-opt"\]/);
     });
 
     /** An unmarked run — neither arm's — certifies neither. */
     it("refuses a certificate with no marker at all, even for the control", () => {
-      expect(certificateProblems(CONTROL, { jitless: false, wasm: "object" })).toStrictEqual([
+      const unmarked = without(certificateOf(CONTROL), "marker");
+      expect(certificateProblems(CONTROL, unmarked, against)).toStrictEqual([
         expect.stringMatching(/certified marker=undefined where "default" was intended/),
       ]);
+    });
+  });
+
+  /**
+   * **The whole startup argument list, held directly.** Each case below was measured on Node 24
+   * with a hot function and `%GetOptimizationStatus`, and each gets past a search for flags:
+   * that is why nothing is searched for.
+   */
+  describe("holding a worker to its whole argument list", () => {
+    /**
+     * **Falsifier: `default + --max-opt=2`.** TurboFan is *off* in this worker and `--no-opt`
+     * appears nowhere, so neither "is `--no-opt` absent?" nor a list of known flags notices. It
+     * is refused for being unexpected, not for being recognised.
+     */
+    it("refuses a control carrying a tier-changing argument no list of flags names", () => {
+      const problems = certificateProblems(
+        CONTROL,
+        certificateOf(CONTROL, ["--max-opt=2"]),
+        against,
+      );
+      expect(problems).toStrictEqual([
+        expect.stringMatching(
+          /not started with exactly Vitest's own arguments.*has \["--max-opt=2"\] besides/,
+        ),
+      ]);
+    });
+
+    /**
+     * **Falsifier: `no-opt + --opt`.** TurboFan is back *on* — the last flag wins — while
+     * `--no-opt` is present, so a search for it passes. The arms differ by two elements.
+     */
+    it("refuses a variant whose flag is undone by the argument after it", () => {
+      const problems = certificateProblems(VARIANT, certificateOf(VARIANT, ["--opt"]), against);
+      expect(problems).toStrictEqual([
+        expect.stringMatching(
+          /does not differ from the control by exactly \["--no-opt"\].*has \["--opt"\] besides/,
+        ),
+      ]);
+    });
+
+    /** Order is meaning: `--opt --no-opt` is off, `--no-opt --opt` is on. Same elements. */
+    it("refuses the right arguments in the wrong order", () => {
+      const swapped = certificateOf(VARIANT);
+      swapped.execArgv = [...RUNTIME_MODES[VARIANT], ...vitestsOwn()];
+      expect(certificateProblems(VARIANT, swapped, against).join("\n")).toMatch(
+        /the same arguments in a different order/,
+      );
+    });
+
+    /**
+     * **Falsifier: the same extra argument in *both* arms.** The pair still differs by exactly
+     * `--no-opt`, so the pair rule alone would accept two arms that are wrong in the same way.
+     * The control's exact list is what refuses it — and once the control is refused it is no
+     * baseline, so the variant has nothing to be held against and is refused too.
+     */
+    it("refuses an argument shared by both arms, which the pair rule alone would accept", () => {
+      const control = certificateOf(CONTROL, ["--max-opt=2"]);
+      expect(certificateProblems(CONTROL, control, { root: ROOT })).toHaveLength(1);
+      expect(controlBaseline(CONTROL, control, ROOT)).toBeUndefined();
+
+      const variant = { ...certificateOf(VARIANT), execArgv: [...control.execArgv, "--no-opt"] };
+      expect(
+        certificateProblems(VARIANT, variant, { root: ROOT, baseline: undefined }),
+      ).toStrictEqual([expect.stringMatching(/no control run has certified yet/)]);
+      // And against a sound control it is refused on its own account.
+      expect(certificateProblems(VARIANT, variant, against).join("\n")).toMatch(
+        /has \["--max-opt=2"\] besides/,
+      );
+    });
+
+    /** The flag that makes the meaning check possible must never be in a measured arm. */
+    it("refuses --allow-natives-syntax in either arm", () => {
+      for (const which of [CONTROL, VARIANT]) {
+        expect(
+          certificateProblems(which, certificateOf(which, ["--allow-natives-syntax"]), against),
+        ).toHaveLength(1);
+      }
+    });
+
+    it("refuses a worker that saw any NODE_OPTIONS", () => {
+      const certificate = { ...certificateOf(CONTROL), nodeOptions: "--max-old-space-size=4096" };
+      expect(certificateProblems(CONTROL, certificate, against)).toStrictEqual([
+        expect.stringMatching(/certified nodeOptions="--max-old-space-size=4096" where null/),
+      ]);
+    });
+
+    it("refuses a certificate that did not record its arguments at all", () => {
+      const bare = without(certificateOf(CONTROL), "execArgv");
+      expect(certificateProblems(CONTROL, bare, against)).toStrictEqual([
+        expect.stringMatching(/did not record its startup arguments/),
+      ]);
+    });
+
+    /** The pair rule is judged against a real control run, and only one that certified. */
+    it("takes the baseline from a certified control run, and from nothing else", () => {
+      expect(controlBaseline(CONTROL, certificateOf(CONTROL), ROOT)).toStrictEqual(BASELINE);
+      expect(controlBaseline(VARIANT, certificateOf(VARIANT), ROOT)).toBeUndefined();
+      expect(controlBaseline(CONTROL, undefined, ROOT)).toBeUndefined();
+    });
+
+    it("takes the project's own location out of a path, and normalises nothing else", () => {
+      expect(
+        relativeArguments(["--require", "/repo/node_modules/x.cjs", "/repository/y"], "/repo"),
+      ).toStrictEqual(["--require", "node_modules/x.cjs", "/repository/y"]);
     });
   });
 
   /** A control arm that already carries the marker is a comparison between an arm and itself. */
   it("refuses to run when the marker is already inherited", () => {
     expect(refusedEnvironment({})).toBeUndefined();
-    expect(refusedEnvironment({ NODE_OPTIONS: "--max-old-space-size=4096" })).toBeUndefined();
+    expect(refusedEnvironment({ PATH: "/usr/bin", CI: "true" })).toBeUndefined();
     expect(refusedEnvironment({ [RUNTIME_MODE_ENV]: VARIANT })).toMatch(/must run default Node/);
   });
 
@@ -254,24 +385,27 @@ describe("the arms differ in the runtime mode and in nothing else", () => {
   });
 
   /**
-   * And refuses the transport that cannot work at all. `--jitless` in `NODE_OPTIONS` applies to
-   * the Vite parent, which then starts without WebAssembly and throws before any test runs — so
-   * every run of *both* arms would be an unrelated failure. Measured, not assumed.
+   * **Falsifier: any `NODE_OPTIONS` inherited at all.** 2c's refusal searched it for `--jitless`
+   * and let everything else through — and `--max-opt=2` there disables TurboFan in *both* arms,
+   * touching no worker's argument list. No value of it is needed to run this experiment, so all
+   * of it is refused; an empty one is nothing.
    */
-  it("refuses --jitless inherited through NODE_OPTIONS, which would break both arms", () => {
-    expect(refusedEnvironment({ NODE_OPTIONS: "--jitless" })).toMatch(/the Vite parent/);
-    expect(refusedEnvironment({ NODE_OPTIONS: "--trace-gc --jitless" })).toMatch(
-      /belongs to the workers/,
-    );
+  it("refuses any inherited NODE_OPTIONS, not only the flags somebody thought of", () => {
+    for (const value of ["--max-old-space-size=4096", "--max-opt=2", "--jitless", "--no-opt"]) {
+      expect(refusedEnvironment({ NODE_OPTIONS: value })).toMatch(/NODE_OPTIONS is set/);
+    }
+    expect(refusedEnvironment({ NODE_OPTIONS: "" })).toBeUndefined();
+    expect(refusedEnvironment({ NODE_OPTIONS: "  " })).toBeUndefined();
   });
 });
 
 describe("the schedule", () => {
   /**
    * **Falsifier: grouped execution replacing alternation.** Grouping would put any drift over the
-   * job's duration entirely on whichever arm ran second, and it would make "the first 51 control
-   * runs" the job's first third rather than a stretch spread across it — which is what the `M`
-   * eligibility rule is about.
+   * job's duration entirely on whichever arm ran second — a runner warming, a neighbour starting
+   * — and that is the whole reason now. (2c also read an `M` eligibility rule off the control's
+   * first runs, which needed them spread across the job; 2d makes no statement about `M`, and that
+   * rule is gone. The hit indices it used are still recorded.)
    */
   it("alternates the arms rather than grouping them", () => {
     const order = schedule(3);
@@ -394,11 +528,11 @@ describe("driving the schedule", () => {
    * other thing.
    */
   it("keeps a hit that has an unrelated failure beside it, and contaminates the arm", () => {
-    const certificate = { marker: CONTROL, jitless: false, wasm: "object" };
     const mixed = judgeRun({
       arm: CONTROL,
       interpreted: hit(),
-      certificate,
+      certificate: certificateOf(CONTROL),
+      ...against,
       results: {
         failures: [
           {
@@ -414,8 +548,8 @@ describe("driving the schedule", () => {
       judgeRun({
         arm: which,
         interpreted: passed(),
-        certificate:
-          which === CONTROL ? certificate : { marker: VARIANT, jitless: true, wasm: "undefined" },
+        certificate: certificateOf(which),
+        ...against,
         results: { failures: [] },
       });
 
@@ -437,7 +571,6 @@ describe("driving the schedule", () => {
     expect(counts.arms[VARIANT]).toMatchObject({ signature: 0, other: 0, instrument: 0 });
     expect(result.outcome).toBe("contaminated");
     expect(result.contaminated).toStrictEqual([CONTROL]);
-    expect(result.eligibleForM).toBe(false);
     expect(fisher).not.toHaveBeenCalled();
     expect(report(result).join("\n")).toMatch(/had an unrelated failure, alone or beside a hit/);
   });
@@ -454,10 +587,8 @@ describe("driving the schedule", () => {
         judgeRun({
           arm: which,
           interpreted: hit(),
-          certificate:
-            which === CONTROL
-              ? { marker: CONTROL, jitless: false, wasm: "object" }
-              : { marker: VARIANT, jitless: true, wasm: "undefined" },
+          certificate: certificateOf(which),
+          ...against,
           results: {
             failures: [
               {
@@ -497,10 +628,8 @@ describe("driving the schedule", () => {
           arm: which,
           // What Vitest prints for it: the line ends as the recorded line ends, so it is a hit.
           interpreted: { exitCode: 1, output: `Error: ${message}\n` },
-          certificate:
-            which === CONTROL
-              ? { marker: CONTROL, jitless: false, wasm: "object" }
-              : { marker: VARIANT, jitless: true, wasm: "undefined" },
+          certificate: certificateOf(which),
+          ...against,
           results: { failures: [{ kind: "test", where: "somewhere", messages: [message] }] },
         }),
     });
@@ -511,7 +640,6 @@ describe("driving the schedule", () => {
       expect(counts.arms[name]).toMatchObject({ signature: 1, hitRuns: [1], other: 1 });
     }
     expect(result.outcome).toBe("contaminated");
-    expect(result.eligibleForM).toBe(false);
     expect(fisher).not.toHaveBeenCalled();
   });
 
@@ -525,10 +653,8 @@ describe("driving the schedule", () => {
           arm: which,
           interpreted:
             which === CONTROL ? { exitCode: 1, output: `BuildError: ${message}\n` } : passed(),
-          certificate:
-            which === CONTROL
-              ? { marker: CONTROL, jitless: false, wasm: "object" }
-              : { marker: VARIANT, jitless: true, wasm: "undefined" },
+          certificate: certificateOf(which),
+          ...against,
           results: {
             failures:
               which === CONTROL ? [{ kind: "test", where: "build", messages: [message] }] : [],
@@ -551,10 +677,8 @@ describe("driving the schedule", () => {
         judgeRun({
           arm: which,
           interpreted: which === CONTROL ? hit() : passed(),
-          certificate:
-            which === CONTROL
-              ? { marker: CONTROL, jitless: false, wasm: "object" }
-              : { marker: VARIANT, jitless: true, wasm: "undefined" },
+          certificate: certificateOf(which),
+          ...against,
           results: {
             failures:
               which === CONTROL
@@ -574,7 +698,8 @@ describe("driving the schedule", () => {
     const judged = judgeRun({
       arm: CONTROL,
       interpreted: passed(),
-      certificate: { marker: CONTROL, jitless: false, wasm: "object" },
+      certificate: certificateOf(CONTROL),
+      ...against,
       results: undefined,
     });
 
@@ -662,41 +787,28 @@ describe("the gates", () => {
   });
 });
 
-describe("when M = 51 becomes eligible to transfer", () => {
+describe("what the experiment says about M", () => {
   /**
-   * The control arm runs 60, not 51, so reproducing *somewhere* in 60 is not the evidence a 51-run
-   * reverted validation needs. Read off the hit indices, which is the only reason they are kept.
+   * **Nothing, and it says so.** 2c's closing line read `M = 51` off the control's hit indices as
+   * *eligible*; the owner has since ruled it not transferred, with 61 the candidate for this exact
+   * suite. 2d's control is 60 runs, so a first-61 rule could not even be evaluated inside it. The
+   * indices are still recorded and still printed — they are what any later ruling is read from.
    */
-  it("is eligible on a hit inside the first 51 control runs, and is not transferred", () => {
+  it("prints the hit indices and makes no statement about M", () => {
     const result = verdict({
       runsPerArm: RUNS_PER_ARM,
       arms: arms(
-        arm({ completed: RUNS_PER_ARM, signature: 1, hitRuns: [M_TRANSFER_RUNS] }),
+        arm({ completed: RUNS_PER_ARM, signature: 2, hitRuns: [13, 60] }),
         arm({ completed: RUNS_PER_ARM }),
       ),
       fisher: () => 0.01,
     });
-
-    expect(result.eligibleForM).toBe(true);
-    // The precondition, and no more than that: the owner approved the revised suite without
-    // validating the old bound on it, so the log must not announce a transfer nobody ruled on.
     const text = report(result).join("\n");
-    expect(text).toMatch(/M = 51 is ELIGIBLE to transfer, and is not transferred/);
-    expect(text).not.toMatch(/M = 51 transfers/);
-  });
 
-  it("is not eligible when every control hit fell after run 51", () => {
-    const result = verdict({
-      runsPerArm: RUNS_PER_ARM,
-      arms: arms(
-        arm({ completed: RUNS_PER_ARM, signature: 2, hitRuns: [M_TRANSFER_RUNS + 1, 60] }),
-        arm({ completed: RUNS_PER_ARM }),
-      ),
-      fisher: () => 0.01,
-    });
-
-    expect(result.eligibleForM).toBe(false);
-    expect(report(result).join("\n")).toMatch(/M = 51 does NOT transfer/);
+    expect(text).toMatch(/hits at arm run\(s\) {2}13, 60/);
+    expect(text).toMatch(/No statement about M follows from this experiment/);
+    expect(text).not.toMatch(/M = 51|ELIGIBLE|transfer/);
+    expect(result).not.toHaveProperty("eligibleForM");
   });
 });
 
@@ -781,8 +893,13 @@ describe("the report, in three tiers", () => {
       }),
     ).join("\n");
 
-    expect(text).toMatch(/DIFFERS: the failure rate differs between default and --jitless/);
-    expect(text).toMatch(/It does not say/);
-    expect(text).toMatch(/free of defects/);
+    expect(text).toMatch(/DIFFERS: the failure rate differs between default and --no-opt/);
+    // The narrower reading 2d is entitled to, and its limit, travelling with the claim.
+    expect(text).toMatch(/TurboFan-enabled against TurboFan-disabled execution, and no more/);
+    expect(text).toMatch(
+      /It does not say\s+optimisation caused the failure, or that TurboFan has a defect/,
+    );
+    expect(text).toMatch(/It narrows a variable\. It does not name a mechanism\./);
+    expect(text).not.toMatch(/jitless/);
   });
 });

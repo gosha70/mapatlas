@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { ROOT } from "./consumer-project.mjs";
-import { triggersOf } from "./workflow-triggers.mjs";
+import { runCommandsOf, triggersOf } from "./workflow-triggers.mjs";
 
 const yaml = (...lines) => lines.join("\n");
 
@@ -58,5 +58,38 @@ describe("the T8.1 flake probe", () => {
    */
   it("is triggered manually and by nothing else", () => {
     expect(triggersOf(workflow)).toStrictEqual(["workflow_dispatch"]);
+  });
+
+  /**
+   * **Falsifier: the probe not certifying `--no-opt` on its own Node.** `node-version: 24` floats,
+   * so a dispatch may resolve a Node that `ci.yml` never ran `check:runtime-mode` on, and the
+   * certificates inside the loop prove only that the flag was *delivered*. The result's claim —
+   * TurboFan-enabled against disabled — is established in this job, **before** the loop, or not at
+   * all. The whole ordered list: a step moved after the loop, or dropped, fails here.
+   */
+  it("certifies the instrument on its own runtime before it measures anything", () => {
+    expect(runCommandsOf(workflow)).toStrictEqual([
+      "npm ci",
+      "npm run build",
+      "npm run check:runtime-mode",
+      "npm run probe:flake",
+    ]);
+  });
+});
+
+describe("runCommandsOf", () => {
+  it("reads each step's command in order, and not a commented-out one", () => {
+    expect(
+      runCommandsOf(
+        yaml("steps:", "  - name: a", "    run: npm ci", "  # run: never", "  - run: npm test"),
+      ),
+    ).toStrictEqual(["npm ci", "npm test"]);
+  });
+
+  /** A step it cannot read as one command is refused, not reported as `|`. */
+  it("refuses a multi-line step rather than reporting noise", () => {
+    expect(() => runCommandsOf(yaml("steps:", "  - run: |", "      npm ci"))).toThrow(
+      /multi-line `run:` step/,
+    );
   });
 });

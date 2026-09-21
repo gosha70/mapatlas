@@ -1,20 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The two-arm runtime-mode experiment (T8.1 increment 2c).
+ * The two-arm runtime-mode experiment (T8.1 increments 2c and 2d).
  *
  * **What this is for.** Positional narrowing closed: the probe at `c20b417`, with ten diagnostic
  * stages inside the suspect window, returned 0 hits in 100 complete runs against ten hits at the
  * previous head, and every added stage does real work inside the interval it measures. So the
- * question changes from *where* to *whether the failure depends on one property of the runtime*:
- * default Node against `--jitless`, with everything else held.
+ * question changes from *where* to *whether the failure depends on one property of the runtime*.
+ * 2c ran default Node against `--jitless` and the rate differed (8/60 against 0/60, p = 0.00609).
+ * 2d, the pair this file is now fixed to, is the narrowest cut that still removes a whole named
+ * component: default against `--no-opt`, which disables TurboFan and leaves Ignition, Sparkplug
+ * and Maglev running.
  *
  * **Everything selectable is written down here and nowhere else**, because the plan's longest
  * section is about not choosing a bar after seeing the result. The budget, the design rate, the
  * rejection threshold, the test convention and the permitted conclusions are all fixed by the
- * amendment dated 2026-09-17, whose design was revised on 2026-09-19; the implementation is under
- * review and dispatch requires separate approval. Changing any of them means editing this file
- * under review.
+ * amendments dated 2026-09-17 (2c) and 2026-09-20 (2d); 2d's implementation is under review and
+ * its dispatch requires separate approval. Changing any of them means editing this file under
+ * review.
  *
  * Pure. The spawning belongs to `spawn-arm.mjs` — one spawn path, shared by the runner and by the
  * check that proves it — and the classification of one run belongs to `flake-probe.mjs`: one
@@ -23,20 +26,45 @@
 
 import { classifyRun, readableResults, unrelatedFailures } from "./flake-probe.mjs";
 
+/**
+ * What each arm adds to the test workers' `execArgv` — one table, read by `vitest.config.ts`, by
+ * the fixture inside the worker and by the runner that judges it, so the three cannot disagree
+ * about what an arm is.
+ *
+ * `jitless` is the arm 2c ran. It stays so that 2c's record remains reproducible from this tree;
+ * the experiment is fixed to one pair at a time, below, and the runner takes no arguments.
+ */
+export const RUNTIME_MODES = Object.freeze({
+  default: Object.freeze([]),
+  jitless: Object.freeze(["--jitless"]),
+  "no-opt": Object.freeze(["--no-opt"]),
+});
+
 /** The control arm: the runtime the failure has actually been seen under. */
 export const CONTROL = "default";
-/** The variant arm: the same command, with one marker added to the child's environment. */
-export const VARIANT = "jitless";
+/**
+ * The variant arm: the same command, with the marker naming a different row of the table.
+ *
+ * **`--no-opt`, and what that is.** Read from the binary rather than remembered — `node
+ * --v8-options` on Node 24 lists `--opt (alias for --turbofan)`, with `--maglev` and `--sparkplug`
+ * both enabled by default. So this arm runs with TurboFan disabled and everything beneath it
+ * running. `check-runtime-mode.mjs` re-establishes that on whatever Node it is run with.
+ */
+export const VARIANT = "no-opt";
+
+/** An arm's added arguments as a reader would type them, for the log and the report. */
+const flagsOf = (arm) => RUNTIME_MODES[arm].join(" ");
 
 /**
  * The marker the variant arm sets, and the only difference between the two arms.
  *
  * **Why a marker and not the flag itself.** Both arms must run the identical
  * `npm run test:coverage`, so the difference cannot be in the command. It cannot be in
- * `NODE_OPTIONS` either: Node permits `--jitless` there, but it disables WebAssembly
- * process-wide and Vite's parent then fails to start before a single test runs — measured, not
- * assumed. `vitest.config.ts` reads this marker and turns it into the workers' `execArgv`, so the
- * parent keeps WebAssembly and only the worker running the suite is jitless.
+ * `NODE_OPTIONS` either: there a flag reaches Vite's parent as well as the workers — `--jitless`
+ * stops the parent starting at all, measured in 2c — and Node refuses `--no-opt` there outright.
+ * `vitest.config.ts` reads this marker, looks the arm up in `RUNTIME_MODES`, and makes its flags
+ * the workers' `execArgv`, so the parent starts normally and only the workers running the suite
+ * are in the other mode.
  */
 export const RUNTIME_MODE_ENV = "MAPATLAS_PROBE_RUNTIME_MODE";
 
@@ -94,25 +122,33 @@ export const DESIGN_RATE = 0.13;
 export const ALPHA = 0.05;
 
 /**
- * The count at which a reverted-fix validation is expected to see at least one failure.
+ * What Vitest itself starts a worker with, its one path relative to the project.
  *
- * The control arm runs 60, not 51, so reproducing *somewhere* in 60 is not the same evidence: only
- * a hit within the first 51 control runs shows that a 51-run reverted validation could have
- * falsified anything. Read off the hit indices, which is why they are recorded.
- *
- * **That makes `M` eligible to transfer, and transfers nothing.** `M` was derived from a 13% rate
- * on a suite with different membership, and a control hit does not establish that the old bound
- * applies to this one; the transfer is the owner's separate ruling, and `M` stays frozen until it.
+ * Read unfiltered from inside a worker through the real config (Vitest 4.1.11), twice, and
+ * identical both times. **The control arm's arguments must be exactly these**, which is how the
+ * control certifies that it carries *no* argument of its own. Held as an exact list on purpose: a
+ * list of flags to look for fails **open** — `--max-opt=2` turns TurboFan off and matches nothing
+ * anyone thought to list — while this fails **closed**. A Vitest upgrade that changes its own
+ * arguments turns `check:runtime-mode` red, to be re-read under review rather than waved through.
  */
-export const M_TRANSFER_RUNS = 51;
+export const VITEST_WORKER_ARGUMENTS = Object.freeze([
+  "--experimental-import-meta-resolve",
+  "--require",
+  "node_modules/vitest/suppress-warnings.cjs",
+  "--conditions",
+  "node",
+  "--conditions",
+  "development",
+]);
 
 /**
  * Which arm each run belongs to, alternating.
  *
- * **Alternating rather than grouped, for two reasons.** Any drift over the job's duration — a
- * runner warming, a neighbour starting — falls on both arms instead of entirely on whichever ran
- * second. And the control arm's *run indices* carry the `M` eligibility rule, so "the first 51 control
- * runs" has to mean a stretch spread across the job rather than its first third.
+ * **Alternating rather than grouped, so that time is not a second difference between the arms.**
+ * Any drift over the job's duration — a runner warming, a neighbour starting — falls on both arms
+ * instead of entirely on whichever ran second. It also means run *k* of one arm and run *k* of the
+ * other happened side by side, so the recorded hit indices of the two arms can be read against
+ * each other.
  *
  * @param {number} runsPerArm
  * @returns {string[]} arm names, one per run, in execution order
@@ -155,39 +191,137 @@ export function spawnPlan(arm, baseEnv, { certificatePath, resultsPath }) {
 }
 
 /**
+ * A worker's arguments with the project's own location taken out, so that the same list is the
+ * same list on a laptop and on a runner. Nothing else is normalised: order and repetition are part
+ * of what an argument list means — `--no-opt --opt` turns TurboFan back **on**.
+ *
+ * @param {string[]} execArgv
+ * @param {string} root the project root the worker ran in
+ */
+export function relativeArguments(execArgv, root) {
+  const prefix = root.endsWith("/") ? root : `${root}/`;
+  return execArgv.map((one) => (one.startsWith(prefix) ? one.slice(prefix.length) : one));
+}
+
+const sameList = (these, those) =>
+  these.length === those.length && these.every((one, index) => one === those[index]);
+
+/** How `actual` departs from `wanted`, in words: what it has besides, and what it lacks. */
+function departure(actual, wanted) {
+  const besides = [...actual];
+  const lacking = [];
+  for (const one of wanted) {
+    const at = besides.indexOf(one);
+    if (at === -1) lacking.push(one);
+    else besides.splice(at, 1);
+  }
+  if (besides.length === 0 && lacking.length === 0)
+    return "the same arguments in a different order";
+  return [
+    besides.length > 0 ? `has ${JSON.stringify(besides)} besides` : undefined,
+    lacking.length > 0 ? `lacks ${JSON.stringify(lacking)}` : undefined,
+  ]
+    .filter((one) => one !== undefined)
+    .join(" and ");
+}
+
+/**
  * Why one run's certificate does not certify the arm it was scheduled in — empty when it does.
  *
  * **Judged against the arm, never against the certificate's own marker.** A certificate that is
- * merely self-consistent — marker `default`, no flag, WebAssembly present — is exactly what a
- * *variant* run produces when its environment went astray, and the fixture inside the worker
- * cannot tell: it has only the marker to go by. The expectation therefore comes from the one party
- * that knows what was intended, which is the schedule.
+ * merely self-consistent — marker `default`, no flag — is exactly what a *variant* run produces
+ * when its environment went astray, and the fixture inside the worker cannot tell: it has only the
+ * marker to go by. The expectation therefore comes from the one party that knows what was
+ * intended, which is the schedule.
  *
  * **A missing certificate is a problem, not an absence of problems.** It is what a run leaves when
  * the environment never reached the child, or the suite died before the fixture ran; either way
  * nothing is known about the runtime that run measured.
  *
+ * **The whole startup argument list, held directly — not searched.** Looking for `--no-opt`, or
+ * for the absence of a list of known flags, certifies the wrong runtime two ways that were both
+ * measured: `--max-opt=2` disables TurboFan and matches nothing listed, and `--no-opt --opt` still
+ * contains `--no-opt` with TurboFan back on. So:
+ *
+ * 1. the **control's** arguments are exactly `VITEST_WORKER_ARGUMENTS` — Vitest's own and nothing
+ *    else, tier-changing or not;
+ * 2. the **variant's** are exactly a certified control run's **followed by the arm's flags** — the
+ *    two arms differ by that and by nothing else, in order. A property of the *pair*, so it is
+ *    judged against a real control run, `baseline`, and not against a second copy of the list;
+ * 3. the worker's `NODE_OPTIONS` is unset.
+ *
+ * **What this cannot see:** the startup argument list distinguishes these command-line
+ * configurations and no more. A V8 flag set later from code — `v8.setFlagsFromString` — leaves
+ * `execArgv` untouched. Nothing in this repository calls it.
+ *
  * @param {string} arm the arm the runner scheduled this run in
- * @param {{ marker?: unknown, jitless?: unknown, wasm?: unknown } | undefined} certificate
+ * @param {{ marker?: unknown, execArgv?: unknown, nodeOptions?: unknown, wasm?: unknown }
+ *   | undefined} certificate
+ * @param {{ root: string, baseline?: string[] }} against the project root, and the arguments of a
+ *   control run that certified — see `controlBaseline`
  * @returns {string[]}
  */
-export function certificateProblems(arm, certificate) {
+export function certificateProblems(arm, certificate, { root, baseline }) {
   if (certificate === undefined) {
     return [`no runtime-mode certificate was written, so the ${arm} arm's runtime is unknown`];
   }
   const intended = arm;
   const expected = {
     marker: intended,
-    jitless: intended === VARIANT,
-    wasm: intended === VARIANT ? "undefined" : "object",
+    nodeOptions: null,
+    // The one consequence a worker can observe for itself: `--jitless` takes WebAssembly away.
+    wasm: RUNTIME_MODES[intended].includes("--jitless") ? "undefined" : "object",
   };
-  return Object.keys(expected)
+  const problems = Object.keys(expected)
     .filter((fact) => certificate[fact] !== expected[fact])
     .map(
       (fact) =>
         `scheduled in the ${arm} arm, but the worker certified ${fact}=` +
         `${JSON.stringify(certificate[fact])} where ${JSON.stringify(expected[fact])} was intended`,
     );
+
+  const { execArgv } = certificate;
+  if (!Array.isArray(execArgv) || !execArgv.every((one) => typeof one === "string")) {
+    return [...problems, `the ${arm} arm's worker did not record its startup arguments`];
+  }
+  const actual = relativeArguments(execArgv, root);
+  if (intended === CONTROL) {
+    if (!sameList(actual, VITEST_WORKER_ARGUMENTS)) {
+      problems.push(
+        `the ${arm} arm's worker was not started with exactly Vitest's own arguments: it ` +
+          `${departure(actual, VITEST_WORKER_ARGUMENTS)}`,
+      );
+    }
+  } else if (baseline === undefined) {
+    problems.push(
+      `no control run has certified yet, so there is nothing to hold the ${arm} arm's ` +
+        `arguments against`,
+    );
+  } else if (!sameList(actual, [...baseline, ...RUNTIME_MODES[intended]])) {
+    problems.push(
+      `the ${arm} arm's worker does not differ from the control by exactly ` +
+        `${JSON.stringify(RUNTIME_MODES[intended])}: against the control followed by that, it ` +
+        `${departure(actual, [...baseline, ...RUNTIME_MODES[intended]])}`,
+    );
+  }
+  return problems;
+}
+
+/**
+ * The arguments every variant run is held against: a **control run's own**, once one has
+ * certified. `undefined` for a variant run, and for a control run that did not certify — a
+ * baseline taken from a run that was itself wrong would pass its error on to the other arm.
+ *
+ * @param {string} arm
+ * @param {Parameters<typeof certificateProblems>[1]} certificate
+ * @param {string} root
+ * @returns {string[] | undefined}
+ */
+export function controlBaseline(arm, certificate, root) {
+  if (arm !== CONTROL || certificateProblems(arm, certificate, { root }).length > 0) {
+    return undefined;
+  }
+  return relativeArguments(certificate.execArgv, root);
 }
 
 /**
@@ -207,12 +341,13 @@ export function certificateProblems(arm, certificate) {
  *
  * @param {{ arm: string,
  *   interpreted: { exitCode: number, output: string, truncated?: boolean, reason?: string },
- *   certificate: Parameters<typeof certificateProblems>[1], results: unknown }} run
+ *   certificate: Parameters<typeof certificateProblems>[1], results: unknown, root: string,
+ *   baseline?: string[] }} run
  */
-export function judgeRun({ arm, interpreted, certificate, results }) {
+export function judgeRun({ arm, interpreted, certificate, results, root, baseline }) {
   const readable = readableResults(results);
   const faults = [
-    ...certificateProblems(arm, certificate),
+    ...certificateProblems(arm, certificate, { root, baseline }),
     ...(readable
       ? []
       : [
@@ -229,11 +364,15 @@ export function judgeRun({ arm, interpreted, certificate, results }) {
 /**
  * Why the inherited environment is refused.
  *
- * **Two ways it can already be wrong, and both are fatal before anything is spawned.** A control
- * arm that inherits the marker is not a control — both arms would run jitless and the comparison
- * would be between an arm and itself. And `--jitless` inherited through `NODE_OPTIONS` applies to
- * the Vite *parent*, which then cannot start at all: every run of both arms would be an unrelated
- * failure and the experiment would be contaminated from the first run to the last.
+ * **Three ways it can already be wrong, and each is fatal before anything is spawned.** A control
+ * arm that inherits the marker is not a control — both arms would run the same mode and the
+ * comparison would be between an arm and itself. The check's self-test, inherited, fails every
+ * run on purpose. And **any** `NODE_OPTIONS` at all: it reaches the Vite parent *and* every worker
+ * of both arms, no value of it is needed to run this experiment, and it is where a runtime can be
+ * changed without touching a single argument the certificate reads. 2c's refusal searched it for
+ * `--jitless` and let everything else through — `--max-opt=2` included, which disables TurboFan
+ * in both arms and would have made 2d a comparison between an arm and itself. That Node itself
+ * rejects `--no-opt` there covers one spelling on one Node version.
  *
  * Checked up front, because two hours of runner time should not be spent on a comparison that
  * cannot answer its own question.
@@ -256,11 +395,12 @@ export function refusedEnvironment(baseEnv) {
       `Unset it and dispatch again.`
     );
   }
-  if ((baseEnv.NODE_OPTIONS ?? "").includes("--jitless")) {
+  if ((baseEnv.NODE_OPTIONS ?? "").trim() !== "") {
     return (
-      `NODE_OPTIONS contains --jitless (${JSON.stringify(baseEnv.NODE_OPTIONS)}). That applies to ` +
-      `the Vite parent, which then starts without WebAssembly and fails before any test runs, in ` +
-      `both arms. The flag belongs to the workers, through ${RUNTIME_MODE_ENV}. Unset it.`
+      `NODE_OPTIONS is set (${JSON.stringify(baseEnv.NODE_OPTIONS)}). It reaches the Vite parent ` +
+      `and every worker of both arms, and can change the runtime they run in without appearing ` +
+      `in any worker's arguments. An arm's flags belong to the workers, through ` +
+      `${RUNTIME_MODE_ENV}, and nothing else may set one. Unset it and dispatch again.`
     );
   }
   return undefined;
@@ -299,8 +439,9 @@ function emptyArm() {
  * occurrence — and that a run which could not be spawned stops the experiment rather than being
  * counted as a failing suite.
  *
- * **Hit indices are recorded per arm**, one-based within that arm, because the `M` eligibility rule
- * is about *where* in the control arm a hit fell and cannot be read off a total.
+ * **Hit indices are recorded per arm**, one-based within that arm, because *where* in an arm the
+ * hits fell cannot be read off a total — it is what shows drift over the job, and what any later
+ * ruling on a validation budget would have to be read from.
  *
  * @param {{ runsPerArm: number, runSuite: (job: { index: number, arm: string, armRun: number })
  *   => { spawned?: boolean, reason?: string, exitCode: number, output: string, truncated?: boolean,
@@ -561,7 +702,6 @@ export function verdict({
       ...base,
       outcome: "contaminated",
       comparison: undefined,
-      eligibleForM: false,
       statement: "inconclusive; the experiment was contaminated and no comparison was computed",
     };
   }
@@ -571,7 +711,6 @@ export function verdict({
       ...base,
       outcome: "control-null",
       comparison: undefined,
-      eligibleForM: false,
       statement: "inconclusive; the control did not reproduce",
     };
   }
@@ -590,15 +729,34 @@ export function verdict({
     ...base,
     outcome: p <= alpha ? "differs" : "undistinguished",
     comparison: { p, alpha, designPower: power },
-    eligibleForM: control.hitRuns.some((run) => run <= M_TRANSFER_RUNS),
     statement:
       p <= alpha
-        ? `the failure rate differs between ${CONTROL} and --jitless on this runner`
+        ? `the failure rate differs between ${CONTROL} and ${flagsOf(VARIANT)} on this runner`
         : "this budget did not distinguish the two runtime modes",
   };
 }
 
 const percent = (value) => `${(value * 100).toFixed(3)}%`;
+
+/**
+ * What a difference against each variant is, and is not, entitled to mean — printed with the
+ * result so the limit travels with the claim. Written before any dispatch, per variant, because
+ * the two cuts license different things: `--jitless` removes every compiler, `--no-opt` one tier.
+ */
+const LIMITS = Object.freeze({
+  jitless: [
+    "This says the rate depends on the runtime mode under this experiment. It does not say",
+    "optimisation is the cause, which optimisation, or that this repository's JavaScript is",
+    "free of defects: --jitless changes timing, allocation behaviour and execution throughout.",
+  ],
+  "no-opt": [
+    "That is TurboFan-enabled against TurboFan-disabled execution, and no more. It does not say",
+    "optimisation caused the failure, or that TurboFan has a defect: disabling a tier changes",
+    "which code runs, how long it takes to get hot, what is inlined and when garbage is",
+    "collected, and any of those could expose or mask an ordinary defect in this repository's",
+    "JavaScript. It narrows a variable. It does not name a mechanism.",
+  ],
+});
 
 /**
  * The report, in three tiers, so that no field can be chosen after seeing the result.
@@ -617,11 +775,11 @@ const percent = (value) => `${(value * 100).toFixed(3)}%`;
  * @returns {string[]}
  */
 export function report(result) {
-  const lines = ["--- T8.1 2c result ---"];
+  const lines = [`--- T8.1 runtime-mode result: ${CONTROL} against ${VARIANT} ---`];
 
   for (const name of [CONTROL, VARIANT]) {
     const arm = result.arms[name];
-    const label = name === VARIANT ? `${name} (--jitless)` : name;
+    const label = name === VARIANT ? `${name} (${flagsOf(name)})` : name;
     lines.push(
       `${label}:`,
       `  runs completed      ${String(arm.completed)} of ${String(result.runsPerArm)}`,
@@ -667,21 +825,12 @@ export function report(result) {
     "",
     `${result.outcome === "differs" ? "DIFFERS" : "UNDISTINGUISHED"}: ${result.statement}.`,
   );
-  if (result.outcome === "differs") {
-    lines.push(
-      "This says the rate depends on the runtime mode under this experiment. It does not say",
-      "optimisation is the cause, which optimisation, or that this repository's JavaScript is",
-      "free of defects: --jitless changes timing, allocation behaviour and execution throughout.",
-    );
-  }
+  if (result.outcome === "differs") lines.push(...LIMITS[VARIANT]);
+  // Said rather than left to be inferred from silence: the closing line used to read `M = 51` off
+  // the control's hit indices, and the owner has since ruled on it. The indices are still above.
   lines.push(
     "",
-    result.eligibleForM
-      ? `M = 51 is ELIGIBLE to transfer, and is not transferred: the control reproduced within its ` +
-          `first ${String(M_TRANSFER_RUNS)} runs, on a suite whose membership differs from the one ` +
-          `M was derived on. The transfer needs the owner's separate ruling.`
-      : `M = 51 does NOT transfer: no control hit fell within the first ${String(M_TRANSFER_RUNS)} ` +
-          `runs of that arm, so a 51-run reverted validation was not shown able to falsify anything.`,
+    "No statement about M follows from this experiment; see specs/plans/t8-1-fixture-flake.md.",
   );
   return lines;
 }

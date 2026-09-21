@@ -1,19 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# T8.1 — the fixture-build flake (issue #30), increment 2c.
+# T8.1 — the fixture-build flake (issue #30), increment 2d.
 #
 # **Manual only.** `workflow_dispatch` is the sole trigger, deliberately: this exists to read a
 # runner's environment, and a job that also fired on push or pull request would add CI cost to
 # every change and become a source of runs nobody is reading — which is the habit issue #30 already
 # warns about.
 #
-# **It now runs the two-arm comparison.** Positional narrowing closed at `c20b417`, so the question
-# is no longer *where* the change happens but whether it depends on one property of the runtime:
-# default Node against `--jitless`, alternating, **60 runs per arm**. Both arms spawn the identical
-# `npm run test:coverage`; the difference travels as an environment marker that `vitest.config.ts`
-# turns into the test workers' `execArgv`, so only the worker running the suite is jitless and
-# Vite's parent starts normally. `npm run check:runtime-mode` — a required step of `ci.yml`, and
-# part of `npm run verify` — proves that transport with real subprocesses.
+# **It runs a two-arm comparison.** Positional narrowing closed at `c20b417`, so the question is no
+# longer *where* the change happens but whether it depends on one property of the runtime. 2c ran
+# default Node against `--jitless` from this workflow (run 35512357623: 8/60 against 0/60,
+# p = 0.00609). **It now runs 2d: default against `--no-opt`** — TurboFan disabled, Maglev and
+# Sparkplug left running — alternating, **60 runs per arm**, over the same 95-file suite. Both arms
+# spawn the identical `npm run test:coverage`; the difference travels as an environment marker
+# that `vitest.config.ts` turns into the test workers' `execArgv`, so only the workers running the
+# suite are in the other mode and Vite's parent starts normally. `npm run check:runtime-mode` — a
+# required step of `ci.yml`, and part of `npm run verify` — proves that transport, and what
+# `--no-opt` means on the Node it runs with, using real subprocesses. **This job runs it too,
+# before the loop**, because the Node a dispatch resolves is the one the result is about.
+#
+# 2d is a separately predeclared **exploratory** diagnostic at `α = 0.05`. 2c spent the only α the
+# plan had granted, so the pair carries no 5% family-wise guarantee: at most 10% across both.
 #
 # There is deliberately **no run-count input**: a budget chosen at dispatch time is a probabilistic
 # bar selected after the result is known. 60 is the smallest equal-arm budget clearing 80% power
@@ -39,14 +46,14 @@ permissions:
 
 jobs:
   probe:
-    name: 60 default + 60 --jitless runs, alternating
+    name: 60 default + 60 --no-opt runs, alternating
     runs-on: ubuntu-latest
-    # Sized from measurement, not from a guess: running the real `npm run test:coverage` in both
-    # modes locally gave 5 s default against 13 s jitless — a 2.6x ratio, the optimising compiler
-    # being off. The last probe's runs took 14-19 s on a runner, so 60 + 60 runs is roughly
-    # 60x19 + 60x50 = 69 minutes at the pessimistic end, plus a few for install and build. Double
-    # that for headroom: a timeout kills the job before any verdict is printed, and an experiment
-    # whose control arm was cut short is contaminated and answers nothing.
+    # Left where 2c set it, with what has been measured since. 2c's job took 46 minutes under this
+    # ceiling: about 18.6 s a default run and 27.5 s a `--jitless` one. `--no-opt` cost nothing
+    # measurable locally — the real `npm run test:coverage` took 5 s by default and 4 s under it —
+    # so 60 + 60 runs should be nearer 40 minutes. The headroom is deliberate: a timeout kills the
+    # job before any verdict is printed, and an experiment whose control arm was cut short is
+    # contaminated and answers nothing.
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
@@ -67,6 +74,18 @@ jobs:
       # what has actually been failing rather than a differently-prepared tree.
       - name: Build
         run: npm run build
+
+      # **Certifies the instrument on the runtime that is about to be measured**, in this job's own
+      # log. `node-version: 24` floats, so the Node this job resolves need not be the one `ci.yml`
+      # last ran this check on — and the per-run certificates inside the loop prove only that
+      # `--no-opt` was *delivered* to a worker, not that it disables TurboFan on this binary. A
+      # result that says "TurboFan-enabled against TurboFan-disabled" has to have established that
+      # here. It also re-reads, on this runner, the workers' exact argument lists and the two arms'
+      # collected files. Its own step, **before the loop and outside the measured command**: it
+      # spawns nested Vitest runs, and if it fails the job stops with no result rather than with
+      # one that means less than it says.
+      - name: Certify the instrument on this runtime
+        run: npm run check:runtime-mode
 
       # Reports the environment, then loops. One step rather than two: the runner prints the
       # environment before run 1, so it is in the log even if the loop is later cut short.

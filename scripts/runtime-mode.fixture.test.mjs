@@ -5,15 +5,16 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
   CERTIFICATE_ENV,
+  RUNTIME_MODES,
   RUNTIME_MODE_ENV,
   SELFTEST_ENV,
   SELFTEST_MIXED,
-  VARIANT,
 } from "./flake-experiment.mjs";
 import { SIGNATURE } from "./flake-probe.mjs";
 
 /**
- * **Every run of the suite certifies which runtime mode its worker was in** (T8.1 increment 2c).
+ * **Every run of the suite certifies which runtime mode its worker was in** (T8.1 increments 2c
+ * and 2d).
  *
  * The experiment's two arms spawn the identical `npm run test:coverage` and differ only by a
  * marker in the child's environment, which `vitest.config.ts` turns into the workers' `execArgv`.
@@ -37,7 +38,9 @@ import { SIGNATURE } from "./flake-probe.mjs";
  * Unmarked — every ordinary run, local and CI — it asserts the ordinary thing: no flag, and
  * WebAssembly present, and writes nothing.
  */
-const wantsJitless = process.env[RUNTIME_MODE_ENV] === VARIANT;
+const intendedFlags = RUNTIME_MODES[process.env[RUNTIME_MODE_ENV]] ?? [];
+/** Every flag any arm adds: each is asserted present or absent, never merely not-looked-for. */
+const everyArmsFlags = [...new Set(Object.values(RUNTIME_MODES).flat())];
 
 it("runs its worker in the runtime mode the marker asked for", () => {
   // Written before anything is asserted, and whatever the assertions then say: the runner judges
@@ -48,16 +51,27 @@ it("runs its worker in the runtime mode the marker asked for", () => {
       certificatePath,
       JSON.stringify({
         marker: process.env[RUNTIME_MODE_ENV],
-        jitless: process.execArgv.includes("--jitless"),
+        // **Verbatim and whole.** Which runtime this worker was *started as* is a property of the
+        // entire list, order included — `--no-opt --opt` turns TurboFan back on — so nothing is
+        // picked out of it here. The runner holds the list against the arm; see
+        // `certificateProblems`.
+        execArgv: process.execArgv,
+        nodeOptions: process.env.NODE_OPTIONS ?? null,
         wasm: typeof WebAssembly,
       }),
     );
   }
 
-  expect(process.execArgv.includes("--jitless")).toBe(wantsJitless);
+  // What this worker can check about itself, which is less than the runner checks: only that the
+  // flags of the arm its marker names are here and the other arms' are not.
+  for (const flag of everyArmsFlags) {
+    expect(process.execArgv.includes(flag), flag).toBe(intendedFlags.includes(flag));
+  }
   // The observable consequence, not a second reading of the same flag: `--jitless` removes
-  // WebAssembly, which is why it cannot be applied to the Vite parent.
-  expect(typeof WebAssembly === "undefined").toBe(wantsJitless);
+  // WebAssembly, which is why it cannot be applied to the Vite parent. `--no-opt` has no
+  // consequence a worker can see without `--allow-natives-syntax`, which must never be in a
+  // measured arm; what it *means* is established by `check-runtime-mode.mjs` instead.
+  expect(typeof WebAssembly === "undefined").toBe(intendedFlags.includes("--jitless"));
 });
 
 /**

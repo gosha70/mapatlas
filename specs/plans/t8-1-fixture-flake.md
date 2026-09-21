@@ -559,8 +559,9 @@ ruling"* — was correct when it was printed and is now answered. It is reworded
 
 ## Amendment, 2026-09-20 — increment 2d: default Node against `--no-opt`
 
-**Status: proposed. No implementation and no dispatch is authorised by this section.** Prepared at
-the owner's direction after 2c's result, against `main` at `987ac20`.
+**Status: implementation authorised by the owner on 2026-09-20 — *"build and falsify the
+implementation exactly as planned, but do not dispatch the probe"* — and under review. No dispatch
+is authorised.** Prepared at the owner's direction after 2c's result, against `main` at `987ac20`.
 
 **Corrected in review, 2026-09-20, before it was committed — two defects in the experiment's
 validity, both the author's.** *The combined error accounting was wrong:* it credited a 2d test at
@@ -884,6 +885,21 @@ against the new arm where they name one:
 - **the suite changing between 2c and 2d** — the exclusion dropped because the variant no longer
   needs it → the existing collected-suite comparison fails, the arms no longer differing from an
   unmarked run by exactly the two files;
+- **the probe not certifying `--no-opt` on its own Node** *(found in review of the
+  implementation)* — the meaning check run only by `ci.yml`. The probe job's `node-version: 24`
+  floats, so a dispatch may resolve a Node the check never ran on, and the per-run certificates
+  prove delivery, not meaning: the result would say "TurboFan-enabled against disabled" without
+  that having been established on the measured runtime. So the probe job runs
+  `npm run check:runtime-mode` **as its own step, before the loop and outside the measured
+  command**, and stops with no result if it fails → an assertion on the workflow's **whole ordered
+  list of commands** fails if the step is dropped, or moved after the loop;
+- **the arm table itself wrong** *(found while falsifying the implementation)* — `no-opt` defined as
+  `["--no-opt", "--opt"]` → **the certificate accepts it**, and says so here rather than hiding
+  it: what it holds a variant to is "the control's arguments followed by *the table's* flags", so
+  a wrong table is a wrong expectation that every worker then meets. It is the **meaning check**
+  that fails, because it runs the table's own flags in its plain process and finds the default
+  tier. The two are not redundant: the certificate holds the workers to the table, and the
+  meaning check holds the table to what the plan says it means;
 - **any `NODE_OPTIONS` inherited at all** — `--max-old-space-size=4096` as readily as a V8 flag →
   the runner refuses to start. 2c's refusal looked for `--jitless` inside it and let everything
   else through; that is the shape corrected here.

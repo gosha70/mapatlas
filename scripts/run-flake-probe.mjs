@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Run the two-arm runtime-mode experiment and report what happened (T8.1 increment 2c).
+ * Run the two-arm runtime-mode experiment and report what happened (T8.1 increments 2c and 2d).
  *
  * Sequentially, and on purpose: the failure has only ever been seen in a single full-suite run on
  * a runner, and running two at once would change the contention this holds constant.
@@ -23,7 +23,9 @@ import { environmentReport } from "./environment-report.mjs";
 import {
   CONTROL,
   RUNS_PER_ARM,
+  RUNTIME_MODES,
   VARIANT,
+  controlBaseline,
   judgeRun,
   refusedArguments,
   refusedEnvironment,
@@ -62,10 +64,16 @@ for (const line of environmentReport({
 }
 console.log(
   `\nrunning the full suite ${String(RUNS_PER_ARM)} times per arm, alternating ` +
-    `${CONTROL} and ${VARIANT} (--jitless), sequentially\n`,
+    `${CONTROL} and ${VARIANT} (${RUNTIME_MODES[VARIANT].join(" ")}), sequentially\n`,
 );
 
 const total = RUNS_PER_ARM * 2;
+
+// Where the workers run, which is what their arguments' one path is relative to.
+const root = process.cwd();
+// What every variant run's arguments are held against: a control run's own, from the first one
+// that certifies. The alternation starts with the control, so it exists before any variant runs.
+let baseline;
 
 const counts = runExperiment({
   runsPerArm: RUNS_PER_ARM,
@@ -81,7 +89,8 @@ const counts = runExperiment({
       return interpreted;
     }
     // Judged here, against the arm this loop scheduled — the worker can only agree with itself.
-    const result = judgeRun({ arm, interpreted, certificate, results });
+    const result = judgeRun({ arm, interpreted, certificate, results, root, baseline });
+    baseline ??= controlBaseline(arm, certificate, root);
     const kind = classifyRun(result);
     const note =
       (result.truncated === true ? ` [interrupted: ${result.reason ?? "?"}]` : "") +

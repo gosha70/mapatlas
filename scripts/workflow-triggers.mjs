@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * What actually triggers a workflow (T8.1 increment 2.0).
+ * What actually triggers a workflow, and what it then runs (T8.1 increments 2.0 and 2d).
  *
  * **Because a comment is not a guarantee.** `t8-1-flake-probe.yml` says it is manual-only and has
  * to be: a probe that also fired on push or pull request would add CI cost to every change and
@@ -55,4 +55,38 @@ export function triggersOf(yaml) {
     if (nested !== null) triggers.push(nested[1]);
   }
   return triggers;
+}
+
+/** A step's command: `run:` and what follows it on the line. */
+const RUN = /^\s*(?:- )?run:[ \t]*(.*)$/;
+
+/**
+ * The commands a workflow's steps run, in order.
+ *
+ * **The whole list, so that order is part of what is asserted.** The probe certifies its instrument
+ * on the runtime it is about to measure, and that only means something if it happens *before* the
+ * loop: "the file mentions the check" would stay true with the step moved after it, or into a
+ * comment.
+ *
+ * **It refuses a block scalar** (`run: |`) rather than reporting `|` as a command: a reader that
+ * returned something for a step it could not read would let the assertion compare against noise.
+ *
+ * @param {string} yaml
+ * @returns {string[]}
+ */
+export function runCommandsOf(yaml) {
+  const commands = [];
+  for (const line of yaml.split("\n")) {
+    if (line.trimStart().startsWith("#")) continue;
+    const run = RUN.exec(line);
+    if (run === null) continue;
+    const command = run[1].trim();
+    if (command === "" || command.startsWith("|") || command.startsWith(">")) {
+      throw new Error(
+        "this workflow has a multi-line `run:` step, which cannot be read as one command",
+      );
+    }
+    commands.push(command);
+  }
+  return commands;
 }

@@ -3,9 +3,10 @@
 /**
  * Prove, with real subprocesses, that the experiment's two arms run different runtimes.
  *
- * **Why this exists and why it cannot be a unit test.** T8.1 increment 2c compares default Node
- * against `--jitless` over the identical `npm run test:coverage`, with the difference travelling
- * as an environment marker that `vitest.config.ts` turns into the workers' `execArgv`. Two designs
+ * **Why this exists and why it cannot be a unit test.** T8.1 increments 2c and 2d compare default
+ * Node against one other runtime mode — `--jitless`, then `--no-opt` — over the identical
+ * `npm run test:coverage`, with the difference travelling as an environment marker that
+ * `vitest.config.ts` turns into the workers' `execArgv`. Two designs
  * for that transport failed before this one, and **both passed every assertion over the
  * constructed environment**:
  *
@@ -33,9 +34,13 @@
  * The facts come back the way the runner gets them, as files, and are judged by the same
  * `judgeRun`.
  *
- * **Three things are proven, each of which has been silently false once.**
+ * **Four things are proven, each of which has been silently false once — or, for the fourth,
+ * would be silent if it were.**
  *
- * 1. *Each arm's worker is in its arm's runtime, and the run's structured results arrive.*
+ * 1. *Each arm's worker was started as its arm, and the run's structured results arrive.* The
+ *    worker records its **whole** startup argument list; the control's must be exactly Vitest's
+ *    own, and the variant's exactly the control's followed by the arm's flags. Nothing is searched
+ *    for: `--max-opt=2` and `--no-opt --opt` both get past a search.
  * 2. *The two arms collect the same files.* The marker being present in both arms does not show
  *    it: an exclusion keyed to the variant alone left both arms marked, every unit test green, and
  *    Vitest collecting 97 files for one arm and 95 for the other. So the collected sets are
@@ -48,6 +53,18 @@
  *    error *on the same test* as a hit, and two errors that only *carry* the signature — behind a
  *    prefix, and on a later line. The tally has to keep the hit, leave the two genuine forms
  *    alone, name every other failure, contaminate the arm, and never reach Fisher.
+ * 4. *`--no-opt` means what the plan says it means, on this Node.* The first three show a flag
+ *    *delivered*. None shows what it does, and unlike `--jitless` it has no consequence a worker
+ *    can see for itself. So three plain Node processes run one hot function and report the tier it
+ *    reached: by default it must reach one that `--no-opt` does not, and `--no-opt` must equal
+ *    `--no-turbofan` exactly. **The first half is what keeps the proof from being vacuous** — a
+ *    function that never got hot reports the same tier three times, and that fails here rather
+ *    than passing. It needs `--allow-natives-syntax`, which is why it is a process of its own:
+ *    that flag must never be in a measured arm, and proof 1 would refuse it there.
+ *
+ *    **What this leaves unproven, stated:** the meaning is shown in a plain process and the
+ *    delivery in a Vitest worker. What joins them is 2c, where a flag delivered the same way
+ *    demonstrably took V8 effect in the worker — WebAssembly was gone.
  */
 
 import { spawnSync } from "node:child_process";
@@ -57,11 +74,14 @@ import {
   CERTIFICATE_ENV,
   CONTROL,
   RESULTS_ENV,
+  RUNTIME_MODES,
   RUNTIME_MODE_ENV,
   SELFTEST_ENV,
   SELFTEST_MIXED,
   VARIANT,
+  controlBaseline,
   judgeRun,
+  relativeArguments,
   runExperiment,
   verdict,
 } from "./flake-experiment.mjs";
@@ -102,10 +122,26 @@ function require_(claim, held, detail) {
 
 const outputOf = (spawn) => `${spawn.stdout ?? ""}${spawn.stderr ?? ""}`;
 
+/**
+ * The environment every spawn below starts from: this process's, **without `NODE_OPTIONS`**.
+ *
+ * Not a convenience. The runner refuses to start with any `NODE_OPTIONS` inherited, so no measured
+ * run ever has one, and this check proves the instrument under the conditions a run has. A
+ * developer whose shell exports one would otherwise see `verify` fail on a certificate that is
+ * doing its job.
+ */
+const baseEnv = { ...process.env };
+delete baseEnv.NODE_OPTIONS;
+
+// Where the workers run, which is what their arguments' one path is relative to.
+const root = process.cwd();
+// As in the runner: every variant run is held against a control run's own arguments.
+let baseline;
+
 // 1. Each arm's worker is in its arm's runtime, and its structured results arrive.
 for (const arm of [CONTROL, VARIANT]) {
   const started = Date.now();
-  const { spawn, certificate, results } = spawnArm(arm, process.env, FIXTURE_ALONE);
+  const { spawn, certificate, results } = spawnArm(arm, baseEnv, FIXTURE_ALONE);
   const seconds = ((Date.now() - started) / 1000).toFixed(1);
   console.log(`check:runtime-mode — ${arm}: exit ${String(spawn.status)} (${seconds}s)`);
 
@@ -121,9 +157,19 @@ for (const arm of [CONTROL, VARIANT]) {
     continue;
   }
 
-  const { marker, jitless, wasm } = certificate;
-  console.log(`  worker: marker=${String(marker)} jitless=${String(jitless)} wasm=${String(wasm)}`);
-  const judged = judgeRun({ arm, interpreted: interpretSpawn(spawn), certificate, results });
+  const startedWith = Array.isArray(certificate.execArgv)
+    ? relativeArguments(certificate.execArgv, root).join(" ")
+    : "(not recorded)";
+  console.log(`  worker: marker=${String(certificate.marker)} started with: ${startedWith}`);
+  const judged = judgeRun({
+    arm,
+    interpreted: interpretSpawn(spawn),
+    certificate,
+    results,
+    root,
+    baseline,
+  });
+  baseline ??= controlBaseline(arm, certificate, root);
   require_(
     `the ${arm} arm has no instrument fault`,
     judged.instrumentFault === undefined,
@@ -149,13 +195,13 @@ function collected(spawn) {
   }
 }
 
-const unmarkedEnv = { ...process.env };
+const unmarkedEnv = { ...baseEnv };
 for (const name of [RUNTIME_MODE_ENV, CERTIFICATE_ENV, RESULTS_ENV, SELFTEST_ENV]) {
   delete unmarkedEnv[name];
 }
 const suites = {
-  [CONTROL]: collected(spawnArm(CONTROL, process.env, LIST_FILES).spawn),
-  [VARIANT]: collected(spawnArm(VARIANT, process.env, LIST_FILES).spawn),
+  [CONTROL]: collected(spawnArm(CONTROL, baseEnv, LIST_FILES).spawn),
+  [VARIANT]: collected(spawnArm(VARIANT, baseEnv, LIST_FILES).spawn),
   unmarked: collected(
     spawnSync(LIST_FILES.command, LIST_FILES.args, {
       encoding: "utf8",
@@ -190,13 +236,20 @@ if (Object.values(suites).some((files) => files === undefined || files.length ==
 }
 
 // 3. A hit does not hide what failed beside it.
-const mixedEnv = { ...process.env, [SELFTEST_ENV]: SELFTEST_MIXED };
+const mixedEnv = { ...baseEnv, [SELFTEST_ENV]: SELFTEST_MIXED };
 const fisher = { calls: 0 };
 const counts = runExperiment({
   runsPerArm: 1,
   runSuite: ({ arm }) => {
     const { spawn, certificate, results } = spawnArm(arm, mixedEnv, FIXTURE_ALONE);
-    const judged = judgeRun({ arm, interpreted: interpretSpawn(spawn), certificate, results });
+    const judged = judgeRun({
+      arm,
+      interpreted: interpretSpawn(spawn),
+      certificate,
+      results,
+      root,
+      baseline,
+    });
     console.log(
       `check:runtime-mode — mixed failure in ${arm}: exit ${String(spawn.status)}, ` +
         `${classifyRun(judged)}, also failed: [${judged.unrelated.join("; ")}]`,
@@ -244,9 +297,65 @@ for (const arm of [CONTROL, VARIANT]) {
 }
 require_(
   "a hit beside an unrelated failure contaminates the experiment, and Fisher is never called",
-  mixed.outcome === "contaminated" && fisher.calls === 0 && mixed.eligibleForM === false,
-  `outcome=${mixed.outcome} fisher calls=${String(fisher.calls)} eligibleForM=${String(mixed.eligibleForM)}`,
+  mixed.outcome === "contaminated" && fisher.calls === 0,
+  `outcome=${mixed.outcome} fisher calls=${String(fisher.calls)}`,
 );
+
+// 4. `--no-opt` means what the plan says it means, on this Node.
+/** Enough calls, in enough separate batches, for a function this small to reach the top tier. */
+const HOT_BATCHES = 20;
+const CALLS_PER_BATCH = 1_000_000;
+const TIER_PROBE = `
+  function hot(a, b) { return (a * 31 + b) | 0; }
+  let sum = 0;
+  for (let batch = 0; batch < ${String(HOT_BATCHES)}; batch += 1) {
+    for (let i = 0; i < ${String(CALLS_PER_BATCH)}; i += 1) sum = hot(sum, i);
+  }
+  console.log(%GetOptimizationStatus(hot));
+`;
+
+/** The tier bitmask one plain Node process reports for the hot function, or `undefined`. */
+function tierReached(flags) {
+  const spawn = spawnSync(
+    process.execPath,
+    ["--allow-natives-syntax", ...flags, "-e", TIER_PROBE],
+    { encoding: "utf8", shell: false, env: baseEnv },
+  );
+  const status = Number.parseInt((spawn.stdout ?? "").trim(), 10);
+  return spawn.status === 0 && Number.isInteger(status) ? status : undefined;
+}
+
+const tiers = {
+  default: tierReached(RUNTIME_MODES[CONTROL]),
+  "no-opt": tierReached(RUNTIME_MODES["no-opt"]),
+  "no-turbofan": tierReached(["--no-turbofan"]),
+};
+const bits = (status) => (status === undefined ? "unreadable" : status.toString(2));
+console.log(
+  `check:runtime-mode — tier reached by a hot function on ${process.version}: ` +
+    Object.entries(tiers)
+      .map(([name, status]) => `${name} ${bits(status)}`)
+      .join(", "),
+);
+
+if (Object.values(tiers).includes(undefined)) {
+  problems.push(
+    "the tier a hot function reaches could not be read, so what --no-opt means is unknown",
+  );
+} else {
+  require_(
+    "by default a hot function reaches a tier that --no-opt keeps it from",
+    (tiers.default & ~tiers["no-opt"]) !== 0,
+    `default ${bits(tiers.default)} has nothing --no-opt ${bits(tiers["no-opt"])} lacks: either ` +
+      `the function never got hot enough to be optimised, and this proves nothing, or --no-opt ` +
+      `does not disable the top tier on this Node`,
+  );
+  require_(
+    "--no-opt is --no-turbofan, as `node --v8-options` says",
+    tiers["no-opt"] === tiers["no-turbofan"],
+    `--no-opt ${bits(tiers["no-opt"])} against --no-turbofan ${bits(tiers["no-turbofan"])}`,
+  );
+}
 
 if (problems.length > 0) {
   console.error("\ncheck:runtime-mode — the experiment's instrument is not sound:\n");
@@ -255,7 +364,9 @@ if (problems.length > 0) {
 }
 
 console.log(
-  "\ncheck:runtime-mode — clean (each arm's worker is in its arm's runtime and its structured " +
-    "results arrive; both arms collect the identical files and an ordinary run keeps the two " +
-    "excluded ones; a hit beside an unrelated failure is kept, and contaminates)",
+  "\ncheck:runtime-mode — clean (each arm's worker was started as its arm, the two differing by " +
+    "exactly the variant's flags, and its structured results arrive; both arms collect the " +
+    "identical files and an ordinary run keeps the two excluded ones; a hit beside an unrelated " +
+    "failure is kept, and contaminates; --no-opt keeps a hot function from the tier it reaches " +
+    "by default, and is --no-turbofan)",
 );

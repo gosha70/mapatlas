@@ -1,0 +1,25 @@
+{
+  // The README-snippet project's own tsconfig, copied into a scratch project beside the packed
+  // tarballs and compiled with that project's own TypeScript. It extends nothing here and names
+  // no `paths`: a snippet that only compiled through a workspace alias would show that the
+  // packages work in this checkout, which is not what a README claims. `check:packaging` also
+  // asserts, from the compiler's own file list, that every `@mapatlas/*` module it loaded came
+  // from the scratch project's node_modules.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    // `vite/client` declares the `?worker&url` and stylesheet imports a bundler resolves; `vite`
+    // is among the dependencies a consumer supplies, so it is in the scratch project too.
+    "types": ["vite/client"]
+  },
+  // Relative to this file, which is copied into the scratch project together with the snippet
+  // directories beside it: every package's snippets, and nothing above them.
+  "include": ["./**/*.ts", "./**/*.tsx"]
+}

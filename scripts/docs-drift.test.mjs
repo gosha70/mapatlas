@@ -4,11 +4,15 @@ import { describe, expect, it } from "vitest";
 import { EXAMPLE } from "./consumer-project.mjs";
 import {
   SECTION,
+  blocksIn,
   blocksInSection,
   driftBetween,
   framed,
   generatedRegions,
+  linkProblems,
   projectionDrift,
+  readmeDocument,
+  tarballMembers,
 } from "./docs-drift.mjs";
 
 /**
@@ -334,5 +338,235 @@ describe("the framing of a generated block", () => {
   it("rejects a blank line added or a trailing space left behind", () => {
     expect(check(["", "", "one", ""])).toStrictEqual([expect.stringContaining("byte for byte")]);
     expect(check(["", "one ", ""])).toStrictEqual([expect.stringContaining("byte for byte")]);
+  });
+});
+
+/**
+ * **The mirror rule, per document** (T8.2 increment 1). Until this increment the rule read one
+ * constant each for its document, section and mirror directory, so a package README could not be
+ * claimed at all — the finding T8.2's survey made. A README is claimed whole, mirrored from its own
+ * snippet directory.
+ */
+describe("a package README as a mirrored document", () => {
+  const readme = readmeDocument("packages/maplibre");
+  const checkReadme = (markdown, shipped) =>
+    driftBetween({
+      document: readme,
+      blocks: blocksIn(markdown, readme),
+      shipped: new Map(Object.entries(shipped)),
+    });
+
+  it("is mirrored from its own snippet directory, whole", () => {
+    expect(readme).toStrictEqual({
+      path: "packages/maplibre/README.md",
+      heading: undefined,
+      mirrors: "examples/readme/maplibre",
+    });
+  });
+
+  /** No heading, no section: every block in the file is claimed, wherever it sits. */
+  it("claims every block in the file, under any heading", () => {
+    const markdown = document_(
+      "# title",
+      block("ts examples/readme/maplibre/a.ts", "a"),
+      "## later",
+      block("ts examples/readme/maplibre/b.ts", "b"),
+    );
+    expect(checkReadme(markdown, { "a.ts": "a\n", "b.ts": "b\n" })).toStrictEqual([]);
+    expect(blocksIn(markdown, readme)).toHaveLength(2);
+  });
+
+  it("reports a block whose bytes differ from its snippet, naming the README", () => {
+    const markdown = document_(block("ts examples/readme/maplibre/a.ts", "edited"));
+    expect(checkReadme(markdown, { "a.ts": "a\n" })).toStrictEqual([
+      expect.stringMatching(/^packages\/maplibre\/README\.md:1 — .*not the same bytes/),
+    ]);
+  });
+
+  /**
+   * **Falsifier: a README block naming a file outside its own package's snippet directory.** A
+   * file from the quick start, or from another package's snippets, is compiled — but not as this
+   * README's snippet project sees it, so it is not showable here.
+   */
+  it("refuses a block that mirrors another package's snippet, or the quick start", () => {
+    for (const source of ["examples/readme/core/x.ts", `${EXAMPLE}/src/main.tsx`]) {
+      const problems = checkReadme(document_(block(`ts ${source}`, "x")), { "a.ts": "a\n" });
+      expect(problems.some((one) => one.includes(`mirrors "${source}"`))).toBe(true);
+    }
+  });
+
+  it("refuses a block that names no file, in a README and not only in api.md", () => {
+    expect(checkReadme(document_(block("ts", "x")), {})).toStrictEqual([
+      expect.stringMatching(/names no source file/),
+    ]);
+  });
+
+  /** Rule 4, per document: a compiled snippet nobody shows is dead code with a gate. */
+  it("reports a snippet the README never shows", () => {
+    expect(checkReadme(document_("prose only"), { "a.ts": "a\n" })).toStrictEqual([
+      expect.stringMatching(/never shows "examples\/readme\/maplibre\/a\.ts"/),
+    ]);
+  });
+
+  it("leaves the quick start's own rules and wording alone", () => {
+    expect(check(document_(SECTION, "prose"), { "src/x.ts": "x\n" })).toStrictEqual([
+      expect.stringMatching(/the quick start never shows/),
+    ]);
+  });
+});
+
+/**
+ * **Links must survive packing** (T8.2 plan, amendment 2). A README is read from a tarball, which
+ * holds `dist`, `package.json` and the README — not `specs/`. A relative link into the checkout
+ * is green in every gate and dead for the reader the document serves.
+ */
+describe("linkProblems", () => {
+  const readme = readmeDocument("packages/maplibre");
+  // What npm reports it would pack, exactly — not a directory to be lexically under.
+  const tarball = tarballMembers(["package.json", "README.md", "dist/index.js", "dist/index.d.ts"]);
+  const links = (...lines) =>
+    linkProblems({ document: readme, markdown: document_(...lines), tarball });
+
+  it("accepts absolute URLs, fragments, and files the tarball really carries", () => {
+    expect(
+      links(
+        "[a](https://github.com/gosha70/mapatlas/blob/main/specs/api.md#0-quick-start)",
+        "[b](#install) <https://example.org/x>",
+        "[c](./package.json) [d](dist/index.js) [e](README.md#top)",
+        "[f][def] and [def][]",
+        "",
+        "[def]: https://example.org/def",
+      ),
+    ).toStrictEqual([]);
+  });
+
+  /** The falsifier the plan names: works in the checkout, dead in the tarball. */
+  it("refuses a relative link into the checkout", () => {
+    expect(links("see [the contract](../../specs/api.md) here")).toStrictEqual([
+      expect.stringMatching(
+        /README\.md:1 — the link "\.\.\/\.\.\/specs\/api\.md" is not an absolute URL/,
+      ),
+    ]);
+    expect(links("[s](SECURITY.md)")).toHaveLength(1);
+  });
+
+  /**
+   * **Found in review: a directory in `files` is not a tarball member.** A link into `dist/` at a
+   * file that is not there is as dead as one out of the tarball, and `dist/../../specs/api.md`
+   * stays lexically "under dist" while leaving it. Members are exact paths, and traversal and
+   * absolute paths are refused before the set is consulted.
+   */
+  it("refuses a file that is not in the tarball, even under a shipped directory", () => {
+    expect(links("[x](dist/definitely-not-shipped.js)")).toHaveLength(1);
+  });
+
+  it("refuses traversal and absolute paths, whatever they would resolve to", () => {
+    expect(links("[x](dist/../../specs/api.md)")).toHaveLength(1);
+    expect(links("[x](dist/../package.json)")).toHaveLength(1);
+    expect(links("[x](/etc/passwd)")).toHaveLength(1);
+  });
+
+  /**
+   * **Found in review: reference-style links bypassed the rule.** `[contract][api]` with
+   * `[api]: ../../specs/api.md` is standard Markdown and was never inspected. A definition's
+   * target is judged like any other link, used or not; a usage with no definition is dead too.
+   */
+  it("judges a reference definition's target, and a usage with no definition", () => {
+    expect(links("[contract][api]", "", "[api]: ../../specs/api.md")).toStrictEqual([
+      expect.stringMatching(/README\.md:3 — the link "\.\.\/\.\.\/specs\/api\.md"/),
+    ]);
+    expect(links("see [contract][nowhere]")).toStrictEqual([
+      expect.stringMatching(/the reference link "\[nowhere\]" has no definition/),
+    ]);
+    expect(links("[Nowhere][]", "", "[nowhere]: https://example.org")).toStrictEqual([]);
+  });
+
+  /**
+   * **Found in review, twice.** A grammar that recognised a subset of Markdown and HTML let
+   * `<a href='…'>`, `<a HREF="…">` and `[x](../y 'title')` through uninspected, and refused a
+   * valid `[x](<https://…>)`. Every standard form is read now — and anything link-like the
+   * grammar does not read is refused rather than skipped, which is the only rule under which
+   * "every link" is a claim and not a hope.
+   */
+  it.each([
+    ["a single-quoted href", "<a href='../outside.md'>x</a>"],
+    ["an upper-case HREF", '<a HREF="../outside.md">x</a>'],
+    ["an unquoted href", "<a href=../outside.md>x</a>"],
+    ["a single-quoted title", "[x](../outside.md 'title')"],
+    ["a parenthesised title", "[x](../outside.md (title))"],
+    ["an angle-bracketed relative destination", "[x](<../outside.md>)"],
+    ["an angle-bracketed definition", "[x][d]", "", "[d]: <../outside.md>"],
+  ])("judges %s like any other link", (_, ...lines) => {
+    expect(links(...lines)).toStrictEqual([
+      expect.stringMatching(/outside\.md" is not an absolute URL/),
+    ]);
+  });
+
+  it.each([
+    ["an angle-bracketed absolute destination", "[x](<https://example.org/x>)"],
+    ["an angle-bracketed shipped file with a title", '[x](<dist/index.js> "t")'],
+    ["a double-quoted href to an absolute URL", '<a href="https://example.org">x</a>'],
+    ["plain brackets and parentheses in prose", "plain [brackets] and (parens) here"],
+  ])("accepts %s", (_, ...lines) => {
+    expect(links(...lines)).toStrictEqual([]);
+  });
+
+  /** Fail closed: what the grammar cannot read is reported, not passed. */
+  it("refuses link-like syntax it cannot read, rather than skipping it", () => {
+    expect(links("[x](../y 'bad\" mix)")).toStrictEqual([
+      expect.stringMatching(/link-like syntax this gate cannot read/),
+    ]);
+    expect(links('<a name="anchor">')).toHaveLength(1);
+    expect(links("<AREA href=../x>")).toHaveLength(1);
+    // A `<…>` with a `:` or `@` that neither autolink grammar read: refused, not skipped.
+    expect(links("<weird@>")).toHaveLength(1);
+    expect(links("<x@y@z>")).toHaveLength(1);
+  });
+
+  /**
+   * **Found in review: autolinks are CommonMark's, not HTTP's.** `<foo@example.com>`,
+   * `<mailto:…>` and `<ftp://…>` were neither read nor refused. Any scheme is absolute; an email
+   * autolink renders as `mailto:`.
+   */
+  it.each([
+    ["an email autolink", "<foo@example.com>"],
+    ["a mailto autolink", "<mailto:foo@example.com>"],
+    ["an ftp autolink", "<ftp://example.com/file>"],
+    ["a mailto inline destination", "[x](mailto:a@b.co)"],
+  ])("accepts %s as absolute", (_, ...lines) => {
+    expect(links(...lines)).toStrictEqual([]);
+  });
+
+  /**
+   * **Found in review: Markdown context comes first.** Code spans and backslash escapes are
+   * masked before any link form is read — `` `[x](../y)` `` is code, `\[x](../y)` is the literal
+   * text `[x](../y)` — and neither is a link, dead or otherwise. What is *not* inside them is
+   * still read.
+   */
+  it.each([
+    ["a link inside a code span", "`[x](../outside.md)`"],
+    ["a link inside a double-backtick span", "``[x](../outside.md) `` ``"],
+    ["an escaped opening bracket", "\\[x](../outside.md)"],
+    ["an escaped closing bracket", "[x\\](../outside.md)"],
+    ["an escaped anchor", '\\<a href="../x">'],
+    ["comparison signs", "a < b and c > d"],
+  ])("does not read %s as a link", (_, ...lines) => {
+    expect(links(...lines)).toStrictEqual([]);
+  });
+
+  it("still reads a real link beside a code span, and inside an unterminated one", () => {
+    expect(links("`code` then [x](../outside.md)")).toHaveLength(1);
+    expect(links("`unterminated [x](../outside.md)")).toHaveLength(1);
+  });
+
+  it("does not read a URL inside a code block as a link", () => {
+    expect(links("```ts", 'fetch("[x](../y)")', "```")).toStrictEqual([]);
+  });
+
+  it("takes the tarball's members from what npm reports it would pack", () => {
+    expect([...tarballMembers(["./package.json", "dist/a.js"])].sort()).toStrictEqual([
+      "dist/a.js",
+      "package.json",
+    ]);
   });
 });

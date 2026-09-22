@@ -28,14 +28,30 @@
  *    files hands the reader a project that does not build, with nothing wrong in the five it did
  *    show.
  *
- * **It claims the quick-start section and nothing else.** `api.md`'s other blocks are the
- * *contract* — declarations, not mirrors of any file — and a gate that claimed them would be
- * asserting that the contract restates an example rather than the other way round.
+ * **It claims the quick-start section of `api.md`, and every package README, and nothing else.**
+ * `api.md`'s other blocks are the *contract* — declarations, not mirrors of any file — and a gate
+ * that claimed them would be asserting that the contract restates an example rather than the
+ * other way round. A package README is claimed whole: it has no contract section, and a block in
+ * it is either a file a consumer can compile or a generated region (T8.2 increment 1).
+ *
+ * **Per document, since T8.2.** The rules take a `MirroredDocument` — which file, which section of
+ * it (or all of it), and which directory its blocks are mirrored from — rather than reading one
+ * constant each. Until then `check:docs`'s projections were per-document and its mirror rule was
+ * hard-wired to one file and one heading, which T8.2's survey found and its plan corrects.
  */
 
 import { EXAMPLE } from "./consumer-project.mjs";
 
-/** The one document, because `PRD.md` §6 says one. */
+/**
+ * A document whose fenced blocks mirror files.
+ *
+ * @typedef {{ path: string, heading: string | undefined, mirrors: string }} MirroredDocument
+ *   `heading` is the exact section line the claim starts at, or `undefined` to claim the whole
+ *   file; `mirrors` is the directory, relative to the repository root, that block sources must
+ *   name a file in.
+ */
+
+/** The one document `PRD.md` §6 names. */
 export const DOCUMENT = "specs/api.md";
 
 /**
@@ -45,6 +61,23 @@ export const DOCUMENT = "specs/api.md";
  * a match on "quick start" anywhere would let a sentence do it.
  */
 export const SECTION = "## 0. Quick start";
+
+/** The quick start as a mirrored document: `api.md` §0, mirrored from the example. */
+export const QUICK_START = Object.freeze({ path: DOCUMENT, heading: SECTION, mirrors: EXAMPLE });
+
+/**
+ * A package README as a mirrored document: the whole file, mirrored from its own snippet
+ * directory — `examples/readme/<package>` — and no other. A README that showed a file from
+ * another package's directory, or from the quick start, would be presenting code that its own
+ * snippet project never compiled.
+ *
+ * @param {string} directory e.g. `packages/maplibre`
+ * @returns {MirroredDocument}
+ */
+export function readmeDocument(directory) {
+  const name = directory.slice(directory.lastIndexOf("/") + 1);
+  return { path: `${directory}/README.md`, heading: undefined, mirrors: `examples/readme/${name}` };
+}
 
 /** A fence opens or closes on three backticks at the start of a line. */
 const FENCE = /^```(.*)$/;
@@ -193,10 +226,13 @@ export function projectionDrift({ document, regions, expected }) {
  * answer a slightly different question than the one being asked.
  *
  * @param {string} markdown
- * @param {string} heading the exact heading line the section starts at
- * @returns {{ info: string, source: string | undefined, content: string, line: number }[]}
+ * @param {MirroredDocument} document whose `heading` starts the claimed section, or `undefined`
+ *   for the whole file
+ * @returns {{ info: string, source: string | undefined, content: string, line: number,
+ *   generated: boolean }[]}
  */
-export function blocksInSection(markdown, heading) {
+export function blocksIn(markdown, document) {
+  const { heading } = document;
   const lines = markdown.split("\n");
   const blocks = [];
   // Lines a generated region owns. A fence inside one is produced by a projection and checked by
@@ -206,17 +242,18 @@ export function blocksInSection(markdown, heading) {
     for (let line = region.from; line <= region.to; line += 1) generated.add(line);
   }
 
-  let inSection = false;
+  // A whole-file claim is "in the section" from the first line and never leaves it.
+  let inSection = heading === undefined;
   let open = null;
 
   for (const [index, line] of lines.entries()) {
-    if (open === null && line === heading) {
+    if (open === null && heading !== undefined && line === heading) {
       inSection = true;
       continue;
     }
     // Only outside a fence: a `## ` inside a block is a comment in the code being shown, not the
     // end of the section. `index.html` alone would end it three lines in.
-    if (open === null && inSection && SECTION_END.test(line)) break;
+    if (open === null && inSection && heading !== undefined && SECTION_END.test(line)) break;
     if (!inSection) continue;
 
     const fence = FENCE.exec(line);
@@ -245,9 +282,16 @@ export function blocksInSection(markdown, heading) {
   }
 
   if (open !== null) {
-    throw new Error(`${DOCUMENT}: the block opened at line ${String(open.line)} is never closed`);
+    throw new Error(
+      `${document.path}: the block opened at line ${String(open.line)} is never closed`,
+    );
   }
   return blocks;
+}
+
+/** The quick start's blocks — the call `check:docs` made before there was more than one document. */
+export function blocksInSection(markdown, heading) {
+  return blocksIn(markdown, { ...QUICK_START, heading });
 }
 
 /**
@@ -266,16 +310,22 @@ export function blocksInSection(markdown, heading) {
  * not exist on disk. A gate whose only test is "run it on the repository" passes for as long as
  * the repository happens to be right, and says nothing about what it would catch.
  *
- * @param {{ blocks: ReturnType<typeof blocksInSection>, shipped: Map<string, string> }} input
- *   `shipped` maps each file of the example — relative to its root — to its contents.
+ * @param {{ document?: MirroredDocument, blocks: ReturnType<typeof blocksIn>,
+ *   shipped: Map<string, string> }} input `shipped` maps each file the document may mirror —
+ *   relative to `document.mirrors` — to its contents; `document` defaults to the quick start.
  * @returns {string[]}
  */
-export function driftBetween({ blocks, shipped }) {
+export function driftBetween({ document = QUICK_START, blocks, shipped }) {
   const problems = [];
   const shown = new Map();
+  const where = document.heading === undefined ? "this README" : "the quick start";
+  const consumer =
+    document.heading === undefined
+      ? "the files this package's README snippets are compiled from"
+      : "the files a consumer's project is built from";
 
   for (const block of blocks) {
-    const at = `${DOCUMENT}:${String(block.line)}`;
+    const at = `${document.path}:${String(block.line)}`;
 
     // Projected, not mirrored: `projectionDrift` owns it, and it names no file because no file is
     // what it shows.
@@ -283,7 +333,7 @@ export function driftBetween({ blocks, shipped }) {
 
     if (block.source === undefined) {
       problems.push(
-        `${at} — a \`\`\`${block.info} block in the quick start names no source file. Every block ` +
+        `${at} — a \`\`\`${block.info} block in ${where} names no source file. Every block ` +
           `here mirrors one, so that it can be checked; a block that cannot be checked is not ` +
           `presented as something to copy.`,
       );
@@ -292,16 +342,21 @@ export function driftBetween({ blocks, shipped }) {
 
     // The prefix is stripped to name a candidate, and settles nothing on its own: whether that
     // candidate is part of the example is the next question, and it is the only one that matters.
-    const relative = block.source.startsWith(`${EXAMPLE}/`)
-      ? block.source.slice(EXAMPLE.length + 1)
+    const relative = block.source.startsWith(`${document.mirrors}/`)
+      ? block.source.slice(document.mirrors.length + 1)
       : undefined;
 
     if (relative === undefined || !shipped.has(relative)) {
       problems.push(
-        `${at} — the block mirrors "${block.source}", which is not one of the ` +
-          `${String(shipped.size)} files a consumer's project is built from. The quick start ` +
-          `shows the example a consumer receives and nothing else, so a file that is merely ` +
-          `readable — one beside the example, or one reached through it — is not showable here.`,
+        document.heading === undefined
+          ? `${at} — the block mirrors "${block.source}", which is not one of the ` +
+              `${String(shipped.size)} ${consumer}. This README shows what its snippet project ` +
+              `compiles and nothing else, so a file that is merely readable — another package's ` +
+              `snippet, the quick start, or one reached through them — is not showable here.`
+          : `${at} — the block mirrors "${block.source}", which is not one of the ` +
+              `${String(shipped.size)} files a consumer's project is built from. The quick start ` +
+              `shows the example a consumer receives and nothing else, so a file that is merely ` +
+              `readable — one beside the example, or one reached through it — is not showable here.`,
       );
       continue;
     }
@@ -309,7 +364,7 @@ export function driftBetween({ blocks, shipped }) {
     const previous = shown.get(relative);
     if (previous !== undefined) {
       problems.push(
-        `${at} — "${block.source}" is already shown at ${DOCUMENT}:${String(previous)}. Two blocks ` +
+        `${at} — "${block.source}" is already shown at ${document.path}:${String(previous)}. Two blocks ` +
           `for one file can disagree with each other while both match it in part.`,
       );
       continue;
@@ -330,10 +385,162 @@ export function driftBetween({ blocks, shipped }) {
   for (const relative of shipped.keys()) {
     if (shown.has(relative)) continue;
     problems.push(
-      `${DOCUMENT} — the quick start never shows "${EXAMPLE}/${relative}", which the example is ` +
-        `built from. A reader copying what is here would not have a project that builds.`,
+      document.heading === undefined
+        ? `${document.path} — never shows "${document.mirrors}/${relative}", which is compiled ` +
+            `for it. A snippet that documents nothing is dead code with a gate.`
+        : `${document.path} — the quick start never shows "${document.mirrors}/${relative}", ` +
+            `which the example is built from. A reader copying what is here would not have a ` +
+            `project that builds.`,
     );
   }
 
   return problems;
+}
+
+/**
+ * The link grammar this gate reads, and the rule for what it cannot.
+ *
+ * Every place a README can point somewhere, on one line: an inline link `[text](dest "title")`
+ * — the destination bare or in `<…>`, the title in `"…"`, `'…'` or `(…)` or absent — an HTML
+ * anchor with `href` in any quoting and any case, CommonMark's two autolinks — `<scheme:…>` for
+ * any scheme, and `<local@domain>`, which renders as `mailto:` — and, because Markdown has them
+ * and a gate that claims "every link" cannot skip them, a reference **definition** `[label]: dest`
+ * and a reference **usage** `[text][label]` or `[text][]`. A definition is the link that matters:
+ * its target is judged like any other, used or not. A usage is judged for naming a label that has
+ * no definition, since an unresolved reference renders as literal brackets and is a dead link too.
+ *
+ * **Markdown context first.** Inline code spans and backslash-escaped punctuation are masked —
+ * replaced by spaces, so line numbers hold — before any link form is read: `` `[x](../y)` `` is
+ * code and `\[x](../y)` is literal text, and a scanner that consumed either would be reading
+ * Markdown wrong (found in review). Fenced blocks are skipped whole.
+ *
+ * **What the grammar does not read, it refuses.** Each recognised form is removed from the line
+ * as it is read; if what remains still looks like a link — `[…](`, `<a`, an `href=` inside a tag,
+ * or an unread `<…>` with a `:` or `@` in it — the line is reported as link-like syntax this gate cannot
+ * interpret, rather than passed. A subset grammar that silently skipped `<a href='…'>`,
+ * `[x](../y 'title')` or `<mailto:…>` was the finding this replaces, twice.
+ */
+const CODE_SPAN = /(`+)(?!`)[\s\S]*?[^`]\1(?!`)/g;
+const ESCAPED = /\\[!-/:-@[-`{-~]/g;
+const INLINE = /\[[^\]]*\]\(\s*(?:<([^>]*)>|([^\s)]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+/** CommonMark: a URI autolink is `<scheme:…>` with a 2–32 character scheme and no spaces. */
+const URI_AUTOLINK = /<([A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*)>/g;
+/** And an email autolink is `<local@domain>`, which renders as a `mailto:` link. */
+const EMAIL_AUTOLINK =
+  /<([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*)>/g;
+const ANCHOR = /<a\b[^>]*?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi;
+const DEFINITION = /^\s{0,3}\[([^\]]+)\]:\s*(?:<([^>]*)>|(\S+))/;
+const USAGE = /\[([^\]]+)\]\[([^\]]*)\]/g;
+/**
+ * Anything link-shaped the forms above did not consume: a bracketed span followed by `(`, an
+ * anchor tag, an `href` inside any tag, or any `<…:…>` / `<…@…>`. Shaped as a link must be, so
+ * that the literal text an escape leaves behind — `\[x](../y)` is the text `[x](../y)` — is not
+ * mistaken for one.
+ */
+const LINK_LIKE = /\[[^\]]*\]\(|<a\b|<[a-z][^>]*\bhref\s*=|<[^<>\s]*[:@][^<>\s]*>/i;
+/** A target that resolves wherever the README is read: any scheme, not only `http(s)`. */
+const ABSOLUTE = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+
+/** Whether a relative path stays inside the tarball root once normalised: no `..`, no absolute. */
+const escapes = (path) =>
+  path.startsWith("/") || path.split("/").some((segment) => segment === "..");
+
+/**
+ * Links in a package README that would not resolve for the reader it is written for.
+ *
+ * **A README is read from a tarball** (T8.2's settled item 1), and a tarball holds exactly the
+ * files npm packed — not `specs/`, not `SECURITY.md`, not the repository. So `../../specs/api.md`
+ * works in the checkout and is a dead link for exactly the consumer this document serves, and so
+ * is `dist/not-shipped.js`, and so is `dist/../../specs/api.md`, which stays lexically "under
+ * `dist`" while leaving it. Every link is therefore either an **absolute URL**, a fragment of this
+ * page, or the exact path of a file **in the packed tarball**, with no traversal. Fenced blocks
+ * are skipped: a URL in code is code.
+ *
+ * @param {{ document: MirroredDocument, markdown: string, tarball: Set<string> }} input `tarball`
+ *   is the set of paths the package's tarball actually carries — see `tarballMembers`.
+ * @returns {string[]}
+ */
+export function linkProblems({ document, markdown, tarball }) {
+  const problems = [];
+  const defined = new Set();
+  const targets = [];
+  const usages = [];
+  let inFence = false;
+  for (const [index, line] of markdown.split("\n").entries()) {
+    if (FENCE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const at = index + 1;
+    // Masked before anything is read, and to the same length: code is code and `\[` is a bracket.
+    let rest = line.replace(CODE_SPAN, (span) => " ".repeat(span.length)).replace(ESCAPED, "  ");
+
+    const definition = DEFINITION.exec(rest);
+    if (definition !== null) {
+      defined.add(definition[1].toLowerCase());
+      targets.push({ line: at, target: definition[2] ?? definition[3] });
+      rest = rest.slice(definition[0].length);
+    }
+    // Each form is consumed as it is read, so that what is left can be judged as a whole.
+    rest = rest.replace(INLINE, (_, bracketed, bare) => {
+      targets.push({ line: at, target: bracketed ?? bare });
+      return " ";
+    });
+    rest = rest.replace(URI_AUTOLINK, (_, target) => {
+      targets.push({ line: at, target });
+      return " ";
+    });
+    rest = rest.replace(EMAIL_AUTOLINK, (_, address) => {
+      targets.push({ line: at, target: `mailto:${address}` });
+      return " ";
+    });
+    rest = rest.replace(ANCHOR, (_, dq, sq, bare) => {
+      targets.push({ line: at, target: dq ?? sq ?? bare });
+      return " ";
+    });
+    rest = rest.replace(USAGE, (_, text, label) => {
+      usages.push({ line: at, label: (label === "" ? text : label).toLowerCase() });
+      return " ";
+    });
+    if (LINK_LIKE.test(rest)) {
+      problems.push(
+        `${document.path}:${String(at)} — link-like syntax this gate cannot read: ` +
+          `${JSON.stringify(rest.trim().slice(0, 60))}. Every link here is judged, so a form the ` +
+          `grammar does not cover is refused rather than skipped.`,
+      );
+    }
+  }
+
+  for (const { line, target } of targets) {
+    if (ABSOLUTE.test(target) || target.startsWith("#")) continue;
+    const path = target.replace(/^\.\//, "").split("#")[0];
+    if (!escapes(path) && tarball.has(path)) continue;
+    problems.push(
+      `${document.path}:${String(line)} — the link "${target}" is not an absolute URL and not ` +
+        `a file in this package's tarball. This README is read from the tarball, where that ` +
+        `link is dead; link to https://github.com/… or to a shipped file, by its exact path.`,
+    );
+  }
+  for (const { line, label } of usages) {
+    if (defined.has(label)) continue;
+    problems.push(
+      `${document.path}:${String(line)} — the reference link "[${label}]" has no definition in ` +
+        `this README, so it renders as literal brackets and points nowhere.`,
+    );
+  }
+  return problems;
+}
+
+/**
+ * The paths a package's tarball carries, exactly: what `npm pack --dry-run --json` reports it
+ * would pack, normalised. Read from npm rather than derived from `files`, because a manifest
+ * says which directories are packed and not which files exist in them — and a link into a
+ * shipped directory at a file that is not there is as dead as one out of the tarball.
+ *
+ * @param {readonly string[]} packedPaths the `files[].path` entries npm reports
+ * @returns {Set<string>}
+ */
+export function tarballMembers(packedPaths) {
+  return new Set(packedPaths.map((path) => path.replace(/^\.\//, "")));
 }

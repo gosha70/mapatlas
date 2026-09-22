@@ -16,7 +16,15 @@
  */
 
 import { createRequire } from "node:module";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,9 +36,16 @@ import {
   PACKAGES,
   ROOT as root,
   createConsumerProject,
+  createSnippetProject,
   manifest,
   run,
 } from "./consumer-project.mjs";
+import {
+  PACKAGE_DIRECTORIES,
+  inventoryDrift,
+  packageDirectoriesOnDisk,
+  packageName,
+} from "./package-inventory.mjs";
 
 /** What a consumer must be able to reach from their own project root. */
 const CONSUMER_IMPORTS = ["@mapatlas/maplibre", "maplibre-gl/dist/maplibre-gl.css"];
@@ -145,7 +160,13 @@ function report(failures) {
 // Deliberately *before* the scratch directory exists: `process.exit` skips a pending `finally`,
 // so exiting from inside the cleanup scope below would leave a temporary directory behind on
 // every failure.
-const drift = lockfileDrift();
+const drift = [
+  ...lockfileDrift(),
+  // And the package inventory agrees with the directory, for the same reason: "each package"
+  // below means the inventory, and an inventory that disagrees with `packages/*` would let a
+  // package ship with no README and no gate noticing.
+  ...inventoryDrift(PACKAGE_DIRECTORIES, packageDirectoriesOnDisk(root)),
+];
 if (drift.length > 0) {
   report(drift);
   process.exit(1);
@@ -240,11 +261,6 @@ try {
     }
   }
 
-  // The README ships, so the package has something to say on npm.
-  if (!existsSync(join(scratch, "node_modules/@mapatlas/maplibre/README.md"))) {
-    failures.push("the packed package carries no README.md");
-  }
-
   // And the peer really is a peer: installed at the consumer's root, not nested inside us.
   if (!existsSync(join(scratch, "node_modules/maplibre-gl/package.json"))) {
     failures.push("maplibre-gl is not installed at the consumer root — it is not a peer");
@@ -274,6 +290,80 @@ try {
         (error instanceof CommandFailed ? error.report() : String(error)),
     );
   }
+  /**
+   * **Do the package READMEs' snippets compile for a consumer — of all six packages?** (T8.2)
+   *
+   * A second scratch project, and not this one: the quick-start project installs the five
+   * packages its example imports and is shared with the browser lane, so an
+   * `@mapatlas/offline-pmtiles` snippet cannot resolve in it and a sixth tarball would change the
+   * graph both quick-start lanes prove things about. `createSnippetProject` packs and installs the
+   * whole inventory, copies every snippet in, and this compiles them with that project's own
+   * TypeScript under `examples/readme/tsconfig.json` — no `paths`, no reference, no alias.
+   *
+   * **Resolution is asserted from the compiler's own file list, not assumed from the layout.**
+   * The quick-start project stays off the workspace only by construction; nothing would go red
+   * if that construction were undone (T8.2's plan, amendment 3). Here `--listFilesOnly` says
+   * which files the compiler loaded, and every `@mapatlas/*` module among them must sit under the
+   * scratch project's `node_modules` — none under this repository's `packages/`.
+   *
+   * And every README this repository has must be **in the tarball**, asserted by name for each
+   * package, replacing a check that named `@mapatlas/maplibre` alone. Measured while falsifying:
+   * npm packs `README.md` whatever `files` says, so a manifest edit cannot drop it — what this
+   * catches is a README that is not there to pack. In increment 1 it is "each README that
+   * exists", which therefore **cannot go red** and is a placeholder for increment 2, which writes
+   * the other five, tightens it to "each package", and is written to go red first.
+   */
+  const snippets = mkdtempSync(join(tmpdir(), "mapatlas-readme-snippets-"));
+  try {
+    createSnippetProject({
+      into: snippets,
+      packages: PACKAGE_DIRECTORIES,
+      dependencies: CONSUMER_DEPENDENCIES,
+    });
+
+    for (const directory of PACKAGE_DIRECTORIES) {
+      const name = packageName(directory);
+      const inRepository = existsSync(join(root, directory, "README.md"));
+      const inTarball = existsSync(join(snippets, "node_modules", name, "README.md"));
+      if (inRepository && !inTarball) {
+        failures.push(`${name} has a README.md that its packed tarball does not carry`);
+      }
+    }
+
+    const tsc = join(snippets, "node_modules/typescript/bin/tsc");
+    const project = join(snippets, "snippets/tsconfig.json");
+    try {
+      run(process.execPath, [tsc, "--noEmit", "--project", project], snippets);
+    } catch (error) {
+      failures.push(
+        `examples/readme does not compile against the packed packages — ` +
+          (error instanceof CommandFailed ? error.report() : String(error)),
+      );
+    }
+
+    // The compiler prints real paths (`/private/var/…` for a `/var/…` temp directory on macOS),
+    // so both roots are compared as real paths — a string prefix on the unresolved one matches
+    // nothing and would report "0 engine files", which is not a resolution finding.
+    const loaded = run(process.execPath, [tsc, "--listFilesOnly", "--project", project], snippets)
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "");
+    const engine = loaded.filter((file) => file.includes("/node_modules/@mapatlas/"));
+    const repositoryPackages = realpathSync(join(root, "packages"));
+    const scratchModules = realpathSync(join(snippets, "node_modules"));
+    const fromRepository = loaded.filter((file) => file.startsWith(`${repositoryPackages}/`));
+    const fromScratch = engine.filter((file) => file.startsWith(`${scratchModules}/`));
+    if (engine.length === 0 || fromRepository.length > 0 || fromScratch.length !== engine.length) {
+      failures.push(
+        `the README snippets did not resolve @mapatlas/* from the packed tarballs alone: ` +
+          `${String(fromScratch.length)} engine file(s) from the scratch project, ` +
+          `${String(fromRepository.length)} from this repository's packages/` +
+          (fromRepository.length > 0 ? ` (${fromRepository.slice(0, 3).join(", ")})` : ""),
+      );
+    }
+  } finally {
+    rmSync(snippets, { recursive: true, force: true });
+  }
 } catch (error) {
   // A gate that cannot say why it failed is a gate nobody trusts. npm's own diagnosis is
   // relayed verbatim rather than summarised into `Command failed`.
@@ -295,5 +385,6 @@ if (failures.length > 0) {
 console.log(
   `check:packaging — clean (${PACKAGES.length} packed, ${CONSUMER_IMPORTS.length} resolved, ` +
     `${EXECUTED_IMPORTS.length} executed, ${EXACT_PEERS.length} pinned peer, ` +
-    `${EXAMPLE} compiled, nested resolution)`,
+    `${EXAMPLE} compiled, nested resolution; ${String(PACKAGE_DIRECTORIES.length)} packed for the ` +
+    `README snippets, which compiled and resolved @mapatlas/* from the tarballs alone)`,
 );

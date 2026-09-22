@@ -920,6 +920,11 @@ rule fixed before dispatch — and because it subsumes B: its stage 2 *is* a B-s
 only on a day the pilot says one can be sized. A is the fallback if C's pilot stops the job. E is
 orthogonal, cheap, and can run beside any of them.
 
+**Ruled by the owner, 2026-09-22: option A.** The runtime-mode line stops here; T8.1 is parked —
+open, unowned, its acceptance criterion not met — with the status record in `tasks.md`. The
+instrument (the probe workflow, `check:runtime-mode`, its CI step) is kept for any resumption,
+which needs a further ruling. This document is history from here, not a work plan.
+
 **The owner decides.** This amendment authorises nothing.
 
 ## Required mutations

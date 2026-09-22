@@ -29,7 +29,11 @@ than when someone picks them up.
 - **T8.1 — the fixture-build flake.** Tracked in **issue #30**; read it first. Its acceptance
   criterion is deliberately awkward: the failure must be made **reproducible on demand** before it
   is fixed, because a change that merely stops it being observed is indistinguishable from one that
-  fixed it. **In progress, and not closed** — see "T8.1: increment 2c ran" below for where it is.
+  fixed it. **Parked on 2026-09-22 by the owner's ruling — open, unowned, not discharged.** The
+  runtime-mode line stopped at option A of the plan's amendment; `tasks.md` carries the status
+  record, and "T8.1: increment 2c ran" below says what stands. **Do not re-dispatch the probe, fix,
+  rule on `M` or touch the lattice candidate without an owner's ruling**; the amendment's options
+  are where a resumption starts.
 - **T8.2 — per-package READMEs.** Five of six packages ship none, and the sixth's code is checked by
   nothing. **Half the mechanism exists.** `check:docs`'s *generated projections* are per-document;
   its *mirror* rule — a fenced block being a file, byte for byte — is hard-wired to `api.md` §0,

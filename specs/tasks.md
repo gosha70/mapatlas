@@ -1564,6 +1564,22 @@ and can be picked up like anything else. Unowned and unordered.
   knife edge (both boundaries are exact lattice integers), and test-order dependence inside the
   file (fifteen shuffled runs).
 
+  **Parked, 2026-09-22 — open, unowned, and not discharged.** This is a status record, not a Done
+  record: the acceptance criterion above is **not met** — no cause is identified, the failure is
+  not reproducible on demand, and no fix has been attempted. The owner ruled option A of the plan's
+  amendment of 2026-09-21: the runtime-mode line stops here. What stands, all recorded on issue #30
+  and in [`specs/plans/t8-1-fixture-flake.md`](plans/t8-1-fixture-flake.md): the failure is
+  localised to `cropFor`'s construction of the second crop (a position, not a mechanism); the rate
+  differed between default Node and `--jitless` on one runner on one day (2c, 8/60 against 0/60,
+  p = 0.00609); default against `--no-opt` was inconclusive because the control did not reproduce
+  (2d, 0/60 and 0/60); and the default-Node rate on the shared runner has been measured at 13, 10,
+  2, 10, 0 per 100 and 8, 0 per 60, so it is not stable across jobs and no fixed budget can rely on
+  it. `M` stays frozen (61 is the candidate for the exact 95-file suite, by the owner's ruling of
+  2026-09-20); the lattice-placement candidate stays parked as symptom immunity. The probe
+  workflow, `check:runtime-mode` and its CI step are **kept**, deliberately: they are the
+  instrument any resumption starts from, and the plan's amendment lists the costed options. A
+  resumption needs an owner's ruling, not a re-dispatch.
+
 - **T8.2 Per-package READMEs.** Five of the six packages ship **no README at all** — only
   `@mapatlas/maplibre` has one, and `check-packaging.mjs` asserts merely that it *exists* in the
   packed tarball, so its install snippet, stylesheet import and `setWorkerUrl` call are prose as

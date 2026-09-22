@@ -752,6 +752,176 @@ Out: the Maglev/Sparkplug cut; any fix; the lattice candidate; any change to the
 gates, the reporter, the spawn path or the identity rule for the recorded failure; the
 quick-start gap recorded in T8.2's plan.
 
+## Result, 2026-09-21 — increment 2d
+
+One dispatch, approved by the owner against the verified `origin/main` tip, with no inputs.
+Implemented as **PR #60** (`7e7a48a`, merged as `8045a84`); recorded on issue #30 the same day.
+
+- **Run [35666074878](https://github.com/gosha70/mapatlas/actions/runs/35666074878)**, job
+  `106552010228`, head **`8045a84c899e36e4ea51ccc7a8fab133cd6fe178`**, 23:07:27Z → 23:32:01Z.
+  Runner: linux/x64, node v24.20.0, vitest 4.1.11, `availableParallelism 4`; the same image as 2c's
+  job (`ubuntu-24.04` 20260828.587, centralus).
+- **The instrument certified on this job's own Node, before the loop**: worker arguments exactly
+  as expected and differing by exactly `--no-opt`; 95 files collected in each arm; tiers default
+  `1010001`, `--no-opt` `110001`, `--no-turbofan` `110001`.
+- **default: 0 in 60**, 0 other, 0 instrument; exact 95% CI 0.000%–5.963%. **`--no-opt`: 0 in 60**,
+  0 other, 0 instrument. All 120 runs completed, strictly alternating, each certified.
+- **No Fisher test was computed.** The null-control gate held: **inconclusive; the control did not
+  reproduce.** Nothing is said about `--no-opt`. The one-sided 95% upper bound on this job's control
+  rate is 4.87%.
+
+**Descriptive, confounded, and unrelated to `--no-opt` — recorded so nobody rediscovers it.**
+Default runs took a median of **11.9 s** here against **18.6 s** in 2c, on the same suite and
+image, with `scripts/fixture/` and `packages/` byte-identical between the two trees; timing was
+flat within the job. 2c's control against this one, 8/60 against 0/60, is p = 0.00609 by Fisher —
+**not predeclared, two jobs on two days under unknown load, and about the default-Node rate, not
+the variant.** P(0 in 60 | p = 13%) = 2.4 × 10⁻⁴. The default-Node rate on the runner has now
+been measured at 13, 10, 2, 10, 0 per 100 and 8, 0 per 60, on trees whose fixture code did not
+change between the last two. It is not stable across jobs.
+
+**Ruled by the owner, 2026-09-21: 2d is not repeated as it stands.** Re-dispatching until the
+control reproduces would select experiments by their observed control outcome, and the predeclared
+comparison would no longer be one. `M` remains frozen with no statement from 2d; no fix, no
+dispatch and no lattice-candidate work is authorised. What follows is an amendment of options.
+
+## Amendment, 2026-09-21 — after 2d: the options, and what each costs
+
+**Status: proposed, plan-only. Nothing here is authorised — not a dispatch, not an implementation,
+not a fix.** Written so the owner chooses among costed options rather than among impressions, and
+so that the one option that is *not* on the list is named as such.
+
+### The problem the options answer
+
+2c and 2d were the same design on the same suite, six days apart on the same runner image, and
+their controls returned 8/60 and 0/60. **The control rate is not a stable property of the runner
+that a 60-run budget can rely on.** Every budget in this plan was sized from a 13% design rate
+measured once at `025cdbe`; the runner has since produced 10%, 2%, 10%, 0%, 13.3% and 0% on
+various trees. With `p = 0.13` the null-control probability at `N = 60` is 2.4 × 10⁻⁴ — it "cannot"
+happen — and it happened. The design rate is the assumption that failed, not the instrument: every
+gate held, every certificate matched, and the job did exactly what it was built to do.
+
+**Not an option: repeat 2d until the control reproduces.** Ruled out, and the reason recorded: the
+experiments that "count" would be selected by their observed control outcome, which makes the
+comparison conditional on a favourable draw. Its p-value would no longer mean what the plan says
+it means. This applies to any rule of the form "dispatch again if the control was null", however
+it is dressed.
+
+### The options
+
+Each is stated with its predeclared rule, its cost, and what it can and cannot conclude. The
+figures use the repository's own `designPower` and the exact conventions already in force.
+
+**A. Stop the runtime-mode line here.** 2c's result stands as the one finding: on one day, on one
+runner, the rate differed between default and `--jitless`. 2d adds nothing either way. T8.1 stays
+open with a position and one runtime-mode finding, and the next narrowing comes from a different
+axis — for instance the fixed load the plan has never controlled.
+- *Cost:* nothing further spent. *Concludes:* nothing new. *Risk:* the `--jitless` finding rests on
+  one job whose control happened to reproduce, which 2d has just shown is not guaranteed.
+
+**B. A larger, predeclared 2d — one dispatch, sized so that a null control is itself informative.**
+Fix `N` before dispatch so that, at a control rate the runner has *demonstrated* rather than the
+13% it once showed, the probability of a null control is small enough that a null is a finding
+about the rate rather than bad luck. At `N = 150` per arm:
+- if the true control rate were 5.936% (2c's own lower bound), P(null control) = 0.0001;
+- if it were 2%, P(null control) = 0.048. A null control at `N = 150` is then reported as what
+  it is: **the one-sided 95% upper bound on that job's control rate is 1.977%** — a bound, stated
+  the way the earlier result sections state theirs, and not a probability about the true rate;
+- design power against a zero-rate variant, computed by this repository's `designPower`
+  (rejection at **≥ 6 hits in 150**, p ≤ 0.05): **> 99.9%** at a 13% control rate, **76.6%** at
+  5%, 29.6% at 3%. The first draft of this bullet said "≥ 5 hits" and "87.0%" from memory; both
+  were wrong, and are corrected here from the computed values — mistake 7c, in this amendment.
+- *Cost:* 300 runs, roughly 60 minutes at 2d's 12 s or 95 at 2c's 19 s; one job, one ceiling to
+  raise to 180 minutes. *Concludes:* a difference at a variant rate of zero if the control holds
+  near 13%, with 80% power lost somewhere between 5% and 13%; and a null control becomes a bound
+  on the day's rate rather than a shrug.
+  *Risk:* one more α = 0.05 exploratory test on the 2c/2d family; the union bound across three
+  would be 15%. *Does not:* fix the drift, or explain it.
+
+**C. One adaptive job: measure the control first, then compare only under a rule fixed before
+the job starts.** The confound 2d exposed is *between* jobs, so a pilot in one job establishes
+nothing about the control rate in the next; a two-job design would re-import the problem it is
+meant to solve. So: one dispatch, one job, two stages, and the rule between them written here and
+in source before anything runs.
+- *Stage 1, pilot:* `N₁ = 100` default-Node runs, no variant. Its only product is that job's
+  control rate with its interval.
+- *Continuation rule, predeclared:* stage 2 runs if and only if the pilot's one-sided 97.5% lower
+  bound on the rate exceeds a threshold fixed here — proposed **3%**, the rate below which no
+  affordable budget has power; otherwise the job stops, records the pilot as a bound on the day's
+  rate, and reports "no comparison was run". Any other rule, or one chosen after seeing the
+  pilot, is the selection rule ruled out above, one stage removed.
+- *Stage 2, comparison:* `N₂` per arm, fresh runs, alternating as now, with the budget itself
+  fixed from the pilot's lower bound by a formula written here — the smallest equal-arm `N₂`
+  giving 80% power at that bound against a zero-rate variant, capped at 150. **The threshold and
+  the cap have to agree, and at 3% they do not**: by `designPower`, 80% power needs `N₂ = 263` at
+  3%, 157 at 5%, 98 at 8%. So either the threshold is 5% and the cap 157, or the threshold is
+  3% and stage 2 is declared under-powered below 5% with that stated in its report. Which is a
+  choice for the owner, made before dispatch; it is not made here.
+  **The pilot's observations are excluded from the Fisher table**: the comparison is between two
+  arms of fresh, alternating observations. A pilot hit is evidence about the day's rate, not a
+  control observation of the comparison.
+- *Cost:* 100 runs plus up to 300, one job; the ceiling rises to 180 minutes. *Concludes:* on a day
+  the runner reproduces, a comparison sized to that day's rate; on a day it does not, a bound and
+  no comparison, without a variant ever having been looked at. *Risk:* the pilot and the comparison
+  are still in the same uncontrolled job and can drift within it; the alternation in stage 2 is
+  what spreads that, as now. *Does not:* explain the drift.
+
+**D. Record a pre-treatment CPU-throughput covariate, and let its range scope the result.** The
+confound 2d exposed is the default arm running 36% faster than in 2c's job — a *between-job*
+difference in the machine, not in the arms. Two things this option is **not**, because the first
+draft proposed both: it is not a gate on the two arms' wall times, since arm duration is
+downstream of the runtime mode (`--jitless` changed it by 50%, and `--no-opt` may too) and
+contaminating on it would discard the effect under test; and it is not pinning
+`--max-old-space-size` or `maxWorkers`, which control the process and not the shared host. What it
+is, stated at its actual size:
+- a **common-mode, pre-treatment covariate**: before each measured run, and identically in both
+  arms, a fixed calibration workload in a plain default-Node process — the same hot loop the meaning
+  check already runs — timed and written into that run's structured results. It never sees the
+  arm's flags, so it cannot carry the treatment; it sees the host, **but only one slice of it**.
+- **What the slice is, and is not.** An arithmetic hot loop observes Node start-up, JIT warm-up and
+  CPU scheduling. It does **not** observe memory pressure, GC conditions, filesystem contention or
+  any other shared-host effect — and the recorded failure is allocation-sensitive, so those are
+  exactly the conditions that could move it. A second draft of this option said the covariate
+  would show "two jobs ran on comparably loaded hosts" and "make every later job comparable to the
+  one before it". **It cannot.** A job that passes a CPU-throughput range may differ from another
+  in every dimension the loop does not touch. Whether this covariate tracks the *suite's* duration,
+  let alone the failure's rate, is not established by anything on record, and would have to be —
+  by correlating it against per-run suite time across jobs — before it could be read as more than
+  a covariate.
+- a **predeclared rule that does not condition on the treatment**: the calibration times are
+  reported always, compared *across the job* and *against the previous job's*, never between arms.
+  If a range is fixed under review before a dispatch, a job outside it reports its result as
+  **"scoped to a CPU-throughput range that differs from job X's"** — a scoping of the claim, not
+  a finding of incomparability, and not a contamination gate.
+- *Cost:* a small increment on the runner and reporter plus its falsifiers — chiefly that the
+  calibration process refuses every arm flag, and that the rule never reads an arm's own duration.
+  *Concludes:* nothing by itself. *Gives:* one recorded, pre-treatment dimension along which jobs
+  can be placed, where today there is none; and, if the correlation above is ever established,
+  the beginning of a control. *Does not:* control the between-job confound. Nothing on this list
+  does; that is the honest state of the record.
+
+**E. Measure the rate locally again, on the current workload.** Increment 2a already ran 200
+local full-suite runs at the runner's worker count with no hits — on the minimally instrumented
+`025cdbe` baseline, the very shape PR #57 later restored byte for byte, **not** on a traced tree.
+So the local null is an existing control, not a gap. What has changed since is the workload: the
+suite is now 95 files while probing, with the experiment's own tests added, so a new local series
+measures something 2a did not.
+- *Cost:* local machine time. *Concludes:* an upper bound on the **local** rate for the current
+  workload — 200 null runs bound it at 1.49%, as 2a's did. **It cannot establish that the shared
+  runner is a precondition of the failure**; a local null bounds the local rate and says nothing
+  about why the runner's differs. A local *hit* would be worth far more than another local null.
+
+### What this amendment recommends, and does not decide
+
+**D, then C — in that order, each under review, none of them now.** D because it costs the least,
+carries no treatment, and records a pre-treatment dimension that no job so far has — a covariate
+to scope results by, not a control of the host. C because it
+replaces an assumed rate with one measured in the same job, before a variant is looked at, under a
+rule fixed before dispatch — and because it subsumes B: its stage 2 *is* a B-sized comparison, run
+only on a day the pilot says one can be sized. A is the fallback if C's pilot stops the job. E is
+orthogonal, cheap, and can run beside any of them.
+
+**The owner decides.** This amendment authorises nothing.
+
 ## Required mutations
 
 Each must turn a named assertion red:

@@ -88,10 +88,21 @@ could establish. The revised suite's own one-sided 97.5% lower bound is 5.936%, 
 **`M = 61`** under the plan's formula: the defensible candidate **if a later validation uses this
 exact suite**, and otherwise the budget comes from a matched control. 51 is historical evidence.
 
-**Next: increment 2d, default against `--no-opt`** — TurboFan disabled, Maglev and Sparkplug left
-running — on the same 95-file suite with the same gates. **Implemented and under review; not
-dispatched, and dispatch needs the owner's separate approval.** The plan's amendment carries the
-survey. **Ruled: `N = 60` per arm at `α = 0.05`, as a separately
+**Increment 2d ran, and was inconclusive: the control did not reproduce** (2026-09-21, PR #60
+merged as `8045a84`, run `35666074878`, head `8045a84c899e36e4ea51ccc7a8fab133cd6fe178`). Default
+against `--no-opt` — TurboFan disabled, Maglev and Sparkplug left running — on the same 95-file
+suite with the same gates. The instrument was certified on the job's own Node before the loop.
+**Both arms intact, both 0/60**, no unrelated or instrument failure, all 120 runs strictly
+alternating; **no Fisher test was computed**, by design, and the only permitted statement is
+*"inconclusive; the control did not reproduce"*. Nothing is said about `--no-opt`. Recorded on #30
+and in the plan under "Result, 2026-09-21 — increment 2d". Two things differ from 2c's job and are
+recorded as **descriptive, confounded and unrelated to `--no-opt`**: default runs took 11.9 s
+against 18.6 s on the same image and suite, and 2c's control against this one (8/60 vs 0/60) is
+p = 0.00609 post hoc. **2d is not to be repeated as it stands** (owner's ruling): re-dispatching
+until the control reproduces would select experiments by their observed control outcome and
+invalidate the predeclared comparison. The next step is a plan-only amendment laying out options
+— "Amendment, 2026-09-21 — after 2d" in the plan — and **no dispatch, fix work, `M` ruling or
+lattice-candidate work is authorised**. The design 2d ran under: **Ruled: `N = 60` per arm at `α = 0.05`, as a separately
 predeclared exploratory diagnostic** — 2c spent the only α the plan had granted, so the pair
 carries **no 5% family-wise guarantee**: ≤ 10% by Bonferroni, 9.75% only under independence. Its
 certificate records the worker's **full** `execArgv` and holds the arms to differing by exactly

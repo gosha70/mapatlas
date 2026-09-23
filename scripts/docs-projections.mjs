@@ -145,6 +145,16 @@ export function renderStatus(status) {
 }
 
 /**
+ * The file `npm pack` writes for a package: `@scope/name` at `version` becomes
+ * `scope-name-version.tgz`. One definition, used by the install block and by any README that has
+ * to name its own tarball — a filename typed into prose drifts the day the version moves.
+ *
+ * @param {{ name: string, version: string }} manifest
+ */
+export const tarballName = ({ name, version }) =>
+  `${name.replace("@", "").replace("/", "-")}-${version}.tgz`;
+
+/**
  * The install step of the quick start.
  *
  * **Generated because it is a claim that can be wrong.** `@mapatlas/*` is not published: every
@@ -168,8 +178,7 @@ export function renderStatus(status) {
  * @returns {string}
  */
 export function renderInstall({ packages, dependencies, into }) {
-  const tarball = ({ name, version }) =>
-    `${name.replace("@", "").replace("/", "-")}-${version}.tgz`;
+  const tarball = tarballName;
   // Every line but the last of a command carries the continuation; assembling it here rather
   // than by hand is what keeps a changed package list from leaving a dangling backslash.
   const joined = (lines) =>
@@ -226,4 +235,21 @@ export function renderPeers(manifest) {
         `- \`${name}\` — \`${range}\`${/^\d+\.\d+\.\d+$/.test(range) ? " (an exact version, not a range)" : ""}`,
     )
     .join("\n");
+}
+
+/**
+ * How a package outside the quick start's publish graph is added to §0's install (T8.2
+ * increment 2). `api.md` §0 packs the five packages the example imports and no other, so a README
+ * for a package it leaves out has to say what to add — and the tarball's filename carries the
+ * version, which is a repository fact and not prose. Projected from the same `tarballName` the
+ * install block uses, so the two cannot disagree about what `npm pack` produces.
+ *
+ * @param {{ name: string, version: string, directory: string }} pkg
+ * @returns {string}
+ */
+export function renderAddToInstall({ name, version, directory }) {
+  return (
+    `Add \`./${directory}\` to §0's \`npm pack\` line, and the tarball it produces — ` +
+    `\`"$TARBALLS"/${tarballName({ name, version })}\` — to its \`npm install\` line.`
+  );
 }

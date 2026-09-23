@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, it } from "vitest";
 
-import { renderInstall, renderStatus, taskStatus } from "./docs-projections.mjs";
+import {
+  renderAddToInstall,
+  renderInstall,
+  tarballName,
+  renderStatus,
+  taskStatus,
+} from "./docs-projections.mjs";
 
 const md = (...lines) => lines.join("\n");
 
@@ -221,5 +227,27 @@ describe("renderInstall", () => {
       );
     }
     expect(renderInstall(INSTALL)).not.toContain("\\\n```");
+  });
+});
+
+describe("renderAddToInstall", () => {
+  /**
+   * **The tarball's filename is a repository fact, not prose.** It carries the version, and a
+   * README that spelled it out would be wrong the day the version moved while every gate stayed
+   * green (found in review). Projected from the one `tarballName` the install block uses, so the
+   * two cannot disagree about what `npm pack` produces.
+   */
+  it("names the tarball exactly as npm pack does, from the manifest", () => {
+    expect(tarballName({ name: "@mapatlas/offline-pmtiles", version: "0.0.0" })).toBe(
+      "mapatlas-offline-pmtiles-0.0.0.tgz",
+    );
+    const text = renderAddToInstall({
+      name: "@mapatlas/offline-pmtiles",
+      version: "0.1.0",
+      directory: "packages/offline-pmtiles",
+    });
+    expect(text).toContain("`./packages/offline-pmtiles`");
+    expect(text).toContain('`"$TARBALLS"/mapatlas-offline-pmtiles-0.1.0.tgz`');
+    expect(text).toMatch(/`npm pack` line.*`npm install` line/);
   });
 });

@@ -1597,6 +1597,56 @@ and can be picked up like anything else. Unowned and unordered.
   > hard-wired to `api.md` §0. Generalising it is T8.2's increment 1, not a given. The criterion is
   > unchanged; see `specs/plans/t8-2-package-readmes.md`, finding 3.
 
+  **Done** (2026-09-23, PRs #63 and #64, merged as `2e5f4f5` and `386b40e`). Plan:
+  [`specs/plans/t8-2-package-readmes.md`](plans/t8-2-package-readmes.md) (PR #59, merged as
+  `a679660`), whose bars were set against `main` at `987ac20` before any implementation and which
+  carries a dated amendment with three corrections from its own review.
+
+  **Every code block in a package README is a file that compiles, and nothing in one is
+  illustrative.** Six READMEs, seven fenced blocks, each the same bytes as a snippet under
+  `examples/readme/<package>` that `check:packaging` compiles against the packed tarballs of all
+  six packages, in a project of its own; and seven generated regions across them — a `peers`
+  region in every README, projected from that package's `package.json`, and in
+  `offline-pmtiles`' alone an `add-to-install` region, whose *presence* is decided by the package
+  being outside the quick start's `PACKAGES` graph and whose tarball filename comes from the
+  manifest. `check:docs` fails the build when any of it drifts, in both directions.
+
+  Each criterion, and what discharges it:
+
+  - **Every package ships a README.** Six under `packages/*/README.md`; `check:docs` requires one
+    for every package in the inventory, and the inventory (`scripts/package-inventory.mjs`) is
+    asserted against `packages/*` by both gates before "each package" is trusted, so a seventh
+    package cannot arrive uncovered.
+  - **Every code block in one is checked the way `api.md` §0's are.** The mirror rule in
+    `scripts/docs-drift.mjs` is per document since increment 1 — until then it was hard-wired to
+    `api.md` §0, the finding the plan's survey made. A README is claimed whole, mirrored from its
+    own snippet directory only, and must show at least one mirrored block. The snippets compile in
+    a second packed consumer project (`createSnippetProject`) that installs all six tarballs; the
+    quick-start project and both its lanes are untouched; `tsc --listFilesOnly`, compared on real
+    paths, proves every `@mapatlas/*` module came from the tarballs and none from this
+    repository's `packages/`. **Compiled, not executed**, and each README says so; two snippets
+    were also executed by hand in review — `core`'s, and `offline-pmtiles`' download path against
+    the `core/testing` fakes, which is how a snippet that typechecked and deterministically threw
+    `OfflineLicenseError` was caught and fixed.
+  - **`check-packaging` asserts the README ships for each package.** By name, for every inventory
+    package, in the snippet project's installed tree — run red against the five missing READMEs
+    before any was written. Measured while falsifying: npm packs `README.md` whatever `files`
+    says, so what this catches is a README that is not there to pack.
+  - **A block that cannot be checked is not presented as something to copy.** No README carries an
+    install command: the packages are not published, and the one install path that is checked and
+    run is §0's, which each README links to. The `maplibre` README's install block — which failed
+    with `E404` when run — and its focus-ring stylesheet — which nothing in the repository
+    exercises — were removed and demoted to prose respectively, on the owner's three scope
+    rulings. Links must survive being read from the tarball: absolute (any scheme), a fragment,
+    or the exact path of a file `npm pack --dry-run` reports; the link grammar reads every
+    standard Markdown and HTML form, masks code spans and escapes first, and **refuses** anything
+    link-shaped it cannot read rather than skipping it.
+
+  Not done, and recorded rather than absorbed: `--mapatlas-focus-ring-color` has no oracle in
+  `@mapatlas/maplibre`'s tests — a gap in that package's tests, not in its documentation. A
+  standing execution of the pure and fake-able snippets would close the gap "compiled, not
+  executed" leaves; it was not added, being outside the approved scope.
+
 - **T8.3 `/lab` retirement audit.** The root app supersedes `/lab` as the product demonstration,
   but `/lab` remains an evidence fixture: five merged browser scenarios run through it, and T6.1's
   offline evidence with them. _AC:_ each lab-owned browser assertion is either **mapped to an

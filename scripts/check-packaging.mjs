@@ -306,12 +306,12 @@ try {
    * which files the compiler loaded, and every `@mapatlas/*` module among them must sit under the
    * scratch project's `node_modules` — none under this repository's `packages/`.
    *
-   * And every README this repository has must be **in the tarball**, asserted by name for each
-   * package, replacing a check that named `@mapatlas/maplibre` alone. Measured while falsifying:
-   * npm packs `README.md` whatever `files` says, so a manifest edit cannot drop it — what this
-   * catches is a README that is not there to pack. In increment 1 it is "each README that
-   * exists", which therefore **cannot go red** and is a placeholder for increment 2, which writes
-   * the other five, tightens it to "each package", and is written to go red first.
+   * And **each package's tarball must carry a README** — T8.2's third criterion, asserted by name
+   * for every package in the inventory, replacing a check that named `@mapatlas/maplibre` alone.
+   * Measured while falsifying: npm packs `README.md` whatever `files` says, so what this catches
+   * is a README that is not there to pack. Increment 1 asserted only the READMEs that existed and
+   * could not go red; this is the increment-2 form, run red against five missing READMEs before
+   * any was written.
    */
   const snippets = mkdtempSync(join(tmpdir(), "mapatlas-readme-snippets-"));
   try {
@@ -323,10 +323,8 @@ try {
 
     for (const directory of PACKAGE_DIRECTORIES) {
       const name = packageName(directory);
-      const inRepository = existsSync(join(root, directory, "README.md"));
-      const inTarball = existsSync(join(snippets, "node_modules", name, "README.md"));
-      if (inRepository && !inTarball) {
-        failures.push(`${name} has a README.md that its packed tarball does not carry`);
+      if (!existsSync(join(snippets, "node_modules", name, "README.md"))) {
+        failures.push(`${name}'s packed tarball carries no README.md`);
       }
     }
 

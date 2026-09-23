@@ -56,7 +56,13 @@ import {
   readmeDocument,
   tarballMembers,
 } from "./docs-drift.mjs";
-import { renderInstall, renderPeers, renderStatus, taskStatus } from "./docs-projections.mjs";
+import {
+  renderAddToInstall,
+  renderInstall,
+  renderPeers,
+  renderStatus,
+  taskStatus,
+} from "./docs-projections.mjs";
 import {
   PACKAGE_DIRECTORIES,
   inventoryDrift,
@@ -118,21 +124,36 @@ const documents = [
   },
 ];
 
-/** The package READMEs that exist, as mirrored documents. Their absence is increment 2's gate. */
-const readmes = PACKAGE_DIRECTORIES.filter((directory) =>
-  existsSync(join(ROOT, directory, "README.md")),
-).map((directory) => ({ directory, document: readmeDocument(directory) }));
+/**
+ * Every package's README, as a mirrored document — and every package has one (T8.2 increment 2).
+ * A package whose README is missing is a problem here as well as in `check:packaging`: without it,
+ * that package's snippets are compiled and shown nowhere, and nothing would say so.
+ */
+const readmes = PACKAGE_DIRECTORIES.map((directory) => ({
+  directory,
+  document: readmeDocument(directory),
+}));
+const missing = readmes.filter(({ document }) => !existsSync(join(ROOT, document.path)));
+if (missing.length > 0) {
+  console.error("check:docs — every package ships a README, and these do not:\n");
+  for (const { document } of missing) console.error(`  ${document.path}\n`);
+  process.exit(1);
+}
 
 for (const { directory, document } of readmes) {
-  documents.push({
-    path: document.path,
-    projections: new Map([["peers", renderPeers(manifest(join(ROOT, directory, "package.json")))]]),
-  });
+  const packageManifest = manifest(join(ROOT, directory, "package.json"));
+  const projections = new Map([["peers", renderPeers(packageManifest)]]);
+  // Only a package the quick start does not pack has an "add to install" region to project; the
+  // region is what says a README carries one, and `projectionDrift` refuses one nothing produces.
+  if (!PACKAGES.includes(directory)) {
+    projections.set("add-to-install", renderAddToInstall({ ...packageManifest, directory }));
+  }
+  documents.push({ path: document.path, projections });
 }
 
 // Counted by a different route from `readmes` — a directory walk rather than the inventory — so
-// that a gate which came to claim no README at all would fail here instead of passing on a README
-// nobody read. The same shape as the quick start's "section shows no code" refusal below.
+// that a gate which came to claim no README at all would fail here instead of passing on READMEs
+// nobody read. `missing` above cannot catch that: an empty list has nothing missing from it.
 const readmesOnDisk = readdirSync(join(ROOT, "packages"), { withFileTypes: true }).filter(
   (entry) => entry.isDirectory() && existsSync(join(ROOT, "packages", entry.name, "README.md")),
 ).length;
@@ -263,7 +284,7 @@ const mirrors = blocks.filter((block) => block.generated !== true).length;
 const projections = documents.reduce((total, one) => total + one.projections.size, 0);
 console.log(
   `check:docs — clean (${String(mirrors)} blocks in ${DOCUMENT}'s quick start, each the same ` +
-    `bytes as the file it names, covering every file of ${EXAMPLE}; ${String(readmes.length)} of ` +
+    `bytes as the file it names, covering every file of ${EXAMPLE}; all ` +
     `${String(PACKAGE_DIRECTORIES.length)} package READMEs present, their ${String(readmeMirrors)} ` +
     `block(s) each the bytes of a compiled snippet and their links tarball-safe; ` +
     `${String(projections)} generated block(s) matching what this repository projects)`,

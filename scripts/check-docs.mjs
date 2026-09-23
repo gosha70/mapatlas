@@ -13,9 +13,16 @@
  * - **Mirrors.** Every fenced block in the quick start *is* a file of `examples/quick-start`, byte
  *   for byte — the example `check:packaging` compiles and the browser lane runs.
  * - **Projections.** A block a repository fact decides — which tarballs to install, how much of
- *   the backlog carries a Done record — generated from that fact rather than typed. The root
- *   README is why: it said *"Phase 0 complete; core implementation begins in Phase 1"* through
- *   seven phases of work, and no gate could have known.
+ *   the backlog carries a Done record, which peers a package declares — generated from that fact
+ *   rather than typed. The root README is why: it said *"Phase 0 complete; core implementation
+ *   begins in Phase 1"* through seven phases of work, and no gate could have known.
+ *
+ * **Per document, since T8.2 increment 1.** The quick start is mirrored from the example a
+ * consumer builds; each package README is mirrored, whole, from its own `examples/readme/<pkg>`
+ * snippets, which `check:packaging` compiles against the packed tarballs. A README's links must
+ * also survive being read from the tarball. Which READMEs exist is read from the package
+ * inventory, asserted against `packages/*` first — a package the inventory does not know is a
+ * README nobody checks.
  *
  * `--write` reprojects the generated regions. It never touches a mirror: those have two authors
  * and the gate cannot know which one is right.
@@ -24,7 +31,7 @@
  * the repository, decides, and reports.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -35,17 +42,26 @@ import {
   exampleFiles,
   manifest,
   pinnedVersions,
+  run,
 } from "./consumer-project.mjs";
 import {
   DOCUMENT,
-  SECTION,
-  blocksInSection,
+  QUICK_START,
+  blocksIn,
   driftBetween,
   framed,
   generatedRegions,
+  linkProblems,
   projectionDrift,
+  readmeDocument,
+  tarballMembers,
 } from "./docs-drift.mjs";
-import { renderInstall, renderStatus, taskStatus } from "./docs-projections.mjs";
+import { renderInstall, renderPeers, renderStatus, taskStatus } from "./docs-projections.mjs";
+import {
+  PACKAGE_DIRECTORIES,
+  inventoryDrift,
+  packageDirectoriesOnDisk,
+} from "./package-inventory.mjs";
 
 /** Where the quick start tells a reader to put the tarballs it has them build. */
 const TARBALL_DIRECTORY = "/tmp/mapatlas";
@@ -102,7 +118,39 @@ const documents = [
   },
 ];
 
-const problems = [];
+/** The package READMEs that exist, as mirrored documents. Their absence is increment 2's gate. */
+const readmes = PACKAGE_DIRECTORIES.filter((directory) =>
+  existsSync(join(ROOT, directory, "README.md")),
+).map((directory) => ({ directory, document: readmeDocument(directory) }));
+
+for (const { directory, document } of readmes) {
+  documents.push({
+    path: document.path,
+    projections: new Map([["peers", renderPeers(manifest(join(ROOT, directory, "package.json")))]]),
+  });
+}
+
+// Counted by a different route from `readmes` — a directory walk rather than the inventory — so
+// that a gate which came to claim no README at all would fail here instead of passing on a README
+// nobody read. The same shape as the quick start's "section shows no code" refusal below.
+const readmesOnDisk = readdirSync(join(ROOT, "packages"), { withFileTypes: true }).filter(
+  (entry) => entry.isDirectory() && existsSync(join(ROOT, "packages", entry.name, "README.md")),
+).length;
+if (readmes.length !== readmesOnDisk) {
+  console.error(
+    `check:docs — ${String(readmesOnDisk)} package README(s) exist under packages/*, but this ` +
+      `gate is about to check ${String(readmes.length)}. A README nobody reads is not checked.`,
+  );
+  process.exit(1);
+}
+
+const problems = [...inventoryDrift(PACKAGE_DIRECTORIES, packageDirectoriesOnDisk(ROOT))];
+if (problems.length > 0) {
+  // Nothing below is trusted while "each package" is in dispute.
+  console.error("check:docs — the package inventory and packages/* disagree:\n");
+  for (const problem of problems) console.error(`  ${problem}\n`);
+  process.exit(1);
+}
 
 if (write) {
   for (const { path, projections } of documents) {
@@ -143,11 +191,11 @@ const shipped = new Map(
   exampleFiles().map((relative) => [relative, read(`${EXAMPLE}/${relative}`)]),
 );
 
-const blocks = blocksInSection(read(DOCUMENT), SECTION);
+const blocks = blocksIn(read(DOCUMENT), QUICK_START);
 
 if (blocks.length === 0) {
   console.error(
-    `check:docs — ${DOCUMENT} has no "${SECTION}" section, or the section shows no code. ` +
+    `check:docs — ${DOCUMENT} has no "${QUICK_START.heading}" section, or the section shows no code. ` +
       `The gate exists to hold that section to the example; with nothing to hold it would pass ` +
       `for the wrong reason.`,
   );
@@ -155,6 +203,55 @@ if (blocks.length === 0) {
 }
 
 problems.push(...driftBetween({ blocks, shipped }));
+
+/** Every file under a directory, relative to it — the snippets a README may mirror. */
+function filesUnder(directory) {
+  const walk = (relative) => {
+    const absolute = join(directory, relative);
+    if (!statSync(absolute).isDirectory()) return [relative];
+    return readdirSync(absolute)
+      .sort()
+      .flatMap((entry) => walk(relative === "" ? entry : `${relative}/${entry}`));
+  };
+  return existsSync(directory) ? walk("") : [];
+}
+
+/**
+ * What npm would pack for a package, without packing it. Asked of npm rather than derived from
+ * `files`, so a link into `dist/` is held to a file that is really there; ~1 s per README, once.
+ */
+function packedPaths(directory) {
+  const [report] = JSON.parse(run("npm", ["pack", "--dry-run", "--json"], join(ROOT, directory)));
+  return report.files.map((file) => file.path);
+}
+
+let readmeMirrors = 0;
+for (const { directory, document } of readmes) {
+  const markdown = read(document.path);
+  const snippets = new Map(
+    filesUnder(join(ROOT, document.mirrors)).map((relative) => [
+      relative,
+      read(`${document.mirrors}/${relative}`),
+    ]),
+  );
+  const readmeBlocks = blocksIn(markdown, document);
+  const mirrored = readmeBlocks.filter((block) => block.generated !== true).length;
+  readmeMirrors += mirrored;
+  // Not vacuously green: a README with no snippet and no block has no drift and no usage either,
+  // and once the other packages keep the shared snippet project non-empty, one package could lose
+  // both together with every gate staying green. The plan's scope is one usage block per README.
+  if (mirrored === 0) {
+    problems.push(
+      `${document.path} — shows no compiled snippet at all. Every package README carries at least ` +
+        `one usage block mirrored from ${document.mirrors}; a README with none is not checked, ` +
+        `it is merely not wrong.`,
+    );
+  }
+  problems.push(
+    ...driftBetween({ document, blocks: readmeBlocks, shipped: snippets }),
+    ...linkProblems({ document, markdown, tarball: tarballMembers(packedPaths(directory)) }),
+  );
+}
 
 if (problems.length > 0) {
   console.error("check:docs — the documentation and the repository have come apart:\n");
@@ -166,6 +263,8 @@ const mirrors = blocks.filter((block) => block.generated !== true).length;
 const projections = documents.reduce((total, one) => total + one.projections.size, 0);
 console.log(
   `check:docs — clean (${String(mirrors)} blocks in ${DOCUMENT}'s quick start, each the same ` +
-    `bytes as the file it names, covering every file of ${EXAMPLE}; ` +
+    `bytes as the file it names, covering every file of ${EXAMPLE}; ${String(readmes.length)} of ` +
+    `${String(PACKAGE_DIRECTORIES.length)} package READMEs present, their ${String(readmeMirrors)} ` +
+    `block(s) each the bytes of a compiled snippet and their links tarball-safe; ` +
     `${String(projections)} generated block(s) matching what this repository projects)`,
 );

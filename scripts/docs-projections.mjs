@@ -205,3 +205,25 @@ export function renderInstall({ packages, dependencies, into }) {
     "```",
   ].join("\n");
 }
+
+/**
+ * A package's peer dependencies, as its README states them (T8.2 increment 1).
+ *
+ * Projected rather than typed because the alternative is a version pinned by hand in prose — and
+ * a pin that a gate enforces in `package.json` but nothing enforces in the README is two copies
+ * of one fact, one of which will be wrong. Whether a range is exact is said out loud, since for a
+ * renderer peer it is the property the packaging gate exists for.
+ *
+ * @param {{ peerDependencies?: Record<string, string> }} manifest
+ * @returns {string}
+ */
+export function renderPeers(manifest) {
+  const peers = Object.entries(manifest.peerDependencies ?? {});
+  if (peers.length === 0) return "_This package declares no peer dependencies._";
+  return peers
+    .map(
+      ([name, range]) =>
+        `- \`${name}\` — \`${range}\`${/^\d+\.\d+\.\d+$/.test(range) ? " (an exact version, not a range)" : ""}`,
+    )
+    .join("\n");
+}

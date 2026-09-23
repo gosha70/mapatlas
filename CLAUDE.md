@@ -71,6 +71,13 @@ npm run test          # unit tests, seams mocked
 Until the toolchain exists, the first tasks in `specs/tasks.md` are to create it — do those
 first, then keep the gates green from then on.
 
+## Review & handoff protocol
+- Before any handoff: `git add -A`, then fingerprint with `git diff --cached | shasum -a 256`.
+- Required gates before handoff: `npm run verify` (exit 0), all falsifier mutants killed, `check:docs` + Prettier clean.
+- Handoff block must state: base SHA, file count, +/-, fingerprint, verify result, and open rulings.
+- Staging is NOT committing. Commit, push, PR, and probe dispatch are each separate explicit instructions; never assume one implies the next.
+- On GO: re-verify the fingerprint matches before committing; commit exactly the staged tree with one DCO Signed-off-by line.
+
 ## Guardrails
 
 - No secrets, no bundled map tiles, no bundled ML models in the repo.

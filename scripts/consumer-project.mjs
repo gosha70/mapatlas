@@ -194,8 +194,8 @@ export function consumerManifest(root, names) {
 }
 
 /** Pack every workspace package into `into`, and return the tarball paths. */
-export function packWorkspacePackages(into) {
-  return PACKAGES.map((directory) => {
+export function packWorkspacePackages(into, directories = PACKAGES) {
+  return directories.map((directory) => {
     const output = run(
       "npm",
       ["pack", "--loglevel=error", "--pack-destination", into],
@@ -242,12 +242,45 @@ export function copyExample(into) {
  * @param {{ into: string, dependencies: string[] }} options
  */
 export function createConsumerProject({ into, dependencies }) {
+  const { tarballs } = installPacked({ into, dependencies, packages: PACKAGES });
+  copyExample(into);
+  return { tarballs };
+}
+
+/**
+ * Where the package READMEs' code blocks are mirrored from: one directory per package, each file
+ * a whole snippet that `check:packaging` compiles against the packed tarballs. The project's own
+ * `tsconfig.json` sits beside them and is copied with them.
+ */
+export const SNIPPETS = "examples/readme";
+
+/**
+ * The README-snippet project: **all** of the repository's packages, packed and installed together,
+ * with every snippet copied in (T8.2 increment 1).
+ *
+ * **A second project, not the quick-start one, and the difference is the point.** The quick-start
+ * project installs the five packages its example imports, and it is shared by `check:packaging`
+ * and the browser lane; an `@mapatlas/offline-pmtiles` snippet cannot resolve in it, and adding a
+ * sixth tarball to it would change the graph both quick-start lanes prove things about. So this
+ * project is built with the same helpers and the same install strategy, from the package
+ * **inventory** rather than `PACKAGES`, and leaves the other untouched.
+ *
+ * @param {{ into: string, packages: readonly string[], dependencies: readonly string[] }} input
+ */
+export function createSnippetProject({ into, packages, dependencies }) {
+  const { tarballs } = installPacked({ into, dependencies, packages });
+  cpSync(join(ROOT, SNIPPETS), join(into, "snippets"), { recursive: true });
+  return { tarballs };
+}
+
+/** A manifest, the given packages packed and installed nested beside the given dependencies. */
+function installPacked({ into, dependencies, packages }) {
   mkdirSync(into, { recursive: true });
   writeFileSync(
     join(into, "package.json"),
     `${JSON.stringify(consumerManifest(manifest(join(ROOT, "package.json")), dependencies), null, 2)}\n`,
   );
-  const tarballs = packWorkspacePackages(into);
+  const tarballs = packWorkspacePackages(into, packages);
   run(
     "npm",
     [
@@ -260,6 +293,5 @@ export function createConsumerProject({ into, dependencies }) {
     ],
     into,
   );
-  copyExample(into);
   return { tarballs };
 }

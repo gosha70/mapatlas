@@ -5,8 +5,9 @@
 > by running a command, and says which; nothing is repeated forward from `tasks.md` or
 > `CONTINUE.md` without having been checked against the code first.
 >
-> **Status: proposed. No implementation is authorised by this document.** The owner approved three
-> scope calls on 2026-09-20 — no per-package install commands; snippets compiled and not executed,
+> **Status: done, 2026-09-23** — increments 1 and 2 merged as PRs #63 and #64; the close-out is
+> in `tasks.md`'s Done record. This document is history now, not a work plan. The owner approved
+> three scope calls on 2026-09-20 — no per-package install commands; snippets compiled and not executed,
 > with that limitation stated; the focus-ring block demoted and its missing oracle recorded — and
 > held the plan for the two corrections below.
 >

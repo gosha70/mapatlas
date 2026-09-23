@@ -34,12 +34,17 @@ than when someone picks them up.
   record, and "T8.1: increment 2c ran" below says what stands. **Do not re-dispatch the probe, fix,
   rule on `M` or touch the lattice candidate without an owner's ruling**; the amendment's options
   are where a resumption starts.
-- **T8.2 — per-package READMEs.** Five of six packages ship none, and the sixth's code is checked by
-  nothing. **Half the mechanism exists.** `check:docs`'s *generated projections* are per-document;
-  its *mirror* rule — a fenced block being a file, byte for byte — is hard-wired to `api.md` §0,
-  one document and one section, and T8.2's increment 1 is the work that generalises it. An earlier
-  version of this line said the rules were already per-document; the T8.2 survey read the code and
-  found otherwise (`specs/plans/t8-2-package-readmes.md`, finding 3).
+- **T8.2 — per-package READMEs. Closed** (2026-09-23, PRs #63 and #64). Six READMEs, every code
+  block in one mirrored from a snippet that `check:packaging` compiles against the packed tarballs
+  of all six packages, links held to tarball-safe targets — an absolute URL, a fragment, or the
+  exact path of a file the tarball carries — and the README's presence in every tarball asserted
+  by name. `tasks.md` holds the Done record with one bullet per criterion;
+  `specs/plans/t8-2-package-readmes.md` is history now, not a work plan. What it leaves behind:
+  the mirror rule in `check:docs` is per document (until T8.2 it was hard-wired to `api.md` §0);
+  a package inventory distinct from `PACKAGES`, asserted against `packages/*`; a second packed
+  consumer project for the snippets, leaving the quick-start project untouched. **Snippets are
+  compiled, not executed** — a review caught one that typechecked and deterministically threw —
+  and the focus-ring custom property still has no oracle in `@mapatlas/maplibre`'s tests.
 - **T8.3 — the `/lab` retirement audit.** Each lab-owned browser assertion mapped to a root-app
   oracle or deliberately retired, shown by the mapping rather than by the suite staying green —
   deleting a scenario also leaves it green.

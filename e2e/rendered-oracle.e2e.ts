@@ -6,7 +6,7 @@ import { RenderNeverSettledError, pngSize, settleRender } from "./fixtures/rende
 /**
  * The settled-render oracle, tested against something that actually changes.
  *
- * **Why not against the map.** On this machine, with archives served from localhost, `/lab` is
+ * **Why not against the map.** On this machine, with archives served from localhost, a map is
  * already fully painted by the time the first capture is taken: the wait returns at its minimum
  * and never observes a change. Setting `stableCaptures` to 1 leaves every map test green — so
  * the map cannot show that this loop works, and a loop nothing exercises is decoration.

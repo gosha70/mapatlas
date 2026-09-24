@@ -177,10 +177,6 @@ export function App({ here, storage, makeOffline }: AppProps): ReactElement {
 
       <PersistencePanel />
       <InstallPanel />
-
-      <p className="app-lab">
-        The fixture harness is at <a href="/lab">/lab</a>.
-      </p>
     </main>
   );
 }

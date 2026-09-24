@@ -294,7 +294,10 @@ fixture" paragraph and its Phase 8 bullet; `README.md` reprojected.
   new test alone is red, and the handoff says so by title.
 - After increment 2: **no executable reference to `/lab` remains** — `grep -rn "/lab" apps/demo/src e2e scripts`
   with comment lines (`//`, `*`, `<!--`) excluded finds nothing; a scenario that navigates to
-  `/lab` fails on a 404. Prose is governed by the fence's list, not by the grep.
+  `/lab` fails. (Amended 2026-09-23 at increment 2: **not on a 404** — the dev server's SPA
+  fallback answers the path with the application itself, status 200, `#shell-status` present and
+  no `#status`/`#map`; a lab scenario fails because `#status[data-assembled]` never appears.
+  Measured.) Prose is governed by the fence's list, not by the grep.
 - After increment 2: the browser suite's test count is stated as numbers. At `c0587a2` the grep
   `^test(` over `e2e/*.e2e.ts` counts 116. Expected after: 116 − 9 deleted lab tests (the 10
   lab-subject tests minus the hue test) − 2 deleted negative tests (rows 14, 16; row 15's test
@@ -352,5 +355,6 @@ required red:
   `both ∩ corridor === 0` fails;
 - **harness proof (row 8's property):** the hillshade layer left in the "off" stack → the
   changed-fraction assertion fails;
-- **the removal itself:** a scenario that still navigates to `/lab` after increment 2 → fails on
-  a 404, which is the assertion that the retired route is retired.
+- **the removal itself:** a scenario that still navigates to `/lab` after increment 2 → fails,
+  because the path now serves the application (SPA fallback, 200) and no `#status[data-assembled]`
+  ever appears — which is the assertion that the retired route is retired.

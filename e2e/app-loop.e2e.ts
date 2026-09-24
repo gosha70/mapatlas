@@ -28,8 +28,8 @@ import {
  * what was recorded. A doubled `TripReview` renders whatever it is told to.
  *
  * **The trap this file is written against**, named in the plan: "the demo renders, therefore the
- * loop works". A screenshot of a map with a track on it is satisfied by `/lab`, which has existed
- * since T4.6 and discharges none of T7.1. So each step below is observed by something only that
+ * loop works". A screenshot of a map with a track on it was satisfied by `/lab`, the fixture
+ * route that existed from T4.6 until T8.3 and discharged none of T7.1. So each step below is observed by something only that
  * step can produce — a recorder state the page reports, a composer that opened where the tap
  * landed, a preview that decoded the chosen bytes, and a photo visible *in the review* after the
  * trip was finalized.

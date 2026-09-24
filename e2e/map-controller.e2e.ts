@@ -4,10 +4,17 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import type { TileSource, Track } from "@mapatlas/core";
 
-import { FIXTURE_REGION, generateFixtureTrack } from "../apps/demo/src/lab/fixture-track.js";
-import { labTileSources, pauseEndpoints, selectSegments } from "../apps/demo/src/lab/lab.js";
 import type { ConsoleWatch } from "./fixtures/browser.js";
 import { consoleFor, serveMapFixtures, watchConsole } from "./fixtures/browser.js";
+import { FIXTURE_TERRAIN_SOURCE, fixtureTileSources } from "./fixtures/fixture-stack.js";
+import type { SegmentView } from "./fixtures/fixture-track.js";
+import {
+  FIXTURE_REGION,
+  PAUSE_FOCUS_ZOOM,
+  generateFixtureTrack,
+  pauseEndpoints,
+  selectSegments,
+} from "./fixtures/fixture-track.js";
 import type { Box, Raster } from "./fixtures/pixels.js";
 import {
   boundsOf,
@@ -1531,14 +1538,15 @@ test("makes draft vertices one keyboard stop with visible, focus-scoped interact
 });
 
 /**
- * Two renderer properties that `/lab`'s pixel differential carried (T4.6,
- * `render-differential.e2e.ts`) and that the root app cannot observe — T8.3's findings F1 and F2.
- * They are about the renderer, not about any page: a segmented track draws no ink across its
- * pause, and the hillshade layer contributes pixels with its DEM source held fixed. So they live
- * here, against a controller built for the test, with the fixture's own recording as data.
+ * Two renderer properties that `/lab`'s pixel differential carried (T4.6) and that the root app
+ * cannot observe — T8.3's findings F1 and F2. They are about the renderer, not about any page: a
+ * segmented track draws no ink across its pause, and the hillshade layer contributes pixels with
+ * its DEM source held fixed. So they live here, against a controller built for the test, with the
+ * fixture's own recording as data.
  *
- * **Same viewport, same oracle, same thresholds as the originals**, so that while both exist the
- * two can be shown red under one mutation — which is the only moment they can be compared.
+ * **Same viewport, same oracle, same thresholds as the originals had.** They were written while
+ * the originals still ran and shown red beside them under one mutation each, the only moment the
+ * two could be compared; the figures matched to the pixel (legs 2,817 px, corridor 827 px).
  */
 test.describe("renderer differentials", () => {
   test.use({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
@@ -1546,13 +1554,6 @@ test.describe("renderer differentials", () => {
   const ARCHIVES = "http://127.0.0.1:5176";
   /** The demo's blank-style background, `#eceff1` (`apps/demo/src/app/sources.ts`). */
   const BLANK_BACKGROUND = "#eceff1";
-  /**
-   * The zoom the pause is framed at: 17 puts the 94.6 m gap at roughly 105 px at this latitude,
-   * wide enough that a bridge is unmistakable. At the whole-track zoom a line across the gap lands
-   * entirely inside the antialiased ends of the two segments and leaves **no** ink of its own —
-   * measured, on the original.
-   */
-  const PAUSE_FOCUS_ZOOM = 17;
 
   /** How far outside the corridor each leg is allowed to be and still count as reaching it. */
   const CORRIDOR_MARGIN_PX = 8;
@@ -1680,7 +1681,7 @@ test.describe("renderer differentials", () => {
       center: { lat: (from.lat + to.lat) / 2, lng: (from.lng + to.lng) / 2 },
       zoom: PAUSE_FOCUS_ZOOM,
     };
-    const render = (view: Parameters<typeof selectSegments>[1]): Promise<Raster> =>
+    const render = (view: SegmentView): Promise<Raster> =>
       captureRender(page, { sources: [], track: selectSegments(track, view), camera });
 
     const both = trackMask(await render("both"));
@@ -1759,10 +1760,10 @@ test.describe("renderer differentials", () => {
     };
     const terrainUrl = `${ARCHIVES}/terrain.pmtiles`;
     const contourUrl = `${ARCHIVES}/contours.pmtiles`;
-    const terrain = { sourceId: "fixture-terrain", exaggeration: 1 };
+    const terrain = { sourceId: FIXTURE_TERRAIN_SOURCE, exaggeration: 1 };
     const stack = (hillshade: boolean): Promise<Raster> =>
       captureRender(page, {
-        sources: labTileSources({ terrainUrl, contourUrl, hillshade }),
+        sources: fixtureTileSources({ terrainUrl, contourUrl, hillshade }),
         terrain,
         track,
         camera,

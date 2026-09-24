@@ -8,7 +8,7 @@ import { defineConfig } from "vite";
  *
  * That restriction is the point rather than a convenience. `e2e/harness` aliases deep paths —
  * `@mapatlas/maplibre/controller` and friends — so its probes can see the injected environment
- * and the renderer's internals. Those are automation-only, and a `/lab` built on them would
+ * and the renderer's internals. Those are automation-only, and a demo built on them would
  * demonstrate that the harness works, not that a consumer's imports do. Every alias here is a
  * bare package name resolving to its built entry: what `npm install` would give.
  */

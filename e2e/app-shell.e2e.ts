@@ -40,8 +40,7 @@ const TERRAIN = `${ARCHIVES}/terrain.pmtiles`;
 const CONTOURS = `${ARCHIVES}/contours.pmtiles`;
 const BASEMAP = `${ARCHIVES}/basemap.pmtiles`;
 
-/** The app's map element. **Not** `mapOf`, which names `/lab`'s `#map` — the two routes are
- *  different pages and sharing a locator would have this file capture the wrong one, or nothing. */
+/** The app's map element. Named once so every capture in this file frames the same box. */
 const appMap = (page: Page): ReturnType<Page["locator"]> => page.locator("#app-map");
 
 const withArchives =
@@ -253,21 +252,6 @@ test("the map reads both archives past their headers, and paints what it read", 
     nonBackgroundFraction(bare.image),
     "an empty stack painted the frame: the oracle cannot tell tiles from furniture",
   ).toBeLessThan(0.1);
-});
-
-test("the app never reaches the fixture route", async ({ page }) => {
-  // `/lab` is T4.6's fixture and carries T6.1's merged offline evidence through five scenarios.
-  // The app is a different thing on the same origin, and the plan's ruling is that it coexists
-  // untouched — asserted rather than promised, since a shared `#app` mount is exactly how it
-  // would go wrong.
-  await page.goto(`${DEMO}/lab`, { waitUntil: "load" });
-  await page.waitForSelector('#status[data-assembled="true"], #status[data-failed="true"]', {
-    timeout: 120_000,
-  });
-
-  await expect(page.locator("#shell-status")).toHaveCount(0);
-  await expect(page.locator("h1.app-title")).toHaveCount(0);
-  await expect(page.locator("#persistence")).toHaveCount(0);
 });
 
 /**

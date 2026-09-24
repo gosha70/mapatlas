@@ -192,8 +192,8 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   // A navigation is normalised to "/" so the demo's query string — which names the archives —
-  // resolves to the cached document. Only the root: "/lab" is the fixture route and is not the
-  // application shell, so it is left to the network rather than turned into an offline fallback.
+  // resolves to the cached document. Only the root: any other path is not the application shell,
+  // so it is left to the network rather than turned into an offline fallback.
   const key = request.mode === "navigate" ? (url.pathname === "/" ? "/" : undefined) : url.pathname;
   if (key === undefined || !SHELL.includes(key)) return;
 

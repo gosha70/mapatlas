@@ -3,11 +3,10 @@
 /**
  * The demo app's tile stack.
  *
- * **Deliberately its own, not `/lab`'s.** The two declare archives that look identical today and
- * are about to diverge: `/lab`'s are cut for a pixel differential and are pinned to that
- * scenario, while these are the *demo's* stack, which T7.1's basemap increment replaces with a
- * self-hosted extract. Sharing them now would couple the app to a fixture harness and then have
- * to be unpicked; duplication that is scheduled to diverge is not drift.
+ * **Deliberately its own, not the test fixtures'.** The renderer proofs declare the same two
+ * archives (`e2e/fixtures/fixture-stack.ts`), cut for a pixel differential and pinned to it,
+ * while these are the *demo's* stack, with the self-hosted basemap T7.1 added. Sharing them
+ * would couple the app to its test fixtures; duplication that has diverged is not drift.
  *
  * **Absent archives are not an error.** With no `?terrain=` or `?contours=`, the app renders the
  * track over a blank style — which is what a consumer sees before they have downloaded anything,
@@ -35,10 +34,11 @@ export interface DemoSources {
 /**
  * Read archive locations from a URL.
  *
- * The same parameter names `/lab` uses, so one set of fixture archives serves both without a
- * second convention to remember. Exported so a scenario builds the object the browser would
- * rather than duplicating the names on both sides — a mismatch there renders a blank map and
- * looks like a broken app.
+ * The parameter names are the app's own convention (they were also the retired fixture
+ * route's). Exported so a scenario builds the object the browser would rather than duplicating
+ * the names on both sides — a mismatch there renders a blank map and looks like a broken app.
+ * The archive *files* are shared with the renderer proofs, which take them by URL directly
+ * (`e2e/fixtures/fixture-stack.ts`) and have no query-parameter convention.
  */
 export function readDemoSources(from: URL): DemoSources {
   return {
@@ -51,13 +51,12 @@ export function readDemoSources(from: URL): DemoSources {
 /**
  * The ground the demo's archives cover.
  *
- * **The demo's own copy, not `/lab`'s.** The bounds are the same today because the same fixture
- * archives serve both, and the app must not import from the fixture harness — the dependency
- * would survive the basemap increment, which cuts its own extract and leaves `/lab`'s archives
- * where they are. Same category as the stack above: scheduled to diverge, so duplicated now.
+ * **The demo's own copy, not the test fixtures'.** The bounds are the same because the same
+ * fixture archives serve both, and the app must not import from its test fixtures
+ * (`e2e/fixtures/fixture-track.ts` holds the other copy). Same category as the stack above.
  *
- * Both this and `/lab`'s copy are checked against `fixtures/vertical/region.json` by their own
- * tests, so neither can drift out of the archives' coverage without a test going red. That check
+ * Both copies are checked against `fixtures/vertical/region.json` by their own tests, so
+ * neither can drift out of the archives' coverage without a test going red. That check
  * is the whole reason a copy is safe: without it, widening this would move the camera off the
  * archives and the map would render blank with everything green.
  */

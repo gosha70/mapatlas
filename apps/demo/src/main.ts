@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The demo's entry point.
+ * The demo's entry point: the application, on the root route.
  *
- * `/lab` is the only route so far: T4.6's fixture, human-openable. Anything else lands on a
- * pointer to it rather than a blank page.
+ * `/lab`, T4.6's fixture route, lived here until T8.3 retired it; every claim it carried is
+ * mapped or retired in `specs/plans/t8-3-lab-retirement.md`.
  */
 
 import { StrictMode, createElement } from "react";
@@ -25,14 +25,6 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { setWorkerUrl } from "maplibre-gl";
 
-import {
-  labTileSources,
-  mountLab,
-  readLabFocus,
-  readLabSegments,
-  readLabSources,
-} from "./lab/lab.js";
-import { readLabOffline, runLabOffline } from "./lab/offline-region.js";
 import { createApp } from "./app/app.js";
 
 setWorkerUrl(maplibreWorkerUrl);
@@ -40,98 +32,38 @@ setWorkerUrl(maplibreWorkerUrl);
 const app = document.querySelector<HTMLElement>("#app");
 if (app === null) throw new Error("the demo page has no #app element to mount into");
 
-if (window.location.pathname === "/lab") {
-  const status = document.createElement("p");
-  status.id = "status";
-  status.textContent = "Replaying the fixture track…";
-  const map = document.createElement("div");
-  map.id = "map";
-  app.append(status, map);
+// **The app** (T7.1 increment 1). It takes the root route and absorbs T6.2's persistence
+// control and installation guidance, which are its own settings.
+//
+// The stylesheet hook stays on `body`: the page padding and reading width live on `body` and
+// `#app`, and the route marker is what scopes them. It dates from when `index.html` was shared
+// with a full-bleed fixture route; marking the route keeps the scope a fact of the DOM rather
+// than a promise about selectors.
+document.body.dataset["route"] = "root";
 
-  const here = new URL(window.location.href);
-  const labSources = readLabSources(here);
-
-  // **The offline step runs to completion before the map is mounted**, and that ordering is the
-  // contract, not a convenience: `installOfflineArchives` has to reach the protocol before
-  // anything adds a `pmtiles` source, or MapLibre resolves the url over the network first and
-  // the later registration serves nothing (ADR-0036).
-  //
-  // `data-offline` is published *before* `data-assembled`, so a scenario can assert what the
-  // region step produced without having to infer it from what the map then drew — which is the
-  // precondition a render assertion cannot make for itself.
-  runLabOffline(readLabOffline(here), labTileSources(labSources))
-    .then((report) => {
-      // The **step**, not a count: always present, so a scenario can wait on it as "the offline
-      // step is finished" without that marker also having to carry a number the step may not
-      // know. `data-regions` is published separately, and only when the store was consulted.
-      status.dataset["offline"] = report.mode;
-      if (report.regions !== undefined) status.dataset["regions"] = String(report.regions);
-      if (report.regionId !== undefined) status.dataset["regionId"] = report.regionId;
-      if (report.sizeBytes !== undefined) status.dataset["regionBytes"] = String(report.sizeBytes);
-      if (report.sourceIds !== undefined)
-        status.dataset["regionSources"] = report.sourceIds.join(",");
-      status.dataset["served"] = report.served.join(",");
-      return mountLab(map, labSources, readLabSegments(here), readLabFocus(here));
-    })
-    .then((lab) => {
-      // **Not "ready".** This resolves when the recording is finished and the controller has
-      // been told what to draw; MapLibre installs sources and layers later, when its style
-      // loads. Calling it ready would invite a scenario to treat it as proof that something
-      // painted, which it cannot be — the differential pixel oracle establishes that.
-      status.dataset["assembled"] = "true";
-      status.dataset["points"] = String(lab.track.points.length);
-      status.dataset["segments"] = String(lab.track.segments.length);
-      status.dataset["events"] = String(lab.events.length);
-      status.dataset["rendered"] = String(lab.rendered.points.length);
-      status.textContent =
-        `${String(lab.track.points.length)} points, ` +
-        `${String(lab.track.segments.length)} segments, ` +
-        `${String(lab.events.length)} marks`;
-    })
-    .catch((error: unknown) => {
-      status.dataset["failed"] = "true";
-      status.textContent = `Lab failed: ${error instanceof Error ? error.message : String(error)}`;
-    });
-} else {
-  // **The app** (T7.1 increment 1). It takes the root route and absorbs T6.2's persistence
-  // control and installation guidance, which are its own settings.
-  //
-  // **Only this branch changes.** `/lab` above is T4.6's fixture and the subject of five merged
-  // browser scenarios, and T6.1's offline evidence runs through it. The app is a different thing
-  // on the same origin, and a browser test asserts it never reaches that route.
-  //
-  // The stylesheet hook stays on `body`: `index.html` is shared by both routes, and the page
-  // padding and reading width live on `body` and `#app` — exactly what `/lab` needs left alone,
-  // since it draws a full-bleed map. Marking the route makes the scope a fact of the DOM rather
-  // than a promise about selectors.
-  document.body.dataset["route"] = "root";
-
-  /**
-   * The application shell's service worker (T7.1 increment 5c).
-   *
-   * **Registered here and nowhere above**, so `/lab` never acquires service-worker lifecycle
-   * behaviour: it is merged evidence for five browser scenarios, and a worker taking over its
-   * navigations would change what those scenarios are measuring without anyone asking it to. The
-   * worker itself also refuses `/lab`; this branch is the outer half of the same boundary.
-   *
-   * **Production only**, because `sw.js` is generated by `scripts/generate-service-worker.mjs`
-   * from the emitted bundle and does not exist under the dev server — registering there would
-   * fetch a 404 and fail, on every load, for nothing.
-   *
-   * A failed registration is reported and not thrown: the application works without it, and the
-   * offline scenario asserts the worker took control rather than trusting this call to have
-   * succeeded.
-   */
-  if (import.meta.env.PROD && "serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/sw.js").catch((error: unknown) => {
-      document.body.dataset["shellWorker"] = "failed";
-      console.error("the app shell's service worker did not register", error);
-    });
-  }
-
-  // `StrictMode` deliberately: React 19 double-invokes effects in development, and every React
-  // lifecycle bug this repo has hit — the composer's re-armed `live` ref, a panel appending
-  // twice — is one that only a second mount reveals. A demo that hid them would teach the wrong
-  // thing.
-  createRoot(app).render(createElement(StrictMode, null, createApp(new URL(window.location.href))));
+/**
+ * The application shell's service worker (T7.1 increment 5c).
+ *
+ * Registered for the application only; the worker answers navigations to the root and leaves
+ * every other path to the network.
+ *
+ * **Production only**, because `sw.js` is generated by `scripts/generate-service-worker.mjs`
+ * from the emitted bundle and does not exist under the dev server — registering there would
+ * fetch a 404 and fail, on every load, for nothing.
+ *
+ * A failed registration is reported and not thrown: the application works without it, and the
+ * offline scenario asserts the worker took control rather than trusting this call to have
+ * succeeded.
+ */
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch((error: unknown) => {
+    document.body.dataset["shellWorker"] = "failed";
+    console.error("the app shell's service worker did not register", error);
+  });
 }
+
+// `StrictMode` deliberately: React 19 double-invokes effects in development, and every React
+// lifecycle bug this repo has hit — the composer's re-armed `live` ref, a panel appending
+// twice — is one that only a second mount reveals. A demo that hid them would teach the wrong
+// thing.
+createRoot(app).render(createElement(StrictMode, null, createApp(new URL(window.location.href))));

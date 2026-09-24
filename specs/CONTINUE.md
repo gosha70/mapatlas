@@ -22,9 +22,10 @@ and to `roadmap.md`'s note, plus a release task — versioning off `0.0.0`, a pu
 org ownership, and what `check:packaging` should assert about a *published* artifact rather than a
 packed one. It is not a reinterpretation of the note.
 
-**So there is no phase to finish. What is buildable is `tasks.md`'s Phase 8** — three follow-ups,
+**So there is no phase to finish. What was buildable is `tasks.md`'s Phase 8** — three follow-ups,
 post-v1, unowned and unordered, each with acceptance criteria written when they were recorded rather
-than when someone picks them up.
+than when someone picks them up. Two are closed and one is parked; nothing in Phase 8 is open for
+work without an owner's ruling.
 
 - **T8.1 — the fixture-build flake.** Tracked in **issue #30**; read it first. Its acceptance
   criterion is deliberately awkward: the failure must be made **reproducible on demand** before it
@@ -45,22 +46,31 @@ than when someone picks them up.
   consumer project for the snippets, leaving the quick-start project untouched. **Snippets are
   compiled, not executed** — a review caught one that typechecked and deterministically threw —
   and the focus-ring custom property still has no oracle in `@mapatlas/maplibre`'s tests.
-- **T8.3 — the `/lab` retirement audit.** Each lab-owned browser assertion mapped to a root-app
-  oracle or deliberately retired, shown by the mapping rather than by the suite staying green —
-  deleting a scenario also leaves it green.
+- **T8.3 — the `/lab` retirement audit. Closed** (2026-09-23, PRs #67 and #68). `/lab` is gone:
+  the route, `apps/demo/src/lab/`, the live link, four scenarios and every assertion about the
+  route's existence. `tasks.md` holds the Done record with the sixteen-row mapping — each
+  assertion MAP or RETIRE, one to one — and `specs/plans/t8-3-lab-retirement.md` is history now.
+  What it leaves behind: the renderer's pause-as-gap and hillshade-isolation proofs live on the
+  harness (`map-controller.e2e.ts`, "renderer differentials") with the fixture track and stack in
+  `e2e/fixtures/`; the root app carries the per-source, worker, egress and a11y claims; and
+  **two observability findings, reported and not resolved** — F1, no declared close camera on a
+  map that draws a completed track (the review map mounts at the world view), and F2, no way to
+  drop one layer with its source held. One lab oracle turned out unfalsifiable as written (the
+  worker's 200); its replacement was falsified alone and the plan says so.
 
 Two things remain recorded and **not** written up as tasks. Neither is assigned; both are named so
 they are not discovered as surprises.
 
-- **`tasks.md` under-records what is built.** It carries a **Done** record for 13 of its 52 tasks.
+- **`tasks.md` under-records what is built.** It carries a **Done** record for 15 of its 52 tasks.
   The first in document order is T4.6, and Phases 0–3 — 28 tasks, every one built, tested and
   shipping inside the packed tarballs — carry none, as does T5.5, whose replay cursor `TripReview`
   renders today. The README's status block is projected from those records and says so in its own
   words: *a zero means no Done record, not no completed work*. **Backfilling them is a real task and
   a hazardous one** — every existing record cites PRs, commits and plans, and writing the **36
   built tasks that lack one** from memory is exactly what mistake 7c exists to stop. (Phase 8's
-  three are unrecorded because they are unbuilt, which is a different thing; the totals in the
-  README's block count both.) Whoever takes it on reads the history, not
+  T8.1 is unrecorded because it is parked and not discharged — built in part, with merged
+  instrument and probe evidence, but unfinished — which is a different thing; the totals in
+  the README's block count both.) Whoever takes it on reads the history, not
   the recollection.
 - **Eviction-aware re-download, quota UI and download resume remain unbuilt.** T6.1 fenced them out,
   T6.2's survey answered them as questions rather than scope, `architecture.md`'s claim that the
@@ -169,12 +179,12 @@ thing as a recorded one. `tasks.md` holds the authoritative Done record with one
 requirement; `specs/plans/t7-1b-authoring-list.md` is history now, not a work plan. Nothing under
 `packages/` changed across the whole task.
 
-**`/lab` is still an evidence fixture, and its retirement is still nobody's task yet.** The root
-app now supersedes it as the product demonstration, which is what made retirement *thinkable* —
-but `/lab` remains the subject of five merged browser scenarios, and removing it before each of
-those assertions is mapped to an equivalent root-app oracle would trade known evidence for an
-assumption. The audit is its own cleanup task: per scenario, is there equivalent root-app
-evidence? If yes, migrate or delete; if no, is the old claim still required? Only then remove.
+**`/lab` was still an evidence fixture at this point; T8.3 retired it on 2026-09-23.** The root
+app superseding it as the product demonstration is what made retirement *thinkable*, and the
+audit T8.3 then ran — per assertion, not per scenario — is recorded in `tasks.md`. Everything
+below that names `/lab`, `apps/demo/src/lab/` or a lab scenario is history: the route it
+describes no longer exists, and the fixture track and archives it mentions now serve the harness
+and the root app from `e2e/fixtures/`.
 
 ### T7.1 is closed (2026-09-08)
 

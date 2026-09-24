@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Run the two-arm runtime-mode experiment and report what happened (T8.1 increments 2c and 2d).
+ * Run the two-arm runtime-mode experiment and report what happened (T8.1 increments 2c, 2d, 2e).
  *
  * Sequentially, and on purpose: the failure has only ever been seen in a single full-suite run on
  * a runner, and running two at once would change the contention this holds constant.
@@ -13,7 +13,7 @@
  * reason increment 1 exists.
  *
  * The rules are in `flake-experiment.mjs` and the classification of one run is in
- * `flake-probe.mjs`, so the verdict can be checked without spending two hours of CI.
+ * `flake-probe.mjs`, so the verdict can be checked without spending hours of CI.
  */
 
 import { availableParallelism } from "node:os";
@@ -23,6 +23,7 @@ import { environmentReport } from "./environment-report.mjs";
 import {
   CONTROL,
   RUNS_PER_ARM,
+  exitCode,
   RUNTIME_MODES,
   VARIANT,
   controlBaseline,
@@ -38,7 +39,7 @@ import { spawnArm } from "./spawn-arm.mjs";
 
 const require = createRequire(import.meta.url);
 
-// Before anything is spawned: two hours of runner time should not start because of a typo.
+// Before anything is spawned: hours of runner time should not start because of a typo.
 const refusal = refusedArguments(process.argv.slice(2));
 if (refusal !== undefined) {
   console.error(`probe:flake — ${refusal}`);
@@ -124,6 +125,7 @@ const result = verdict(counts);
 console.log(`\n${report(result).join("\n")}`);
 
 // Green only when the experiment answered its own question: both arms intact and the control
-// reproduced, whichever way the comparison then came out. A contaminated budget or a null control
-// is a real observation and is still red, because nothing follows from it.
-if (result.comparison === undefined) process.exit(1);
+// reproduced, whichever way the comparison then came out. The rule itself lives in
+// `flake-experiment.mjs` and is asserted there — here it would be unreachable without spending a
+// job to find out.
+process.exit(exitCode(result));

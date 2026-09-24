@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The two-arm runtime-mode experiment (T8.1 increments 2c and 2d).
+ * The two-arm runtime-mode experiment (T8.1 increments 2c, 2d and 2e).
  *
  * **What this is for.** Positional narrowing closed: the probe at `c20b417`, with ten diagnostic
  * stages inside the suspect window, returned 0 hits in 100 complete runs against ten hits at the
@@ -15,9 +15,9 @@
  * **Everything selectable is written down here and nowhere else**, because the plan's longest
  * section is about not choosing a bar after seeing the result. The budget, the design rate, the
  * rejection threshold, the test convention and the permitted conclusions are all fixed by the
- * amendments dated 2026-09-17 (2c) and 2026-09-20 (2d); 2d's implementation is under review and
- * its dispatch requires separate approval. Changing any of them means editing this file under
- * review.
+ * amendments dated 2026-09-17 (2c), 2026-09-20 (2d) and 2026-09-23 (2e, approved). **2e's
+ * implementation is under review and its dispatch requires separate approval**, as every dispatch
+ * in this plan has. Changing any of them means editing this file under review.
  *
  * Pure. The spawning belongs to `spawn-arm.mjs` — one spawn path, shared by the runner and by the
  * check that proves it — and the classification of one run belongs to `flake-probe.mjs`: one
@@ -104,11 +104,20 @@ export const SELFTEST_MIXED = "mixed-failure";
 /**
  * The budget, per arm, fixed by the plan rather than at dispatch.
  *
- * 60 is the smallest equal-arm budget meeting an 80% power bar: against a true rate of zero in the
- * variant arm, the two-sided Fisher exact test at α = 0.05 rejects on **six or more** hits in 60,
- * which under `Binomial(60, 0.13)` has probability 80.876%. 59 gives 79.566%.
+ * **150 since increment 2e (option B, ruled 2026-09-23); 60 before it.** Against a true rate of
+ * zero in the variant arm, the two-sided Fisher exact test at α = 0.05 rejects on **six or more**
+ * hits in 150 (`p = 0.029698` at six, `0.060420` at five) — the same threshold six the 60-run
+ * budget had, at a budget two and a half times the size.
+ *
+ * **Not the smallest budget clearing a bar, and deliberately not described as one.** The 60-run
+ * budget genuinely was: it was the minimum for 80% power at a 13% design rate, and said so. 150
+ * is a **fixed budget at a cost ceiling** — 300 runs, one job — whose properties are stated
+ * rather than optimised for; `N = 149` gives 76.003% power at a 5% rate against 150's 76.556%, so
+ * nothing turns on the last run. What 150 buys is stated in {@link POWER_RATES} and in the
+ * one-sided bound a null control now prints: at this budget a control that does not reproduce is
+ * a bound on the day's rate rather than the shrug increment 2d ended in.
  */
-export const RUNS_PER_ARM = 60;
+export const RUNS_PER_ARM = 150;
 
 /**
  * The design rate: the rate measured at `025cdbe`, the last head carrying only increment 1's
@@ -117,6 +126,21 @@ export const RUNS_PER_ARM = 60;
  * recomputing the budget from any of them is not permitted.
  */
 export const DESIGN_RATE = 0.13;
+
+/**
+ * The control rates the report states design power at — a curve, predeclared, not one number.
+ *
+ * **Because 13% is the assumption that failed.** Increments 2c and 2d each printed a single
+ * figure, "80.876% at 13.000% in default", resting on a rate measured once at `025cdbe`; the
+ * runner has since produced 10%, 2%, 10%, 0%, 13.3% and 0%. At `RUNS_PER_ARM = 150` that single
+ * figure would read 99.995% — near-certainty derived from the one number this record has already
+ * disproved, which is worse than the smaller claim it replaces.
+ *
+ * So the report states power at each of these instead: the original design rate, and the two
+ * rates that bracket where the runner has actually been. Fixed here, before dispatch, so the rate
+ * a result is read against cannot be chosen once the result is known.
+ */
+export const POWER_RATES = Object.freeze([DESIGN_RATE, 0.05, 0.03]);
 
 /** The threshold for this one comparison. No other comparison in T8.1 is entitled to it. */
 export const ALPHA = 0.05;
@@ -374,7 +398,7 @@ export function judgeRun({ arm, interpreted, certificate, results, root, baselin
  * in both arms and would have made 2d a comparison between an arm and itself. That Node itself
  * rejects `--no-opt` there covers one spelling on one Node version.
  *
- * Checked up front, because two hours of runner time should not be spent on a comparison that
+ * Checked up front, because hours of runner time should not be spent on a comparison that
  * cannot answer its own question.
  *
  * @param {Record<string, string | undefined>} baseEnv
@@ -434,7 +458,7 @@ function emptyArm() {
 /**
  * Drive the schedule and count what happened, per arm.
  *
- * The runner is injected so the behaviours that matter can be checked without spending two hours
+ * The runner is injected so the behaviours that matter can be checked without spending hours
  * of CI: that the loop **keeps going after a hit** — the deliverable is a pair of rates, not an
  * occurrence — and that a run which could not be spawned stops the experiment rather than being
  * counted as a failing suite.
@@ -588,8 +612,9 @@ function tableProbability(a, b, c, d) {
  *
  * The convention is part of the predeclaration, not an implementation detail: `p = Σ P(table)` over
  * every table with the same margins whose probability is at most the observed table's. The same
- * convention produced the design power of 80.876% at 60 per arm, and a different one — doubling a
- * one-sided tail, say — would move both the power and the threshold this experiment is judged at.
+ * convention produces every design figure this experiment is judged at — the rejection threshold
+ * of six hits and the power curve at `POWER_RATES` — and a different one, doubling a one-sided
+ * tail say, would move all of them.
  *
  * @returns {number}
  */
@@ -633,6 +658,42 @@ export function designPower({ runsPerArm = RUNS_PER_ARM, rate = DESIGN_RATE, alp
     );
   }
   return { rejectAt, power };
+}
+
+/**
+ * The design power at each predeclared rate — what the report prints in place of one figure.
+ *
+ * @param {{ runsPerArm?: number, alpha?: number }} [options]
+ * @returns {{ rate: number, rejectAt: number, power: number }[]}
+ */
+export function designPowerCurve({ runsPerArm = RUNS_PER_ARM, alpha = ALPHA } = {}) {
+  return POWER_RATES.map((rate) => ({ rate, ...designPower({ runsPerArm, rate, alpha }) }));
+}
+
+/**
+ * The one-sided upper confidence bound on a rate that produced **no** hits in `runs`.
+ *
+ * `1 − α^(1/runs)`: the largest rate under which observing zero hits would still not be
+ * surprising at level α. It is the number a null arm is entitled to, and increment 2e is the
+ * first increment whose report prints it rather than leaving it to be computed by hand after the
+ * fact — which is how 2d's 4.87% reached its result section, and is the shape of a figure chosen
+ * once the result is known.
+ *
+ * **Narrower than `clopperPearson`'s upper limit, and not interchangeable with it.** That
+ * function splits α across two tails, so at 0 hits it returns the 97.5% upper limit — 2.429% at
+ * 150 runs against this function's 1.977%. Both are correct for what they are; the report says
+ * which it is printing.
+ *
+ * **A bound on that job's rate, and nothing more.** Not a probability about the true rate, not a
+ * claim that the rate is stable between jobs — the whole finding of 2d is that it is not.
+ *
+ * @param {number} runs
+ * @param {number} [alpha]
+ * @returns {number}
+ */
+export function oneSidedUpperBound(runs, alpha = ALPHA) {
+  if (runs <= 0) throw new Error("a bound needs at least one run");
+  return 1 - Math.pow(alpha, 1 / runs);
 }
 
 /** Whether an arm asked the same question `runsPerArm` times and nothing else happened to it. */
@@ -721,14 +782,14 @@ export function verdict({
     variant.signature,
     runsPerArm - variant.signature,
   );
-  // The **predeclared** power — a constant of the design at `RUNS_PER_ARM` and `DESIGN_RATE`, not
+  // The **predeclared** power — a constant of the design at `RUNS_PER_ARM` and `POWER_RATES`, not
   // a number recomputed from whatever budget happened to run. Recomputing it here would make the
   // reported power follow the data, which is the shape of a post-hoc figure.
-  const { power } = designPower();
+  const curve = designPowerCurve();
   return {
     ...base,
     outcome: p <= alpha ? "differs" : "undistinguished",
-    comparison: { p, alpha, designPower: power },
+    comparison: { p, alpha, designPower: curve },
     statement:
       p <= alpha
         ? `the failure rate differs between ${CONTROL} and ${flagsOf(VARIANT)} on this runner`
@@ -737,6 +798,25 @@ export function verdict({
 }
 
 const percent = (value) => `${(value * 100).toFixed(3)}%`;
+
+/**
+ * The probe job's exit code: 0 only when the experiment answered its own question.
+ *
+ * **Extracted so the rule is falsifiable.** It used to be one predicate at the bottom of
+ * `run-flake-probe.mjs`, where nothing could reach it without running the experiment — so a
+ * change that turned an answerless job green would have gone unnoticed. Increment 2e makes that
+ * change tempting: a null control now carries a finding of its own, the one-sided bound on the
+ * day's control rate, and a reader who saw that might reasonably think the job had produced
+ * something. **It has not produced what the job asks.** The question is whether the rate differs
+ * between runtime modes; a bound on the control is an observation about the day, not an answer
+ * about the variant, and a contaminated budget is not an answer either.
+ *
+ * @param {ReturnType<typeof verdict>} result
+ * @returns {0 | 1}
+ */
+export function exitCode(result) {
+  return result.comparison === undefined ? 1 : 0;
+}
 
 /**
  * What a difference against each variant is, and is not, entitled to mean — printed with the
@@ -815,13 +895,40 @@ export function report(result) {
       "No Fisher test was computed — a p-value is itself the comparison this outcome forbids,",
       "so there is no number being withheld.",
     );
+    // **What a null control is entitled to say, printed rather than left to be worked out.**
+    // Only for a null control, and only because that arm is intact by construction: the
+    // contamination gate runs first, so reaching `control-null` means both arms completed every
+    // run with nothing else wrong. A contaminated arm has no denominator and gets no bound.
+    if (result.outcome === "control-null") {
+      const control = result.arms[CONTROL];
+      lines.push(
+        "",
+        `The one-sided ${String((1 - ALPHA) * 100)}% upper bound on this job's control rate is ` +
+          `${percent(oneSidedUpperBound(control.completed))} ` +
+          `(0 in ${String(control.completed)}).`,
+        "A bound on the rate this job ran at — not a probability about the true rate, and not a",
+        "claim that the rate holds between jobs; increment 2d's finding is that it does not.",
+      );
+    }
     return lines;
   }
 
-  const { p, alpha, designPower: power } = result.comparison;
+  const { p, alpha, designPower: curve } = result.comparison;
+  lines.push(`Fisher exact, two-sided: p = ${p.toFixed(5)} (α = ${String(alpha)})`);
+  // **A curve, not a figure.** One number would have to be quoted at one assumed control rate,
+  // and that assumption is the one this plan has already had contradicted — see `POWER_RATES`.
+  // `RUNS_PER_ARM`, not `result.runsPerArm`: this curve is a constant of the **predeclared
+  // design**, so the budget it names must be the design's own. Reading the run's budget here
+  // would print a threshold computed for 150 beside whatever number happened to run, which is
+  // two different designs in one sentence. The run's own budget is on every arm's first line.
   lines.push(
-    `Fisher exact, two-sided: p = ${p.toFixed(5)} (α = ${String(alpha)})`,
-    `Predeclared design power: ${percent(power)} at ${percent(DESIGN_RATE)} in ${CONTROL}`,
+    `Predeclared design power, at a true variant rate of zero (rejects at ` +
+      `≥ ${String(curve[0].rejectAt)} hits in ${String(RUNS_PER_ARM)}):`,
+  );
+  for (const { rate, power } of curve) {
+    lines.push(`  if ${CONTROL} runs at ${percent(rate).padStart(7)}   ${percent(power)}`);
+  }
+  lines.push(
     "",
     `${result.outcome === "differs" ? "DIFFERS" : "UNDISTINGUISHED"}: ${result.statement}.`,
   );

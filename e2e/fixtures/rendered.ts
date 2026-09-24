@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Locator, Page } from "@playwright/test";
+import type { Locator } from "@playwright/test";
 
 /**
  * When a map has finished drawing, established from the pixels rather than from an event.
  *
- * **Why not `map.once("idle")`.** `MapController` publishes no map handle, and `/lab` is
+ * **Why not `map.once("idle")`.** `MapController` publishes no map handle, and the demo is
  * assembled from package entry points only, so MapLibre's own settled-render event is not
  * reachable from a scenario. Adding a getter for it would be engine surface that exists only for
  * a test — a trade this plan has already refused once.
@@ -96,11 +96,6 @@ export async function settleRender(
     await target.page().waitForTimeout(intervalMs);
   }
   throw new RenderNeverSettledError(captures, Date.now() - startedAt, stableCaptures);
-}
-
-/** The element `/lab` draws into. Named once so every capture in every spec frames the same box. */
-export function mapOf(page: Page): Locator {
-  return page.locator("#map");
 }
 
 /**

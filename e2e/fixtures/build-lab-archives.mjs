@@ -3,10 +3,10 @@
 /**
  * Cuts the synthetic archives the browser scenarios render (T4.6; basemap added by T7.1 4b).
  *
- * **Three files, two consumers.** The terrain/contour pair is `/lab`'s and is unchanged — its
- * route, stack and scenarios still see exactly those two. The basemap is the *root route's*, for
- * the online test that the demo declares and draws a third source; `/lab` neither declares nor
- * reads it. These files are lab-named because they predate the demo having archives of its own.
+ * **Three files.** The terrain/contour pair is what the app's scenarios and the renderer proofs
+ * read; the basemap is the app's alone, for the online test that the demo declares and draws a
+ * third source. These files are lab-named because they predate the demo having archives of its
+ * own; the `/lab` route they were named for is retired (T8.3).
  *
  * **The real pipeline, minus the network.** Every stage downstream of the source is the one the
  * production build uses — `stitchSurface`'s output shape, `renderTerrariumTile`, `encodePng`,
@@ -67,7 +67,7 @@ function syntheticSurface(envelope) {
 }
 
 /**
- * Build the archives: `/lab`'s terrain and contour pair, and the root route's basemap.
+ * Build the archives: the terrain and contour pair, and the app's basemap.
  *
  * @param {{ bounds: number[], minZoom: number, maxZoom: number, contourIntervalM: number }} region
  * @returns {Promise<{

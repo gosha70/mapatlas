@@ -86,9 +86,9 @@ describe("demoTileSources", () => {
     }
   });
 
-  it("keeps its ids distinct from the lab's, because the two stacks diverge", () => {
-    // They look alike today and are scheduled to differ: the basemap increment replaces this
-    // stack with a self-hosted extract while `/lab`'s stays cut for its pixel differential.
+  it("keeps its ids distinct from the test fixtures', because the two stacks differ", () => {
+    // They look alike and are not the same stack: this one carries the self-hosted basemap,
+    // the renderer proofs' (`e2e/fixtures/fixture-stack.ts`) stays cut for a pixel differential.
     const tiles = demoTileSources({
       terrainUrl: "https://a.invalid/t.pmtiles",
       contourUrl: "https://a.invalid/c.pmtiles",
@@ -122,7 +122,7 @@ describe("the camera opens over the archives", () => {
    * `DEMO_REGION` is a copy the browser bundle needs. Judging the camera against that same copy
    * would let the two drift together: widen the copy, the camera follows it off the coverage,
    * and the check still passes while the map renders blank. The archive declaration is the
-   * authority, so the test reads it — the same rule `/lab`'s copy is held to.
+   * authority, so the test reads it — the same rule the fixture's own copy is held to.
    */
   const declared = JSON.parse(
     readFileSync(new URL("../../../../fixtures/vertical/region.json", import.meta.url), "utf8"),

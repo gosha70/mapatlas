@@ -36,6 +36,11 @@ test.use({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
 
 /** The production bundle, built and served by this lane's fourth web server. */
 const APP = "http://127.0.0.1:5177";
+/**
+ * A non-root navigation path. Online, the preview's SPA fallback serves it like any other; what
+ * the worker must not do is answer it from the precache once the origin is cut.
+ */
+const NOT_THE_SHELL = "/not-the-shell";
 const ARCHIVES = "http://127.0.0.1:5176";
 const ARCHIVE_FILES = ["terrain.pmtiles", "contours.pmtiles", "basemap.pmtiles"] as const;
 
@@ -198,18 +203,21 @@ test("the built shell boots with its own origin cut, and the worker owns no arch
   expect(consoleFor(page).problems()).toEqual([]);
 });
 
-test("the worker answers the application's root and leaves /lab to the network", async ({
+test("the worker answers the application's root and leaves any other navigation path to the network", async ({
   context,
   page,
 }) => {
   /**
-   * **The scope boundary, as a pair.** `/lab` is T4.6's fixture and the subject of five merged
-   * scenarios; a worker that answered its navigations would change what those measure. A test
-   * that only asserted `/lab` fails offline would also pass with the worker never installed at
-   * all, so the two halves are asserted against one another: with the app origin cut, `/` comes
-   * up out of the precache and `/lab` does not come up at all.
+   * **The scope boundary, as a pair.** The worker normalises navigations to `/` only; every
+   * other navigation path is left to the network. A test that only asserted such a path fails
+   * with the origin cut would also pass with the worker never installed at all, so the two
+   * halves are asserted against one another: with the app origin cut, `/` comes up out of the
+   * precache and a non-root navigation path does not come up at all.
    *
-   * This is also where a removed route would show: without the abort, `/lab` would simply load.
+   * That path used to be `/lab`, the fixture route, and the assertion was that the worker left
+   * that route alone; T8.3 retired the route, and with it the claim about it. What remains is
+   * the worker's own rule, probed with a non-root path — one the preview serves online, exactly
+   * as it served `/lab`, and which fails here only because the origin is cut.
    */
   const console_ = watchConsole(page);
   console_.expect(
@@ -227,8 +235,8 @@ test("the worker answers the application's root and leaves /lab to the network",
   await open(page);
 
   await expect(
-    page.goto(`${APP}/lab`),
-    "/lab loaded with its origin cut, so the worker is answering for it",
+    page.goto(`${APP}${NOT_THE_SHELL}`),
+    "a non-root navigation path loaded with its origin cut, so the worker is answering for it",
   ).rejects.toThrow();
-  expect(refused.some((target) => target.endsWith("/lab"))).toBe(true);
+  expect(refused.some((target) => target.endsWith(NOT_THE_SHELL))).toBe(true);
 });

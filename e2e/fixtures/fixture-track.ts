@@ -1,30 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The vertical fixture's recorded track (T4.6).
+ * The vertical fixture's recorded track (T4.6), and the views the renderer proofs take of it.
  *
- * Generated from a seed rather than checked in, so `/lab` and the offline browser scenario read
- * the *same* track without a large JSON artifact in the repository — and so a reviewer can see
- * what it is instead of scrolling past five thousand coordinates.
+ * Generated from a seed rather than checked in, so every consumer reads the *same* track without
+ * a large JSON artifact in the repository — and so a reviewer can see what it is instead of
+ * scrolling past five thousand coordinates. It was `/lab`'s recording until T8.3 retired that
+ * route; now it is the harness's data, generated in Node and handed to the browser, so only one
+ * runtime ever generates it.
  *
- * **Determinism is Node-to-Node, not yet Node-to-browser.** The same seed gives the same track
- * in one runtime; the coordinate walk uses `atan2`, `cos`, `sin` and `hypot` and accumulates
- * floating-point positions, none of which is required to agree bit-for-bit across engines. The
- * seeded generator itself is integer arithmetic, which is why `Math.random` is unusable here,
- * but that alone does not make the *track* identical everywhere. Establishing that needs the
- * browser to serialise its own track and Node to compare — the offline scenario's job, and open
- * until then.
+ * **Determinism is Node-to-Node.** The same seed gives the same track in one runtime; the
+ * coordinate walk uses `atan2`, `cos`, `sin` and `hypot` and accumulates floating-point
+ * positions, none of which is required to agree bit-for-bit across engines. The seeded generator
+ * itself is integer arithmetic, which is why `Math.random` is unusable here. Cross-runtime
+ * identity is not claimed and, with a single generating runtime, no longer needed.
  *
  * **It is finalised by the engine.** `generateFixtureTrack` hands raw points and segments to
  * `finalizeTrack`, so `stats` and `simplifiedSegments` are the engine's own output and the
  * geometry has passed `assertValidTrackGeometry`. A hand-assembled object would happily carry
  * shapes the engine rejects, and the fixture would then be testing itself.
- *
- * Domain-free by construction: the two event marks carry neutral categories, because no domain
- * vocabulary may enter this repository — not in code, not in fixtures.
  */
 
-import { finalizeTrack, type MapEvent, type Track, type TrackPoint } from "@mapatlas/core";
+import { finalizeTrack, type Track, type TrackPoint } from "@mapatlas/core";
 
 /**
  * The declared region the terrain and contour archives cover. The track stays inside it.
@@ -53,7 +50,11 @@ export const FIXTURE_REGION = Object.freeze({
 const SAMPLE_INTERVAL_MS = 2_000;
 const WALKING_SPEED_MPS = 1.4;
 
-/** T4.6 asks for at least five thousand raw points; two segments of this many clear it. */
+/**
+ * Held at the count the fixture was cut with. The 5,000-point requirement it once met belonged
+ * to the retired performance baseline (T8.3); the count stays because changing it changes the
+ * track, and the renderer proof's compared pixel figures — legs, corridor — are of this track.
+ */
 const POINTS_PER_SEGMENT = 2_700;
 
 /** How long the recorder is paused between the two segments. */
@@ -66,8 +67,8 @@ const METRES_PER_DEGREE_LON = 77_500;
 /**
  * A seeded generator whose arithmetic is entirely integer.
  *
- * `Math.random` is unusable here — the same seed has to produce the same track in Node and in a
- * browser, or `/lab` and the offline scenario are looking at different fixtures. mulberry32 is
+ * `Math.random` is unusable here — the same seed has to produce the same track on every run, or
+ * two renders compared against each other are looking at different fixtures. mulberry32 is
  * used rather than anything trigonometric for the same reason: `Math.sin`-based hashes are not
  * required to agree between engines, and a track that differs in its last decimal place is a
  * track whose serialisation differs.
@@ -270,38 +271,67 @@ export function generateFixtureTrack(seed = 20_260_831): Track {
   });
 }
 
+/** The part of a two-segment recording a renderer proof draws. */
+export type SegmentView = "both" | "one" | "two" | "bridge";
+
 /**
- * Two consumer-defined marks, positioned on the track by index so they cannot drift off it.
+ * The zoom the pause is framed at.
  *
- * Categories are neutral: the presentation seam keys off `category` (§8), and what a consumer
- * calls its events is the consumer's business. Naming them here would put domain vocabulary in
- * the engine's own fixtures, which is the one thing this repository does not allow.
+ * 17 puts the 94.6 m gap at roughly 105 px at this latitude — wide enough that a bridge is
+ * unmistakable. At the whole-track zoom a line drawn straight across the gap lands entirely
+ * inside the antialiased ends of the two segments and leaves **no** ink of its own — measured:
+ * the bridged control's strictly-new pixels came to zero. A corridor that cannot hold a bridge
+ * cannot show its absence either.
  */
-export function generateFixtureEvents(track: Track): MapEvent[] {
-  const marks = [
-    { index: Math.floor(POINTS_PER_SEGMENT * 0.4), category: "observation", comment: "First mark" },
-    {
-      index: POINTS_PER_SEGMENT + Math.floor(POINTS_PER_SEGMENT * 0.6),
-      category: "sample",
-      comment: "Second mark, after the pause",
-    },
-  ];
-  return marks.map(({ index, category, comment }, order) => {
-    const point = track.points[index];
-    if (point === undefined) {
-      throw new Error(
-        `fixture event ${String(order)} refers to point ${String(index)}, which the track does not have`,
-      );
-    }
-    return {
-      id: `fixture-event-${String(order + 1)}`,
-      trackId: track.id,
-      position: { lat: point.lat, lng: point.lng },
-      occurredAt: point.t,
-      comment,
-      media: [],
-      tags: [],
-      category,
-    };
+export const PAUSE_FOCUS_ZOOM = 17;
+
+/** The two points either side of the pause — a property of the input, read from the input. */
+export function pauseEndpoints(track: Track): { from: TrackPoint; to: TrackPoint } {
+  const first = track.segments[0];
+  const second = track.segments[1];
+  if (first === undefined || second === undefined) {
+    throw new Error("a pause needs a two-segment recording");
+  }
+  const from = track.points[first.endIndex];
+  const to = track.points[second.startIndex];
+  if (from === undefined || to === undefined) {
+    throw new Error("the recording's segments do not index its own points");
+  }
+  return { from, to };
+}
+
+/**
+ * The part of a recording a view draws, as a track in its own right.
+ *
+ * Rebuilt through `finalizeTrack` rather than assembled by hand: the renderer reads
+ * `simplifiedSegments`, so a track carrying the whole recording's cache under one segment's
+ * points would draw geometry the caller never selected.
+ *
+ * `"bridge"` renders the two points either side of the pause as one two-point segment — the
+ * track the renderer **must** draw across, whose strictly-new ink is the pause corridor.
+ */
+export function selectSegments(track: Track, view: SegmentView): Track {
+  if (view === "both") return track;
+
+  const first = track.segments[0];
+  const second = track.segments[1];
+  if (first === undefined || second === undefined) {
+    throw new Error(`segments=${view} needs a two-segment recording`);
+  }
+
+  if (view === "bridge") {
+    const { from, to } = pauseEndpoints(track);
+    return finalizeTrack({
+      ...track,
+      points: [from, to],
+      segments: [{ ...first, startIndex: 0, endIndex: 1 }],
+    });
+  }
+
+  const segment = view === "one" ? first : second;
+  return finalizeTrack({
+    ...track,
+    points: track.points.slice(segment.startIndex, segment.endIndex + 1),
+    segments: [{ ...segment, startIndex: 0, endIndex: segment.endIndex - segment.startIndex }],
   });
 }

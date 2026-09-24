@@ -185,21 +185,3 @@ test("the installation guidance is on the root route, and offers nothing to clic
   expect(steps[0]).toMatch(/install first/i);
   expect(steps[steps.length - 1]).toMatch(/installed app/i);
 });
-
-test("the fixture route is untouched by the control", async ({ page }) => {
-  // T6.1's evidence runs through `/lab`, and the control has nothing to do with it. The full
-  // scenarios still guard that; this is the cheap direct check that the control did not leak
-  // onto the route, which is the way a shared `#app` mount would have gone wrong.
-  await page.goto(`${DEMO}/lab`, { waitUntil: "load" });
-  await page.waitForSelector('#status[data-assembled="true"], #status[data-failed="true"]', {
-    timeout: 120_000,
-  });
-
-  await expect(page.locator("#persistence")).toHaveCount(0);
-  await expect(page.locator("#install-guidance")).toHaveCount(0);
-  expect(await persistCalls(page), "/lab requested persistence").toBe(0);
-
-  // And the root route's stylesheet cannot reach here: every rule it adds is scoped under this
-  // attribute, so its absence is the structural guarantee rather than a promise about selectors.
-  await expect(page.locator("body")).not.toHaveAttribute("data-route", "root");
-});

@@ -3,7 +3,7 @@
 /**
  * Prove, with real subprocesses, that the experiment's two arms run different runtimes.
  *
- * **Why this exists and why it cannot be a unit test.** T8.1 increments 2c and 2d compare default
+ * **Why this exists and why it cannot be a unit test.** T8.1 increments 2c, 2d and 2e compare default
  * Node against one other runtime mode — `--jitless`, then `--no-opt` — over the identical
  * `npm run test:coverage`, with the difference travelling as an environment marker that
  * `vitest.config.ts` turns into the workers' `execArgv`. Two designs
@@ -20,7 +20,7 @@
  * Neither is reachable by checking what we *build*. Only spawning the thing and reading what the
  * child actually got will do, which is what this does.
  *
- * **It is not part of `test:coverage`, deliberately.** The experiment repeats that command 120
+ * **It is not part of `test:coverage`, deliberately.** The experiment repeats that command 300
  * times and this spawns a nested Vitest run; putting it inside would inflate every run of the
  * thing being measured. It runs in `npm run verify` instead — a standing guard on the transport,
  * outside the measured suite. The per-run certificate is written by
@@ -28,7 +28,7 @@
  *
  * **It spawns what the runner spawns.** Both arms come through `spawnArm`, the runner's own spawn
  * path, with the environment `spawnPlan` builds for that arm — so the control here is
- * `marker=default` over the 95-file suite, as in the experiment, and not an unmarked run the
+ * `marker=default` over the probed suite, as in the experiment, and not an unmarked run the
  * experiment never makes. An earlier version built its own environment and made its own
  * `spawnSync` call, and so stayed green while the runner's call delivered no environment at all.
  * The facts come back the way the runner gets them, as files, and are judged by the same
@@ -43,7 +43,7 @@
  *    for: `--max-opt=2` and `--no-opt --opt` both get past a search.
  * 2. *The two arms collect the same files.* The marker being present in both arms does not show
  *    it: an exclusion keyed to the variant alone left both arms marked, every unit test green, and
- *    Vitest collecting 97 files for one arm and 95 for the other. So the collected sets are
+ *    Vitest collecting two more files for one arm than the other. So the collected sets are
  *    compared, through the real config — and the unmarked suite is required to still contain both
  *    excluded files, since an exclusion that leaked into ordinary runs would be two test files
  *    nobody runs and nobody is told about.

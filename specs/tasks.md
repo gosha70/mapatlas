@@ -1564,21 +1564,34 @@ and can be picked up like anything else. Unowned and unordered.
   knife edge (both boundaries are exact lattice integers), and test-order dependence inside the
   file (fifteen shuffled runs).
 
-  **Parked, 2026-09-22 — open, unowned, and not discharged.** This is a status record, not a Done
-  record: the acceptance criterion above is **not met** — no cause is identified, the failure is
-  not reproducible on demand, and no fix has been attempted. The owner ruled option A of the plan's
-  amendment of 2026-09-21: the runtime-mode line stops here. What stands, all recorded on issue #30
+  **Resumed, 2026-09-23 — open, and not discharged.** This is a status record, not a Done record:
+  the acceptance criterion above is **not met** — no cause is identified, the failure is not
+  reproducible on demand, and no fix has been attempted. Parked on 2026-09-22 under option A of
+  the plan's amendment of 2026-09-21, and **un-parked on 2026-09-23 when the owner ruled option
+  B**: one dispatch of the default-against-`--no-opt` cut at `N = 150` per arm, a budget fixed
+  before dispatch so that a null control is itself a finding — the one-sided 95% upper bound on
+  that job's control rate, 1.977%, which the report now prints rather than leaving to be computed
+  by hand as 2d's was. **2e is a follow-on, not 2d at a larger budget**: the measured suite is 91
+  files where 2c's and 2d's was 95 (T8.2 added one, T8.3 removed five), nothing pinned the count,
+  and the suite is the workload whose flakiness is measured — so 2e is read on its own terms and
+  the 95-file evidence, `M = 61` included, stays scoped to that suite. Increment 2e is
+  **implemented and under review; no dispatch has been made**, and the dispatch is a separate
+  instruction. What stands, all recorded on issue #30
   and in [`specs/plans/t8-1-fixture-flake.md`](plans/t8-1-fixture-flake.md): the failure is
   localised to `cropFor`'s construction of the second crop (a position, not a mechanism); the rate
   differed between default Node and `--jitless` on one runner on one day (2c, 8/60 against 0/60,
   p = 0.00609); default against `--no-opt` was inconclusive because the control did not reproduce
   (2d, 0/60 and 0/60); and the default-Node rate on the shared runner has been measured at 13, 10,
   2, 10, 0 per 100 and 8, 0 per 60, so it is not stable across jobs and no fixed budget can rely on
-  it. `M` stays frozen (61 is the candidate for the exact 95-file suite, by the owner's ruling of
-  2026-09-20); the lattice-placement candidate stays parked as symptom immunity. The probe
+  it — **each of those figures on a workload that has since changed twice**. `M` stays frozen (61
+  is the candidate for the exact 95-file suite, by the owner's ruling of 2026-09-20, and that
+  suite is not this tree's); the lattice-placement candidate stays parked as symptom immunity. The probe
   workflow, `check:runtime-mode` and its CI step are **kept**, deliberately: they are the
-  instrument any resumption starts from, and the plan's amendment lists the costed options. A
-  resumption needs an owner's ruling, not a re-dispatch.
+  instrument the resumption starts from, and the plan's amendment of 2026-09-21 lists the costed
+  options that ruling chose among. 2e's own predeclaration — the budget, its power curve, the
+  dispatch rule, and the ≤ 15% union bound across the three exploratory tests — is the amendment
+  of 2026-09-23 in the same plan. **The result stands however it comes out: no repeat, and no
+  second job**, which is what keeps the comparison from being selected by its control outcome.
 
 - **T8.2 Per-package READMEs.** Five of the six packages ship **no README at all** — only
   `@mapatlas/maplibre` has one, and `check-packaging.mjs` asserts merely that it *exists* in the

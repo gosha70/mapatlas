@@ -18,6 +18,9 @@ import {
   clopperPearson,
   controlBaseline,
   designPower,
+  designPowerCurve,
+  exitCode,
+  oneSidedUpperBound,
   fisherExactTwoSided,
   judgeRun,
   refusedArguments,
@@ -79,23 +82,61 @@ const pathsTwo = {
 
 describe("the budget and the design it was chosen for", () => {
   /**
-   * **The number in the plan, recomputed here.** `N = 60` is not a preference: it is the smallest
-   * equal-arm budget whose power against a zero-rate variant arm clears 80%, under the exact test
-   * convention this module implements. Quoting it in prose and hard-coding it in source without a
-   * check would let the two drift apart — and the budget is the one thing the plan forbids
-   * choosing after the fact.
+   * **The numbers in the plan, recomputed here.** The budget is the one thing the plan forbids
+   * choosing after the fact, so quoting it in prose and hard-coding it in source without a check
+   * would let the two drift apart. Increment 2e's amendment states every figure below.
+   *
+   * **And a claim this deliberately does *not* make.** Until 2e the budget was 60, which genuinely
+   * was the smallest equal-arm budget clearing 80% power at the design rate, and this test
+   * asserted that minimality. 150 is not minimal for any bar — `N = 149` clears 76.003% against
+   * 150's 76.556% — it is a fixed budget at a cost ceiling whose properties are then stated. A
+   * test asserting minimality here would be checking a sentence that is no longer true.
    */
-  it("is the smallest equal-arm budget clearing 80% power at the design rate", () => {
-    expect(RUNS_PER_ARM).toBe(60);
+  it("is the fixed budget increment 2e predeclared, with the properties the plan states", () => {
+    expect(RUNS_PER_ARM).toBe(150);
     expect(DESIGN_RATE).toBe(0.13);
 
-    const at60 = designPower({ runsPerArm: 60 });
-    const at59 = designPower({ runsPerArm: 59 });
+    const at150 = designPower({ runsPerArm: 150 });
+    expect(at150.rejectAt).toBe(6);
+    expect(at150.power * 100).toBeCloseTo(99.995, 3);
 
-    expect(at60.rejectAt).toBe(6);
-    expect(at60.power * 100).toBeCloseTo(80.876, 3);
-    expect(at59.power * 100).toBeCloseTo(79.566, 3);
-    expect(at59.power).toBeLessThan(0.8);
+    // The curve the report prints, rate by rate, against a zero-rate variant arm.
+    expect(designPowerCurve()).toEqual([
+      { rate: 0.13, rejectAt: 6, power: expect.closeTo(0.99995233, 8) },
+      { rate: 0.05, rejectAt: 6, power: expect.closeTo(0.7655645, 7) },
+      { rate: 0.03, rejectAt: 6, power: expect.closeTo(0.29574429, 8) },
+    ]);
+
+    // The amendment's table also quotes 2c's own lower bound, which is not a printed rate but is
+    // a stated figure — so it is asserted too, and the claim that every figure in that table is
+    // checked here stays true.
+    expect(designPower({ runsPerArm: 150, rate: 0.05936 }).power).toBeCloseTo(0.88580995805, 10);
+
+    // Nothing turns on the last run: the budget is a ceiling, not a minimum.
+    expect(designPower({ runsPerArm: 149, rate: 0.05 }).power * 100).toBeCloseTo(76.003, 3);
+  });
+
+  /**
+   * **What a null control is entitled to say.** Increment 2d's null control said nothing but
+   * "inconclusive", and the 4.87% bound its result section quotes was computed by hand after the
+   * fact — a figure produced once the result was known. 2e prints it, so the finding does not
+   * depend on someone remembering to do the arithmetic.
+   *
+   * Checked against exact arithmetic and against the two-tailed interval it must not be confused
+   * with: `clopperPearson` splits α across both tails, so at zero hits it returns the 97.5% upper
+   * limit, which is the larger and weaker number.
+   */
+  it("bounds a null arm one-sidedly, and not with the two-tailed interval", () => {
+    // 1 − 0.05^(1/150), independently: 0.019773438…
+    expect(oneSidedUpperBound(150) * 100).toBeCloseTo(1.977, 3);
+    expect(oneSidedUpperBound(60) * 100).toBeCloseTo(4.87, 2);
+
+    // Strictly tighter than the two-sided upper limit at the same α, at the same budget.
+    expect(oneSidedUpperBound(150)).toBeLessThan(clopperPearson(0, 150).hi);
+    expect(clopperPearson(0, 150).hi * 100).toBeCloseTo(2.429, 3);
+
+    // A bound needs a denominator.
+    expect(() => oneSidedUpperBound(0)).toThrow(/at least one run/);
   });
 
   it("refuses an argument rather than starting a two-hour loop on a typo", () => {
@@ -123,6 +164,16 @@ describe("the exact statistics, against values computed independently", () => {
   });
 
   it("brackets the rejection threshold at the budget it was sized for", () => {
+    // **Increment 2e's budget**, which is what `RUNS_PER_ARM` is now: six hits reject, five do
+    // not. The 60-per-arm pair below is 2d's and is kept as history — the two budgets happen to
+    // share the threshold six, and a test that only checked 60 would have gone on passing while
+    // describing a boundary this experiment no longer runs at.
+    expect(fisherExactTwoSided(6, 144, 0, 150)).toBeCloseTo(0.02969809196780457, 12);
+    expect(fisherExactTwoSided(5, 145, 0, 150)).toBeCloseTo(0.060420256072429984, 12);
+    expect(fisherExactTwoSided(6, 144, 0, 150)).toBeLessThanOrEqual(ALPHA);
+    expect(fisherExactTwoSided(5, 145, 0, 150)).toBeGreaterThan(ALPHA);
+
+    // 2c's and 2d's budget, retained so their recorded p-values stay checkable here.
     expect(fisherExactTwoSided(6, 54, 0, 60)).toBeCloseTo(0.027411633549740966, 12);
     expect(fisherExactTwoSided(5, 55, 0, 60)).toBeCloseTo(0.05731523378582202, 12);
     expect(fisherExactTwoSided(6, 54, 0, 60)).toBeLessThanOrEqual(ALPHA);
@@ -196,7 +247,7 @@ describe("the arms differ in the runtime mode and in nothing else", () => {
    * **Both arms are marked — necessary for running the same suite, and not sufficient.** The
    * marker also excludes two files a worker without WebAssembly cannot run, and excluding them
    * from one arm only would add "which tests ran" as a second difference. But an exclusion keyed
-   * to the variant's *value* leaves this green with the arms collecting 97 and 95 files, so the
+   * to the variant's *value* leaves this green with the arms collecting two different sets, so the
    * property itself — identical collected suites — is held by `check-runtime-mode.mjs`, which
    * lists what Vitest collects for each arm through the real config.
    */
@@ -379,7 +430,7 @@ describe("the arms differ in the runtime mode and in nothing else", () => {
     expect(refusedEnvironment({ [RUNTIME_MODE_ENV]: VARIANT })).toMatch(/must run default Node/);
   });
 
-  /** The self-test fails a fixture on purpose; inherited, it would fail all 120 runs. */
+  /** The self-test fails a fixture on purpose; inherited, it would fail all 300 runs. */
   it("refuses to run when the check's self-test is inherited", () => {
     expect(refusedEnvironment({ [SELFTEST_ENV]: SELFTEST_MIXED })).toMatch(/fail every run/);
   });
@@ -869,8 +920,14 @@ describe("the report, in three tiers", () => {
   it("reports the p-value and the predeclared design power only past both gates", () => {
     const text = report(intactPair()).join("\n");
     expect(text).toMatch(/Fisher exact, two-sided: p = 0\.40000/);
-    expect(text).toMatch(/Predeclared design power: 80\.876%/);
     expect(text).not.toMatch(/achieved power/i);
+
+    // **The curve, not one figure.** A single number would have to be quoted at one assumed
+    // control rate, and that assumption is the one the record has already contradicted.
+    expect(text).toMatch(/rejects at ≥ 6 hits in 150/);
+    expect(text).toMatch(/if default runs at 13\.000% {3}99\.995%/);
+    expect(text).toMatch(/if default runs at {2}5\.000% {3}76\.556%/);
+    expect(text).toMatch(/if default runs at {2}3\.000% {3}29\.574%/);
   });
 
   it("says no p-value was computed, rather than withholding one, when a gate stopped it", () => {
@@ -881,6 +938,68 @@ describe("the report, in three tiers", () => {
     expect(text).toMatch(/No Fisher test was computed/);
     expect(text).toMatch(/there is no number being withheld/);
     expect(text).not.toMatch(/p = /);
+  });
+
+  /**
+   * **A null control now carries its own bound** (increment 2e). Asserted on a real `verdict`, so
+   * the denominator is the arm's own completed count rather than a constant — at four runs the
+   * bound is 52.713%, which is what a four-run null is actually worth and is visibly useless. The
+   * point is that the number is printed and derived, not that it is small.
+   */
+  it("gives a null control the one-sided bound it is entitled to, and scopes it to the job", () => {
+    const text = report(
+      verdict({ runsPerArm: 4, arms: arms(arm({ signature: 0 }), arm({ signature: 0 })) }),
+    ).join("\n");
+
+    expect(text).toMatch(
+      /one-sided 95% upper bound on this job's control rate is 52\.713% \(0 in 4\)/,
+    );
+    // The caveat travels with the number, so the bound cannot be read as a claim about the
+    // runner in general — which is precisely what increment 2d disproved.
+    expect(text).toMatch(/not a probability about the true rate/);
+    expect(text).toMatch(/not a\n?.*claim that the rate holds between jobs/);
+  });
+
+  /**
+   * **Falsifier: an answerless job turning green.** Increment 2e gives a null control a finding of
+   * its own — the bound above — and a reader who saw one might think the job had produced what it
+   * asks for. It has not: the question is whether the rate differs between runtime modes, and a
+   * bound on the control is an observation about the day. Asserted on every outcome, so that
+   * "green" cannot be widened one case at a time.
+   */
+  it("exits non-zero for every outcome that did not answer the question", () => {
+    const answered = verdict({
+      runsPerArm: 4,
+      arms: arms(arm({ signature: 2 }), arm({ signature: 0 })),
+      fisher: () => 0.01,
+    });
+    expect(exitCode(answered)).toBe(0);
+
+    const nullControl = verdict({
+      runsPerArm: 4,
+      arms: arms(arm({ signature: 0 }), arm({ signature: 0 })),
+    });
+    const contaminated = verdict({
+      runsPerArm: 4,
+      arms: arms(arm({ signature: 2, other: 1 }), arm({ signature: 0 })),
+    });
+    expect(nullControl.outcome).toBe("control-null");
+    expect(contaminated.outcome).toBe("contaminated");
+    expect(exitCode(nullControl)).toBe(1);
+    expect(exitCode(contaminated)).toBe(1);
+  });
+
+  /** A contaminated arm has no denominator, so it gets no bound — the gate order decides this. */
+  it("gives a contaminated experiment no bound at all", () => {
+    const text = report(
+      verdict({
+        runsPerArm: 4,
+        arms: arms(arm({ signature: 0, other: 1 }), arm({ signature: 0 })),
+      }),
+    ).join("\n");
+
+    expect(text).toMatch(/contaminated/);
+    expect(text).not.toMatch(/upper bound/);
   });
 
   /** The permitted wording, and the limit that travels with it. */

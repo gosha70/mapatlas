@@ -4,7 +4,7 @@ import { defineConfig } from "vitest/config";
 import { RUNTIME_MODES } from "./scripts/flake-experiment.mjs";
 
 /**
- * T8.1 increments 2c and 2d, and nothing else: the runtime mode the **test workers** run in.
+ * T8.1 increments 2c, 2d and 2e, and nothing else: the runtime mode the **test workers** run in.
  *
  * The experiment compares default Node against one other runtime mode — `--jitless` in 2c,
  * `--no-opt` in 2d — over the identical `npm run test:coverage`, so the difference cannot travel
@@ -32,22 +32,37 @@ const workerExecArgv = [...(RUNTIME_MODES[probeRuntimeMode ?? ""] ?? [])];
  * run an unrelated failure and every experiment contaminated.
  *
  * **In 2d the reason they are excluded has changed, and they stay excluded.** Both *run* under
- * `--no-opt`, which does not take WebAssembly away. They are kept out **for suite identity with
+ * `--no-opt`, which does not take WebAssembly away. They were kept out **for suite identity with
  * 2c's control** — the only matched control on record, and the suite the validation candidate
  * `M = 61` was derived on. Letting them back in because the variant no longer needs them gone
- * would change the measured suite between two experiments that are read side by side.
+ * would change the measured suite between two experiments read side by side.
+ *
+ * **That identity did not hold, and the exclusion was never what could preserve it** (recorded
+ * 2026-09-24, increment 2e). The suite is the *workload* whose flakiness is being measured, and
+ * it drifted twice with nothing to stop it: T8.2 added a test file (97 → 98 unmarked) and T8.3
+ * removed five (98 → 93). While probing it is **91 files, not 95**. Holding two files out cannot
+ * hold the other ninety fixed, and nothing in this repository pins the count — `check-runtime-mode`
+ * compares the two *arms* to each other, which is a different property and still holds. So 2e
+ * measures a different workload from 2c and 2d, and says so in its own amendment rather than
+ * claiming a continuity the tree does not have.
+ *
+ * **And no count is pinned here, by ruling** (2026-09-24): a standing assertion on the number
+ * would fail on every added test file, and would still pass a *same-count exchange* — which is
+ * what happened between `025cdbe` and 2d's tree, 95 files either side with two members swapped.
+ * The reviewed tree is the pin: a dispatch runs against the exact merge that was approved.
  *
  * **Excluded when the marker is set at all, whichever arm set it**, so the two arms still run the
  * identical suite and differ in exactly one thing. Excluding them from the variant alone would add
  * a second difference — which tests ran — to an experiment whose whole design is that there is
  * only one. `check:runtime-mode` compares the two arms' collected files through this config.
  *
- * **The measured suite is not the one the 13% design rate came from, in membership.** `025cdbe`
- * selected 95 test files. This tree selects 97 — it adds `flake-experiment.test.mjs` and
- * `runtime-mode.fixture.test.mjs` — and while probing excludes these two: 95 again, with two
- * members exchanged. A control hit would establish that the failure *reproduces* on this suite;
- * it would not establish that its rate is unchanged. The design power is conditional on a 13%
- * control rate, which this suite is not known to have.
+ * **The measured suite is not the one the 13% design rate came from, in membership or in size.**
+ * `025cdbe` selected 95 test files. At 2d's head this tree selected 97 and, while probing, 95
+ * again with two members exchanged. **It now selects 93, and 91 while probing** — the counts the
+ * check prints on every run, and the ones any result must be read against. A control hit would
+ * establish that the failure *reproduces* on the suite that ran; it would not establish that its
+ * rate is unchanged from any earlier one. The 13% design rate is conditional on a suite two
+ * workload changes ago.
  */
 const excludedWhileProbing =
   probeRuntimeMode === undefined

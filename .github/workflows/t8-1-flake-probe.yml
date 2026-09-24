@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# T8.1 — the fixture-build flake (issue #30), increment 2d.
+# T8.1 — the fixture-build flake (issue #30), increment 2e.
 #
 # **Manual only.** `workflow_dispatch` is the sole trigger, deliberately: this exists to read a
 # runner's environment, and a job that also fired on push or pull request would add CI cost to
@@ -10,8 +10,16 @@
 # **It runs a two-arm comparison.** Positional narrowing closed at `c20b417`, so the question is no
 # longer *where* the change happens but whether it depends on one property of the runtime. 2c ran
 # default Node against `--jitless` from this workflow (run 35512357623: 8/60 against 0/60,
-# p = 0.00609). **It now runs 2d: default against `--no-opt`** — TurboFan disabled, Maglev and
-# Sparkplug left running — alternating, **60 runs per arm**, over the same 95-file suite. Both arms
+# p = 0.00609). **It now runs 2e: default against `--no-opt`** — TurboFan disabled, Maglev and
+# Sparkplug left running — alternating, **150 runs per arm**. 2d ran the same cut at 60 per arm
+# and its control returned 0/60, which said nothing about the variant.
+#
+# **2e is a follow-on, not 2d at a larger budget.** Two things differ: the budget, and the suite.
+# 2c and 2d measured 95 files while probing; T8.2 then added one and T8.3 removed five, so this
+# job measures **91**. The suite is the workload whose flakiness is being measured, so 2e is read
+# on its own terms — the 95-file evidence, `M = 61` included, stays scoped to that suite. The
+# count this job actually collects is printed by `check:runtime-mode` in the step below, which is
+# where a reader should take it from rather than from this comment. Both arms
 # spawn the identical `npm run test:coverage`; the difference travels as an environment marker
 # that `vitest.config.ts` turns into the test workers' `execArgv`, so only the workers running the
 # suite are in the other mode and Vite's parent starts normally. `npm run check:runtime-mode` — a
@@ -19,13 +27,15 @@
 # `--no-opt` means on the Node it runs with, using real subprocesses. **This job runs it too,
 # before the loop**, because the Node a dispatch resolves is the one the result is about.
 #
-# 2d is a separately predeclared **exploratory** diagnostic at `α = 0.05`. 2c spent the only α the
-# plan had granted, so the pair carries no 5% family-wise guarantee: at most 10% across both.
+# 2e is the **third** separately predeclared **exploratory** diagnostic at `α = 0.05`, after 2c and
+# 2d. 2c spent the only α the plan had granted, so the family carries no 5% family-wise guarantee:
+# at most 15% across the three, by the union bound.
 #
 # There is deliberately **no run-count input**: a budget chosen at dispatch time is a probabilistic
-# bar selected after the result is known. 60 is the smallest equal-arm budget clearing 80% power
-# against a zero-rate variant arm, and changing it means editing `scripts/flake-experiment.mjs`
-# under review.
+# bar selected after the result is known. 150 per arm is the budget increment 2e predeclared — not
+# a minimum for any bar, but a fixed budget at which a **null control is itself a finding** (its
+# one-sided 95% upper bound is 1.977%), which is what 2d's null could not be. Changing it means
+# editing `scripts/flake-experiment.mjs` under review.
 #
 # It reports the environment first, keeps going after a hit so the outcome is a pair of **rates**,
 # counts each arm separately with the run index of every hit, and prints the full output —
@@ -46,15 +56,16 @@ permissions:
 
 jobs:
   probe:
-    name: 60 default + 60 --no-opt runs, alternating
+    name: 150 default + 150 --no-opt runs, alternating
     runs-on: ubuntu-latest
-    # Left where 2c set it, with what has been measured since. 2c's job took 46 minutes under this
-    # ceiling: about 18.6 s a default run and 27.5 s a `--jitless` one. `--no-opt` cost nothing
-    # measurable locally — the real `npm run test:coverage` took 5 s by default and 4 s under it —
-    # so 60 + 60 runs should be nearer 40 minutes. The headroom is deliberate: a timeout kills the
-    # job before any verdict is printed, and an experiment whose control arm was cut short is
-    # contaminated and answers nothing.
-    timeout-minutes: 150
+    # Raised from 150 for increment 2e's larger budget, which is the only workflow change it makes.
+    # Measured: a default run took 18.6 s in 2c's job and 11.9 s in 2d's, on the same image — so
+    # 150 + 150 runs is roughly 60 minutes at 2d's pace and 95 at 2c's, and this job's
+    # suite is smaller than either. 180 leaves
+    # headroom over the slower of the two rather than over their average, deliberately: a timeout
+    # kills the job before any verdict is printed, and an experiment whose control arm was cut
+    # short is contaminated and answers nothing. That is a worse outcome than a job that idles.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
 

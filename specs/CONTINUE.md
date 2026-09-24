@@ -24,17 +24,24 @@ packed one. It is not a reinterpretation of the note.
 
 **So there is no phase to finish. What was buildable is `tasks.md`'s Phase 8** — three follow-ups,
 post-v1, unowned and unordered, each with acceptance criteria written when they were recorded rather
-than when someone picks them up. Two are closed and one is parked; nothing in Phase 8 is open for
-work without an owner's ruling.
+than when someone picks them up. Two are closed; T8.1 resumed on 2026-09-23 under option B and is
+the only one open.
 
 - **T8.1 — the fixture-build flake.** Tracked in **issue #30**; read it first. Its acceptance
   criterion is deliberately awkward: the failure must be made **reproducible on demand** before it
   is fixed, because a change that merely stops it being observed is indistinguishable from one that
-  fixed it. **Parked on 2026-09-22 by the owner's ruling — open, unowned, not discharged.** The
-  runtime-mode line stopped at option A of the plan's amendment; `tasks.md` carries the status
-  record, and "T8.1: increment 2c ran" below says what stands. **Do not re-dispatch the probe, fix,
-  rule on `M` or touch the lattice candidate without an owner's ruling**; the amendment's options
-  are where a resumption starts.
+  fixed it. **Parked on 2026-09-22, resumed on 2026-09-23 when the owner ruled option B** — open
+  and not discharged. Increment 2e is the default-against-`--no-opt` cut at `N = 150` per arm,
+  predeclared so that a null control is a bound rather than a shrug; it is **implemented and
+  under review, and has not been dispatched**. **It is a follow-on, not 2d at a larger budget**:
+  the measured suite is 91 files where 2c's and 2d's was 95, because T8.2 added one test file and
+  T8.3 removed five and nothing pins the count. The suite is the workload being measured, so the
+  95-file evidence — 2c's 8/60, the 13% design rate, the `M = 61` candidate — stays scoped to a
+  workload this tree no longer has. `tasks.md` carries the status record; the plan's
+  amendment of 2026-09-23 carries the predeclaration. **One dispatch, and the result stands
+  however it comes out** — no repeat, no second job, because an experiment selected by its
+  control outcome is not the one that was predeclared. **Do not fix, rule on `M` or touch the
+  lattice candidate without a further ruling.**
 - **T8.2 — per-package READMEs. Closed** (2026-09-23, PRs #63 and #64). Six READMEs, every code
   block in one mirrored from a snippet that `check:packaging` compiles against the packed tarballs
   of all six packages, links held to tarball-safe targets — an absolute URL, a fragment, or the
@@ -68,8 +75,8 @@ they are not discovered as surprises.
   words: *a zero means no Done record, not no completed work*. **Backfilling them is a real task and
   a hazardous one** — every existing record cites PRs, commits and plans, and writing the **36
   built tasks that lack one** from memory is exactly what mistake 7c exists to stop. (Phase 8's
-  T8.1 is unrecorded because it is parked and not discharged — built in part, with merged
-  instrument and probe evidence, but unfinished — which is a different thing; the totals in
+  T8.1 is unrecorded because it is not discharged — built in part, with merged instrument and
+  probe evidence, but unfinished — which is a different thing; the totals in
   the README's block count both.) Whoever takes it on reads the history, not
   the recollection.
 - **Eviction-aware re-download, quota UI and download resume remain unbuilt.** T6.1 fenced them out,
@@ -129,9 +136,12 @@ certificate records the worker's **full** `execArgv` and holds the arms to diffe
 parked in a stash**; it is symptom immunity, and merging it would stop the placement report that
 every result above was read from.
 
-The measured suite is **95 files while probing and 97 otherwise**: two files a worker without
-WebAssembly cannot run are excluded from both arms whenever the marker is set. Do not "fix" that
-as drift — `check:runtime-mode` asserts it, in both directions.
+The suite those jobs measured was **95 files while probing and 97 otherwise**. That is history:
+**this tree measures 91 and 93** (T8.2 added a test file, T8.3 removed five), and increment 2e is
+scoped to the smaller one. What has not changed is the *rule* — two files a worker without
+WebAssembly cannot run are excluded from both arms whenever the marker is set, and
+`check:runtime-mode` asserts that in both directions. Do not "fix" the exclusion as drift; it is
+the count that nothing pins, by ruling, and the reviewed tree is the pin.
 
 ### T7.2 is closed (2026-09-10, PRs #41, #42 and #43)
 

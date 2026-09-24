@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { ROOT } from "./consumer-project.mjs";
-import { runCommandsOf, triggersOf } from "./workflow-triggers.mjs";
+import { RUNS_PER_ARM } from "./flake-experiment.mjs";
+import { runCommandsOf, timeoutOf, triggersOf } from "./workflow-triggers.mjs";
 
 const yaml = (...lines) => lines.join("\n");
 
@@ -74,6 +75,35 @@ describe("the T8.1 flake probe", () => {
       "npm run check:runtime-mode",
       "npm run probe:flake",
     ]);
+  });
+
+  /**
+   * **Falsifier: a ceiling left behind when the budget grew.** A job killed part-way leaves an arm
+   * short of its budget, which the contamination gate reports as inconclusive — so a stale ceiling
+   * does not waste a run, it guarantees an answerless one.
+   *
+   * **This permits the old 150-minute ceiling, deliberately.** 300 runs at the slowest measured
+   * pace is about 93 minutes of loop, so 150 would still have fitted and was never unsafe; the
+   * raise to 180 is headroom, not a correction. What this forbids is a ceiling that cannot fit
+   * the budget at all, and a budget raised past the ceiling — the drift that would be silent.
+   *
+   * **Tied to `RUNS_PER_ARM`, so the two cannot drift.** The bound is the budget's own duration at
+   * the *slowest* pace on record — 18.6 s a run, measured on 2c's job; 2d's was 11.9 s on the same
+   * image — plus the job's fixed cost of install and build. Raising the budget without raising the
+   * ceiling turns this red, which is the whole point of computing it rather than quoting 180.
+   */
+  it("leaves the budget a ceiling it fits under at the slowest pace measured", () => {
+    /** Seconds per run, the slower of the two paces this workflow has actually recorded. */
+    const SLOWEST_RUN_SECONDS = 18.6;
+    /** `npm ci`, the build and the certification, generously: they are minutes, not tens of them. */
+    const FIXED_COST_MINUTES = 15;
+
+    const loopMinutes = (RUNS_PER_ARM * 2 * SLOWEST_RUN_SECONDS) / 60;
+    expect(timeoutOf(workflow)).toBeGreaterThanOrEqual(loopMinutes + FIXED_COST_MINUTES);
+
+    // And not so generous that it has stopped being a bound: a job that hangs must still die
+    // inside a working day rather than burning a runner until GitHub's own 6-hour limit.
+    expect(timeoutOf(workflow)).toBeLessThanOrEqual(240);
   });
 });
 

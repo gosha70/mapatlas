@@ -90,3 +90,34 @@ export function runCommandsOf(yaml) {
   }
   return commands;
 }
+
+/** A job's `timeout-minutes:`, which is the only number standing between a long job and a kill. */
+const TIMEOUT = /^\s*timeout-minutes:[ \t]*(\d+)\s*$/;
+
+/**
+ * The job ceiling a workflow declares, in minutes.
+ *
+ * **Asserted rather than commented, because a ceiling is a correctness property of an
+ * experiment, not an operational preference.** A probe job killed part-way through has an arm
+ * that did not complete its budget, which the experiment's own contamination gate then reports as
+ * inconclusive — so a ceiling set too low for the budget does not merely waste a run, it
+ * guarantees an answerless one. Increment 2e raised the budget 2.5×, which is exactly the change
+ * that makes a stale ceiling dangerous.
+ *
+ * **Refuses anything but a single declared ceiling**, so a workflow that grew a second job, or
+ * lost the line entirely, fails here instead of being read as whichever number matched first.
+ *
+ * @param {string} yaml
+ * @returns {number}
+ */
+export function timeoutOf(yaml) {
+  const found = yaml
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .map((line) => TIMEOUT.exec(line))
+    .filter((match) => match !== null);
+  if (found.length !== 1) {
+    throw new Error(`expected exactly one timeout-minutes, found ${String(found.length)}`);
+  }
+  return Number(found[0][1]);
+}

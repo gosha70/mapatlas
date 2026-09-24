@@ -927,6 +927,186 @@ which needs a further ruling. This document is history from here, not a work pla
 
 **The owner decides.** This amendment authorises nothing.
 
+**Superseded 2026-09-23: the owner ruled option B.** T8.1 resumes on the runtime-mode axis; the
+next section is the resumption's predeclaration, and this document is a work plan again.
+
+## Amendment, 2026-09-23 — increment 2e: option B, at a larger budget and a changed suite
+
+**Ruled by the owner, 2026-09-23: option B**, superseding the 2026-09-22 parking. One dispatch,
+`N = 150` per arm, sized before dispatch so that **a null control is itself a finding** rather
+than the shrug 2d ended in.
+
+**Status: predeclared, implementation under review. No dispatch is authorised by this document**
+— it is a separate instruction, as every dispatch in this plan has been.
+
+### 2e is a follow-on, not 2d at a larger budget — the workload changed underneath it
+
+**Corrected 2026-09-24, in review, before any dispatch.** The first draft of this amendment said
+"one number changes" and "the same 95-file suite". **Both were false**, and the mistake is the
+plan's own 7c: the figure was carried forward from 2d's record instead of being measured. The
+real `npm run check:runtime-mode` on this tree reports **91 files in each arm and 93 unmarked**.
+
+Measured, with the provenance, because the drift did not happen all at once:
+
+| tree | unmarked | while probing |
+|---|---|---|
+| `025cdbe`, where the 13% design rate was measured | — | 95 |
+| 2d's head `8045a84` | 97 | 95 |
+| T8.2's close `c0587a2` | 98 | 96 |
+| now | **93** | **91** |
+
+T8.2 added one test file and T8.3 removed five — the `/lab` unit suites, four deleted and one
+moved to the browser lane. **Nothing pinned the count.** The exclusion of two files from both
+arms preserves *arm identity*, and `check-runtime-mode` asserts exactly that — the two arms
+collect the same set, and an ordinary run still has the two extras. Neither is a claim about the
+suite's *size*, so the workload changed twice without a gate noticing. That is a finding about
+this instrument, recorded here, not a defect in the check: the check proves what it says.
+
+**So two things change in 2e, not one:**
+
+1. `RUNS_PER_ARM`, 60 → 150 — the budget option B rules;
+2. the measured suite, 95 files → **91**, which no one chose for this experiment and which is
+   simply the repository as it now stands.
+
+**Why the second matters.** The suite *is* the workload whose flakiness is being measured. The
+recorded failure is allocation-sensitive, and four fewer test files is less allocation, less
+elapsed time and a different scheduling profile on a shared host. Whether that moves the rate is
+**unknown and unmeasured** — it is not a reason to expect a change, and not a reason to expect
+none. It is a reason not to claim continuity.
+
+**What follows, and what does not:**
+
+- 2e is an **exploratory follow-on over the 91-file suite**, read on its own terms. It is *not*
+  evidence that 2d's or 2c's result does or does not hold, and a difference between 2e's control
+  rate and theirs is confounded by the workload as well as by the job.
+- **The 95-file evidence stays scoped to the 95-file suite.** 2c's 8/60 against 0/60, its 13%
+  design rate, and the validation candidate **`M = 61`** — derived on the exact 95-file suite by
+  the owner's ruling of 2026-09-20 — describe a workload that no longer exists in this tree. None
+  of them transfers to 2e, and 2e produces no statement about `M`.
+- The rest of the cut *is* unaltered, and that is still worth stating: default Node against
+  `--no-opt`, strict alternation, full-execArgv certification of every run against the scheduled
+  arm, refusal of any inherited `NODE_OPTIONS`, the same three gates in the same order, the same
+  `α = 0.05`, the same two-sided Fisher exact convention.
+
+**The honest summary of the runtime-mode line after this correction:** every one of 2c, 2d and 2e
+measures a *different* workload on a runner whose rate is already known to be unstable between
+jobs. 2e buys a comparison at a budget where a null control says something. It does not buy
+comparability with what came before, and the first draft of this amendment claimed it did.
+
+**Two things about *reporting* change, because B's premise is that a null control must be
+informative.** Both are in the instrument, not in the design:
+
+1. **A null control now prints its own bound.** 2d's null control reported "inconclusive; the
+   control did not reproduce" and nothing else; the one-sided 95% upper bound of 4.87% that its
+   result section quotes was computed **by hand after the fact**. B's whole claim is that at
+   `N = 150` a null control *is* a finding, so the report must state it without a human
+   recomputing it afterwards — otherwise the finding depends on someone remembering to do the
+   arithmetic, which is the shape of a result chosen after the fact.
+2. **The predeclared power becomes a curve, not a number.** 2c and 2d each printed one figure,
+   "80.876% at 13.000% in default". **13% is the assumption that failed** — the rate it was
+   measured at has since been contradicted by the runner six times over. Printing a single power
+   figure resting on it would be the plan's own mistake restated at a larger `N`, and at
+   `N = 150` it would read 99.995%, which is worse: near-certainty derived from the number the
+   record has already disproved. So the report states power at each rate of a predeclared range.
+
+**The gates do not change.** A null control still forbids the comparison; contamination still
+forbids everything. B makes the null *legible*, not permissible.
+
+### The design at `N = 150`, computed rather than recalled
+
+Every figure below is from this repository's own `designPower`, `fisherExactTwoSided` and
+`clopperPearson` at `α = 0.05`, against a true variant rate of zero, and is asserted in
+`scripts/flake-experiment.test.mjs` so prose and source cannot drift:
+
+| control rate | rejects at | design power |
+|---|---|---|
+| 13% (the original design rate) | ≥ 6 in 150 | **99.995%** |
+| 5.936% (2c's own lower bound) | ≥ 6 in 150 | 88.581% |
+| 5% | ≥ 6 in 150 | **76.556%** |
+| 3% | ≥ 6 in 150 | **29.574%** |
+
+The rejection threshold is six hits at every one of them: `p = 0.029698` at six against a null
+variant, `0.060420` at five. The predeclared range printed with the result is **13%, 5% and 3%**
+— the original design rate, and the two rates that bracket where the runner has actually been.
+
+**What `150` is not.** It is **not** the smallest budget clearing a power bar, and the docstring
+must not say it is: `N = 149` gives 76.003% at 5% against 150's 76.556%, so nothing turns on the
+last run. 150 is a **fixed budget at a cost ceiling** — 300 runs, roughly 60 minutes at 2d's
+11.9 s median or 95 at 2c's 18.6 s — whose properties are then stated rather than optimised for.
+2c's budget was genuinely minimal for its bar and its docstring said so; copying that sentence
+here would be a false claim about how this number was chosen.
+
+**Why a null control is now a finding.** P(null control at `N = 150`) is 1.03 × 10⁻⁴ if the true
+rate is 2c's lower bound of 5.936%, and 4.83 × 10⁻² if it is 2%. So a null at this budget is
+reported as the **one-sided 95% upper bound on that job's control rate: 1.977%** — a bound on the
+day's rate, stated the way every result section here states one, and **not** a probability about
+the true rate, nor a claim that the rate is stable between jobs. That is the whole of what a null
+buys, and it is strictly more than 2d's null bought.
+
+### Alpha, stated as this plan is entitled to state it
+
+2e is the **third** separately predeclared exploratory test in the 2c/2d family, each at
+`α = 0.05` in its own right.
+
+| | chance of at least one false rejection across 2c, 2d and 2e |
+|---|---|
+| with no assumption (Bonferroni, the union bound) | **≤ 15%** |
+| only if the three tests are independent | 14.26% (`1 − 0.95³`) |
+
+**≤ 15% is what this plan claims**; the 14.26% needs an independence assumption nothing here
+establishes — the same hypothesis family, and each result prompting the next. (An earlier draft
+also offered "same suite" as a reason; it is withdrawn, since the three ran on three different
+workloads. That makes them less alike, not independent.) Neither figure
+is a 5% family-wise guarantee, and none of the three is in the fix-acceptance chain, whose 5%
+total is split elsewhere and is untouched.
+
+### The dispatch rule, fixed here
+
+- **One dispatch, no inputs**, against a verified `origin/main` tip, as 2c and 2d were.
+- **The result stands however it comes out.** No repeat, no second job, no "dispatch again if the
+  control was null" in any dress — the selection rule the 2026-09-21 amendment ruled out applies
+  to 2e unchanged. A null control at `N = 150` is a reported bound and the end of the increment,
+  not a reason to run it again.
+- The job ceiling rises from 150 to **180 minutes**, which is the only workflow change.
+- **The dispatch runs against the exact reviewed tree** (ruled 2026-09-24). `origin/main` must be
+  the merge of the content approved here; if `main` advances first, **the workload returns for
+  review** before any dispatch. This is the pin, and it is deliberately not a numeric one: a
+  count assertion would fail every time anyone adds a test file, and would still miss a
+  **same-count exchange** — which is exactly what happened between `025cdbe`'s suite and 2d's,
+  where 95 files became 95 files with two members swapped. A reviewed tree pins membership; a
+  number pins only its size.
+
+### Required mutations for 2e
+
+**Eleven mutants were run before this was handed over: ten killed, one ruled not a defect.** The
+ten are below, each turning a named assertion red; the eleventh is recorded after them, because a
+mutant that survives for a good reason is worth writing down rather than quietly dropping.
+
+- the budget reverted to 60, or the power curve collapsed to the 13% figure alone → the design
+  test fails, and so does the report's;
+- the null-control bound computed from `clopperPearson`'s two-tailed upper limit (2.429%) instead
+  of the one-sided 1.977% → the bound test fails;
+- the bound not printed at all, printed for a **contaminated** experiment, or computed from
+  `RUNS_PER_ARM` instead of what the arm actually completed → the report tests fail;
+- a null control exiting 0 because it now carries a finding → the exit-rule test fails. The rule
+  moved out of `run-flake-probe.mjs` into `exitCode` so that it could be reached at all;
+- the ceiling set below the budget's own duration at the slowest measured pace, or raised so far
+  it stops bounding a hung job, or the **budget** raised without the ceiling → the ceiling test
+  fails. It is computed from `RUNS_PER_ARM`, not quoted, so the two cannot drift.
+
+**The eleventh, ruled not a defect having been measured:** a ceiling left at 150 minutes. 300 runs at 2c's
+18.6 s is 93 minutes of loop, so 150 would still have fitted — the raise to 180 is headroom over
+the slower of the two measured paces, not a correction of an unsafe number. The ceiling test
+permits 150 for that reason, and a test contorted to forbid it would have been asserting a
+preference rather than a property.
+
+### What 2e cannot do
+
+It does not fix the flake, explain the drift, or control the between-job confound — **nothing on
+the 2026-09-21 options list does**, and B was never claimed to. It buys one comparison at a
+budget where a null control says something, on one job, on one day. `M` stays frozen and no
+statement about it follows from 2e; the lattice candidate stays untouched; no fix is authorised.
+
 ## Required mutations
 
 Each must turn a named assertion red:

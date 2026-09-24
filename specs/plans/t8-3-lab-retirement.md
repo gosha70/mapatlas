@@ -6,9 +6,10 @@
 > delegated sweep produced them, and nothing is repeated forward from `tasks.md` or `CONTINUE.md`
 > without having been checked against the code first.
 >
-> **Status: proposed; revised 2026-09-23 through three review rounds (every finding confirmed
-> against the code before being acted on) and rulings A, B and F1 recorded below. No open
-> rulings. No implementation is authorised by this document.**
+> **Status: done (2026-09-23, PRs #67 and #68). History, not a work plan.** Revised through three
+> review rounds before implementation, with rulings A, B and F1 recorded below, and amended twice
+> during implementation where a measurement contradicted it (row 3; the "404" bar). The Done
+> record in `tasks.md` T8.3 is authoritative.
 
 ## The originating goal, restated
 

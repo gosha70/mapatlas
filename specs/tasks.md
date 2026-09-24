@@ -1656,6 +1656,81 @@ and can be picked up like anything else. Unowned and unordered.
   green. If some assertion cannot be expressed against the root app, that is a finding about the
   app's observability and is reported rather than resolved by keeping `/lab` indefinitely.
 
+  **Done** (2026-09-23, PRs #67 and #68, merged as `5b0d7c3` and `456db2d`). Plan:
+  [`specs/plans/t8-3-lab-retirement.md`](plans/t8-3-lab-retirement.md) (PR #66, merged as
+  `384fd43`), whose mapping was set against `main` at `c0587a2` before any implementation, revised
+  through three review rounds, and amended twice during implementation where a measurement
+  contradicted it (row 3's bar; the "404" bar). `/lab` is gone — the route, `apps/demo/src/lab/`,
+  the live link, four scenarios and the negative assertions about it — and **the mapping is the
+  artifact**: sixteen atomic assertions, each of them MAP or RETIRE, below.
+
+  **The mapping** (lab assertion → disposition → where it is held now, or why not):
+
+  | # | Lab assertion | Disposition | Held by, or reason |
+  | --- | --- | --- | --- |
+  | 1 | `lab.e2e.ts` — the map settles on the archives | MAP, existing | `app-shell.e2e.ts` "reads both archives past their headers, and paints what it read" |
+  | 2 | `lab.e2e.ts` — per-source attribution (4-way differential) | MAP, new | `app-shell.e2e.ts` "each archive changes what the map paints, on its own evidence" — canvas, not frame; a measured 1% threshold with a same-stack noise control asserted on every run |
+  | 3 | `lab.e2e.ts` — the worker asset is served with 200 | MAP, new; **original unfalsifiable** | `app-shell.e2e.ts` "the worker asset is served, and the worker that runs is MapLibre's" — the `Worker` the page created, its script's response, `registerWorkerSource` inside it |
+  | 4 | `lab.e2e.ts` — both archives read by range | MAP, existing | `app-shell.e2e.ts` and `app-offline.e2e.ts`, per-archive header / beyond-header classification |
+  | 5 | `lab.e2e.ts` — no HTTP egress, prefix-sharing decoy | MAP, new | `app-shell.e2e.ts` "nothing outside the app's own servers is requested" |
+  | 6 | `lab.e2e.ts` — no WebSocket egress, decoy socket | MAP, new | same test, second guard |
+  | 7 | `render-differential.e2e.ts` — the shipped composition draws no ink across the pause | RETIRE — **finding F1** | renderer property preserved on the harness (`map-controller.e2e.ts`, "renderer differentials") |
+  | 8 | `render-differential.e2e.ts` — the shipped composition's hillshade layer draws | RETIRE — **finding F2** | renderer property preserved on the harness, same describe |
+  | 9 | `offline-region.e2e.ts` — a downloaded region draws with the host cut; a deleted one does not | MAP, existing | `app-offline.e2e.ts` "a downloaded region draws with the archive host cut, and a deleted one does not" — named-colour oracle, three archives, real clicks |
+  | 10 | `offline-region.e2e.ts` — `data-regionSources` names both ids | RETIRE | a DOM copy of a manifest; `@mapatlas/offline-pmtiles`'s unit tests hold the manifest |
+  | 11 | `offline-region.e2e.ts` — `data-served` lists locally served URLs | RETIRE | what the host cut proves; row 9's oracle observes it from outside |
+  | 12 | `performance-baseline.e2e.ts` — frame-delivery and heap baseline | RETIRE (ruled B) | three liveness guards and no regression threshold; nothing consumed its numbers; a move would have been a new baseline on a different workload. Last taken on the fixture at T4.6 |
+  | 13 | `lab-a11y.e2e.ts` — draft vertices reachable, named, visibly focused | MAP, new | `app-a11y.e2e.ts`, against `#authoring-map` on a draft authored by three real clicks; the harness check is the other of T4.7's two |
+  | 14 | `app-shell.e2e.ts` — the app never reaches `/lab` | RETIRE | about `/lab`'s existence |
+  | 15 | `app-shell-offline.e2e.ts` — the worker leaves `/lab` to the network | RETIRE | the worker's rule is path-generic; the test keeps its pair with a non-root navigation path in place of `/lab` |
+  | 16 | `persistence.e2e.ts` — the control never touches `/lab` | RETIRE | about `/lab`'s existence; T6.2's "untouched" obligation is met by construction |
+
+  Every MAP (new) row and both harness proofs were written **while the originals still ran**
+  (PR #67) and put under the originals' falsifiers. **Ten mutations in all**: two for row 2, one
+  for row 3, two for row 5, one for row 6, two for row 13, and one for each harness proof. Nine
+  made both the original and the new test red. The tenth — row 3's — made only the replacement
+  red, and the bar had to be amended for it: **the original was unfalsifiable as written.** Under
+  "the worker URL points at a missing asset" it stayed green, because its oracle matched any
+  response whose URL contained `maplibre-gl-worker` (Vite's `?worker&url` export module
+  qualifies) and the dev server answers 200 for a missing `?worker_file` path. The two harness
+  proofs reproduced the originals' figures to the pixel (legs 2,817 px, corridor 827 px, added 0,
+  lost 0).
+
+  **The task's named output — two observability findings**, reported, not resolved:
+
+  - **F1.** The root app has no declared, close, selection-independent camera on a map that
+    draws a completed track. The four recordings the pause differential compares *can* be
+    produced through its surface (`#record-pause`/`#record-resume`, Playwright geolocation); what
+    it lacks is the framing: the live map draws only `livePoint` and sits at z12, where a bridge
+    across the 94.6 m pause leaves no ink; the review map draws the track with no camera at all
+    (`TripReview` takes none, `mapProps` passes none) and mounts at the controller's default. A
+    fit-to-track would not supply it — each selection fits differently. Ruled RETIRE with this
+    wording. Side observation for the owner: the review map's default camera is the world view.
+  - **F2.** The root app has no way to drop one layer while keeping its source and terrain, so
+    "the hillshade layer contributes pixels in the shipped stack" is provable only at the
+    renderer level.
+
+  What the removal did with what was not a browser assertion, so nothing disappeared behind a
+  green gate: `apps/demo/src/lab/` held five Vitest suites, 42 tests and a todo. Twelve of the
+  generator's tests moved with it to `e2e/fixture-track.e2e.ts` (a browserless Playwright spec,
+  the repository's home for a fixture declaration); four were retired with their consumers — the
+  5,000-point ask (the baseline's), three mark-placement tests with `generateFixtureEvents` (the
+  route's marks) — and the todo about cross-runtime byte identity with them, since one runtime
+  now generates the track. The other four suites went by name: the geolocation replay (13) and
+  the replay-through-recorder (6) tested the route's mechanism, whose pause semantics
+  `recorder.test.ts` holds; the `?offline=` parser (6) went with its knob; the lab's attribution
+  copy (1) has the app's own twin. The lab's tile-source builder became
+  `e2e/fixtures/fixture-stack.ts` for the harness proofs. **Counts, from the runners:** browser
+  lane 116 → 123 tests, 0 skipped (−9 lab, −2 negative, +4 root-app, +2 harness, +12 moved); unit
+  lane 98 → 93 files. Retained support: the hue predicate test in `render-differential.e2e.ts`,
+  the `/` half of the offline-shell test.
+
+  Not done, and recorded rather than absorbed: the four `/lab` comments in `scripts/fixture/*`
+  are stale prose left untouched under the T8.1 ruling that keeps that directory as it is;
+  `e2e/fixtures/{build,serve}-lab-archives.mjs` keep their names, which now say where they came
+  from; and the plan's own "fails on a 404" expectation was false — the dev server's SPA fallback
+  serves `/lab` as the application — and is amended in place.
+
 ## Global definition of done (every task)
 `build` + `typecheck` (strict) + `lint` + `test` green · isolation & SPDX scans green ·
 public API changes mirrored into `api.md` · consequential decisions appended to `decisions.md`.

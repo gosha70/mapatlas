@@ -107,7 +107,11 @@ asserts several things is split into as many rows.
   *new* — it is written against the root app's **existing** surface in increment 1, and **the new
   test is shown to fail on the same mutation the original fails on** before the original goes.
   "Existing surface" is the fence: no new query-string parameter, no new DOM contract in
-  `apps/demo/src/app/`.
+  `apps/demo/src/app/`. **One exception, found in increment 1 and recorded here rather than
+  deferred (amended 2026-09-23):** where the original turns out to be unfalsifiable as written
+  — its named mutation leaves it green — the pairing cannot be shown, and the replacement is
+  instead falsified on its own, with the original's blindness recorded as a finding about the
+  lab suite. Row 3 is that case.
 - **RETIRE** — the assertion is not carried forward against the root app. The reason is recorded
   here and in the Done record. Where the reason is "the root app cannot express it", that is
   recorded as an **observability finding**, as the task requires — not resolved by keeping `/lab`.
@@ -116,7 +120,7 @@ asserts several things is split into as many rows.
 |---|---|---|---|
 | 1 | `lab.e2e.ts:221` — the map settles, and what settled is the archives on screen | **MAP** (existing) | `app-shell.e2e.ts:208` "the map reads both archives past their headers, and paints what it read": a range read past byte 0 per archive, plus a non-background fraction with a negative control. Stronger than the original. |
 | 2 | `lab.e2e.ts:221` — per-source attribution: removing either archive changes the screen (4-way differential: both / terrain-only / contours-only / bare) | **MAP** (new) | The root app reads `?terrain=` and `?contours=` (`sources.ts:45-47`) and has a settle-and-capture path (`app-shell.e2e.ts:208`), so the same four loads and the same three inequalities are written against `/` without a new knob. |
-| 3 | `lab.e2e.ts:267` — the MapLibre worker asset is served with 200, not fallen back on | **MAP** (new) | `maplibre-gl-worker` appears in no other scenario. The root app loads the same worker (`main.ts:25-38` sets the URL for both branches). One response assertion in `app-shell.e2e.ts`. |
+| 3 | `lab.e2e.ts:267` — the MapLibre worker asset is served with 200, not fallen back on | **MAP** (new; original unfalsifiable) | `maplibre-gl-worker` appears in no other scenario. The root app loads the same worker (`main.ts:25-38` sets the URL for both branches). **Measured in increment 1: the original stays green under its own falsifier.** Its oracle matches any response whose URL contains `maplibre-gl-worker` and asks for 200 — Vite's `?worker&url` export module satisfies that on its own, and the dev server answers 200 for a `?worker_file` path that does not exist. The replacement in `app-shell.e2e.ts` observes the `Worker` the page created, its script's own response, and `registerWorkerSource` inside it; under the same mutation the worker terminates and the test is red. Falsified on its own; the original's blindness goes in the Done record. |
 | 4 | `lab.e2e.ts:278` — both archives are read, each by range request | **MAP** (existing) | `app-shell.e2e.ts:208` and `app-offline.e2e.ts:214` "every declared archive contributes…" classify reads per archive into full / header / beyond-header. |
 | 5 | `lab.e2e.ts:292` — no HTTP request leaves the fixture's own servers; the guard is falsified by a prefix-sharing decoy origin | **MAP** (new) | No root-app scenario asserts zero egress; `app-offline.e2e.ts:85-92` routes only the archive URLs. This is `SECURITY.md`'s and `CLAUDE.md`'s guardrail and matters *more* against the shipped app. Written in `app-shell.e2e.ts`, decoy included. |
 | 6 | `lab.e2e.ts:292` — no WebSocket leaves the fixture's own servers; the guard is falsified by a decoy socket | **MAP** (new) | `routeWebSocket` exists in no root-app scenario. Same test as row 5, second guard, second decoy. |
@@ -263,9 +267,10 @@ needed the same rule"); the Done record lists each.
 
 **Increment 1 — the new oracles, with `/lab` still present.** Write rows 2, 3, 5, 6 and 13
 against the root app, and the two harness proofs, **while the originals still run**. For each:
-the original's named falsifier is applied and both the original and the new test go red. This is
-the only moment both can be compared, and it is what "shown by the mapping rather than by the
-suite staying green" means in practice. Nothing is deleted and nothing moves: the harness proofs
+the original's named falsifier is applied and both the original and the new test go red — with
+row 3 as the recorded exception, where the original stayed green under its own falsifier and the
+new test was shown red alone. This is the only moment both can be compared, and it is what
+"shown by the mapping rather than by the suite staying green" means in practice. Nothing is deleted and nothing moves: the harness proofs
 import the generator from `apps/demo/src/lab/fixture-track.ts` for this one increment, so the
 lab and the harness are demonstrably drawing the same track when both go red.
 
@@ -284,7 +289,9 @@ fixture" paragraph and its Phase 8 bullet; `README.md` reprojected.
 
 - `npm run verify` and `npm run test:browser` exit 0 at the end of every increment.
 - After increment 1, for every MAP (new) row and both harness proofs: the original and the new
-  test are **both red** under the original's falsifier, recorded in the handoff by test title.
+  test are **both red** under the original's falsifier, recorded in the handoff by test title —
+  **except row 3**, whose original is unfalsifiable as written (measured; see the row); there the
+  new test alone is red, and the handoff says so by title.
 - After increment 2: **no executable reference to `/lab` remains** — `grep -rn "/lab" apps/demo/src e2e scripts`
   with comment lines (`//`, `*`, `<!--`) excluded finds nothing; a scenario that navigates to
   `/lab` fails on a 404. Prose is governed by the fence's list, not by the grep.
@@ -326,11 +333,16 @@ fixture" paragraph and its Phase 8 bullet; `README.md` reprojected.
 
 ## Required mutations
 
-Each must turn a named assertion red, in the new test, and in the original while it exists:
+Each must turn a named assertion red, in the new test, and in the original while it exists —
+except row 3, where the original was measured green under its mutation and only the new test is
+required red:
 
 - **row 2:** the terrain archive URL dropped from the root app's query → "both differs from
   contours-only" fails;
-- **row 3:** the worker URL pointed at a non-existent asset → the 200 assertion fails;
+- **row 3:** the worker URL pointed at a non-existent asset → in the new test, the worker
+  terminates and "the worker that runs is not MapLibre's" fails; **the original stays green under
+  this mutation** (its 200 is satisfied by Vite's export module and by the dev server's answer for
+  a missing worker path), which is the finding recorded in row 3;
 - **row 5:** the HTTP decoy origin not landing in the egress list → the guard's falsification
   fails; one real request let through → zero-egress fails;
 - **row 6:** the WebSocket decoy not landing in the egress list → its falsification fails;

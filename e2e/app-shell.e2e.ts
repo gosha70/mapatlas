@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { Page } from "@playwright/test";
+import type { Page, Worker } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
 import { consoleFor, watchConsole } from "./fixtures/browser.js";
-import { countColour, decodePng } from "./fixtures/pixels.js";
+import type { Raster } from "./fixtures/pixels.js";
+import { changedMask, countColour, countMask, decodePng } from "./fixtures/pixels.js";
 import { settleRender } from "./fixtures/rendered.js";
 
 /**
@@ -358,4 +359,261 @@ test("the root route draws the basemap from its own archive", async ({ page }) =
   ).toBe(0);
 
   expect(consoleFor(page).problems()).toEqual([]);
+});
+
+/**
+ * The three claims below were `/lab`'s (T4.6, `lab.e2e.ts`) and are re-made here against the
+ * shipped app under T8.3's mapping: per-source attribution of what is on screen, the worker
+ * asset, and zero egress. Each was written while the original still ran, and the per-source and
+ * egress claims were shown red beside their originals under the same mutations — the only moment
+ * the two can be compared. The worker claim is the exception: its original was **not**
+ * falsifiable as written (see that test), so the replacement was falsified on its own.
+ */
+
+/** The same route with one source left out, and with none at all — the controls. */
+const withTerrainOnly = `${DEMO}/?terrain=${encodeURIComponent(TERRAIN)}`;
+const withContoursOnly = `${DEMO}/?contours=${encodeURIComponent(CONTOURS)}`;
+
+/**
+ * Exactly the origins the app may talk to.
+ *
+ * **Origins, compared exactly — not URL prefixes.** `http://127.0.0.1:51750` starts with the
+ * permitted `http://127.0.0.1:5175`, so prefix matching admitted an entirely different origin
+ * while the test claimed a strict guard.
+ */
+const ALLOWED_ORIGINS = new Set([
+  new URL(DEMO).origin,
+  new URL(ARCHIVES).origin,
+  "http://localhost:5175",
+  "http://localhost:5176",
+]);
+
+/** The same origins, spelled as WebSocket ones — `page.route` never sees a socket. */
+const ALLOWED_SOCKET_ORIGINS = new Set(
+  [...ALLOWED_ORIGINS].map((origin) => origin.replace(/^http/, "ws")),
+);
+
+function originIn(allowed: ReadonlySet<string>, url: string): boolean {
+  try {
+    return allowed.has(new URL(url).origin);
+  } catch {
+    return false;
+  }
+}
+
+interface Observed {
+  /** HTTP requests the guard refused. */
+  egress: string[];
+  /** Sockets the guard refused. Kept apart from `egress`: they come through a different seam. */
+  socketEgress: string[];
+  /** Sockets the guard let through, so the permissive branch is observable rather than assumed. */
+  socketsForwarded: string[];
+}
+
+/**
+ * Install the egress policy, recording what the page asks for.
+ *
+ * Requests outside the allow-list are **failed**, not merely counted: a scenario that tolerated
+ * them would prove the tiles were cached, where this proves they were never wanted. The dev
+ * server registers no service worker (`main.ts`, production only), so a page route sees every
+ * request this page makes, MapLibre's worker included.
+ */
+async function guardEgress(page: Page): Promise<Observed> {
+  const observed: Observed = {
+    egress: [],
+    socketEgress: [],
+    socketsForwarded: [],
+  };
+
+  // Installed before the HTTP route so nothing about ordering is left to chance, and before
+  // navigation because Vite's client opens its socket during load.
+  await page.routeWebSocket("**/*", (ws) => {
+    if (originIn(ALLOWED_SOCKET_ORIGINS, ws.url())) {
+      // Forwarded to the real server, so HMR keeps working and the page observes nothing.
+      observed.socketsForwarded.push(ws.url());
+      ws.connectToServer();
+      return;
+    }
+    observed.socketEgress.push(ws.url());
+    // Never connected, so the bytes do not leave.
+    ws.close({ code: 1008, reason: "outside the app's own servers" });
+  });
+
+  await page.route("**/*", async (route) => {
+    const url = route.request().url();
+    if (originIn(ALLOWED_ORIGINS, url)) {
+      await route.continue();
+      return;
+    }
+    observed.egress.push(url);
+    await route.abort("blockedbyclient");
+  });
+
+  return observed;
+}
+
+/**
+ * Open the app with a stack and wait until the map has stopped drawing; hand back the canvas.
+ *
+ * **The canvas, not the frame.** Declaring a source also adds its licence line to the
+ * attribution control, which is a sibling of the canvas — so a frame capture differs between
+ * stacks whether or not a tile was drawn, the trap this file records above. Cropping to the
+ * canvas keeps a difference in *text* from vouching for a difference in *map*.
+ */
+async function openCanvas(page: Page, url: string, sources: number): Promise<Buffer> {
+  await page.goto(url, { waitUntil: "load" });
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-status", "ready");
+  await expect(page.locator("#shell-status")).toHaveAttribute("data-sources", String(sources));
+  await waitForCanvas(page);
+  await settleRender(appMap(page));
+  return appMap(page).locator("canvas").screenshot();
+}
+
+/**
+ * How much of the canvas a source must change to count as having painted.
+ *
+ * **A threshold, not inequality.** Two loads of the same page are not byte-identical: measured at
+ * 0.003% of the canvas (seven pixels) between two loads of the full stack, and 0.000% for
+ * contours alone. Inequality would be satisfied by that noise — the same-stack control in the
+ * test below is what measures it on every run. The signals are two orders of magnitude above
+ * this: the DEM changes
+ * 99.1% of the canvas against the contours-only stack, the contours 10.2% against the
+ * terrain-only one.
+ *
+ * **And the premise is asserted, not remembered.** The test captures the full stack twice and
+ * requires that pair to stay *under* this threshold before the signals are read against it: if
+ * rendering noise ever grew past 1%, a dropped source could still satisfy the comparisons and
+ * this oracle would false-green — so the run that would do that fails here instead.
+ */
+const MIN_SOURCE_FRACTION = 0.01;
+
+test("each archive changes what the map paints, on its own evidence", async ({ page }) => {
+  // **Relational, and the two halves have to be taken together.** Reading past the header (the
+  // test above) proves an archive was asked for content; this proves each one *changed the
+  // canvas*, compared against the stack **missing that one source** rather than against the
+  // bare page — a difference from bare says only that *something* painted, and the other source
+  // is enough to produce it. The camera is the app's own fixed one (ADR-0037), so it is the same
+  // in every capture and every difference below is content, not framing.
+  const both = decodePng(await openCanvas(page, withArchives, 2));
+  const bothAgain = decodePng(await openCanvas(page, withArchives, 2));
+  const neither = decodePng(await openCanvas(page, DEMO, 0));
+  const terrainOnly = decodePng(await openCanvas(page, withTerrainOnly, 1));
+  const contoursOnly = decodePng(await openCanvas(page, withContoursOnly, 1));
+
+  for (const [name, image] of Object.entries({ bothAgain, neither, terrainOnly, contoursOnly })) {
+    expect([image.width, image.height], `${name} frames a different box`).toEqual([
+      both.width,
+      both.height,
+    ]);
+  }
+
+  const changedFraction = (a: Raster, b: Raster): number =>
+    countMask(changedMask(a, b)) / (a.width * a.height);
+
+  // The noise bound, load-bearing: the same stack twice must sit well inside the threshold the
+  // signals are then held to. Every assertion below is only as good as this one.
+  expect(
+    changedFraction(both, bothAgain),
+    "two loads of the same stack differ by more than the threshold, so the oracle cannot tell a source from noise",
+  ).toBeLessThan(MIN_SOURCE_FRACTION);
+
+  expect(
+    changedFraction(both, contoursOnly),
+    "the DEM reached nothing on the canvas: declaring it changed no pixel",
+  ).toBeGreaterThan(MIN_SOURCE_FRACTION);
+  expect(
+    changedFraction(both, terrainOnly),
+    "the contours changed nothing on the canvas",
+  ).toBeGreaterThan(MIN_SOURCE_FRACTION);
+  expect(
+    changedFraction(both, neither),
+    "neither archive reached the canvas: the map settled without rendering them",
+  ).toBeGreaterThan(MIN_SOURCE_FRACTION);
+});
+
+test("the worker asset is served, and the worker that runs is MapLibre's", async ({ page }) => {
+  // **Its own assertion, because the pixel evidence cannot make it.** A broken worker leaves the
+  // map painting far less rather than not at all, and every capture in a differential runs under
+  // the same worker configuration, so a broken one degrades them alike and the differences
+  // survive. The URL is the app's to get right (`main.ts`, `setWorkerUrl`) — the one thing the
+  // maplibre README says a consumer must configure.
+  //
+  // **The worker itself, not a URL that mentions it.** `/lab`'s version of this claim matched any
+  // response whose URL contained `maplibre-gl-worker` and asked for a 200 — which Vite's
+  // `?worker&url` export module satisfies on its own, and Vite's dev server answers 200 for a
+  // worker path that does not exist. Measured: pointing the URL at a missing file left that
+  // oracle green. So the observable here is the `Worker` the page created, its script's own
+  // response, and MapLibre's worker-side API being present inside it.
+  const workers: Worker[] = [];
+  page.on("worker", (worker) => workers.push(worker));
+  const statuses = new Map<string, number>();
+  page.on("response", (response) => statuses.set(response.url(), response.status()));
+
+  await openCanvas(page, withArchives, 2);
+
+  const worker = workers.find((candidate) => candidate.url().includes("maplibre-gl-worker"));
+  expect(worker, "no maplibre worker was created at all").toBeDefined();
+  expect(statuses.get(worker!.url()), "the worker's script was not served with 200").toBe(200);
+  // `registerWorkerSource` is MapLibre's worker-side entry point for custom sources; an empty
+  // or wrong script has no such global, and a worker that failed to load cannot be evaluated.
+  // A worker whose script failed to load terminates, and evaluating in it throws; that outcome
+  // is the claim being false, and it is named rather than left as a closed-target error.
+  const api = await worker!
+    .evaluate(() => typeof (self as { registerWorkerSource?: unknown }).registerWorkerSource)
+    .catch(() => "unreachable: the worker terminated");
+  expect(api, "the worker that runs is not MapLibre's").toBe("function");
+});
+
+test("nothing outside the app's own servers is requested", async ({ page }) => {
+  // Zero egress, and failing rather than counting: a tolerated request proves the response was
+  // cached, not that it was unnecessary. This is `SECURITY.md`'s guarantee — no network egress
+  // the consumer did not configure — against the shipped composition, with its stores open and
+  // its full stack drawn.
+  const observed = await guardEgress(page);
+  await openCanvas(page, withArchives, 2);
+
+  expect(observed.egress, `unexpected egress: ${observed.egress.join(", ")}`).toEqual([]);
+  expect(
+    observed.socketEgress,
+    `unexpected socket egress: ${observed.socketEgress.join(", ")}`,
+  ).toEqual([]);
+  // **And the permissive branch, exercised.** An empty refusal list is also what a route that
+  // never ran produces, so the page's own socket — Vite's HMR channel — must be seen going
+  // through: it proves the seam is installed and that an allowed origin is forwarded rather
+  // than silently mocked, which is the half the decoy below cannot show.
+  expect(observed.socketsForwarded.length, "no socket was forwarded at all").toBeGreaterThan(0);
+  for (const url of observed.socketsForwarded) {
+    expect(originIn(ALLOWED_SOCKET_ORIGINS, url), url).toBe(true);
+  }
+
+  // **An empty list is only as good as what would fill it.** The assertion above holds just as
+  // well when the guard admits everything, so the guard is handed a port that shares a textual
+  // prefix with an allowed one — spelled as `${DEMO}0` so the prefix relation is visible.
+  // Declared before the request, and exactly one: the block is the decoy's, so a second blocked
+  // request — real egress — fails here rather than hiding behind this one.
+  consoleFor(page).expect(
+    /ERR_BLOCKED_BY_CLIENT/,
+    "the decoy request below is aborted on purpose, and the browser reports the abort",
+    1,
+  );
+
+  const decoy = `${DEMO}0/tile.png`;
+  await page.evaluate(async (url) => {
+    // Rejection *is* the expected outcome; the assertion is about what the guard recorded.
+    await fetch(url).catch(() => undefined);
+  }, decoy);
+  await expect.poll(() => consoleFor(page).settled()).toBe(true);
+
+  expect(observed.egress, "a prefix-sharing origin was not treated as egress").toEqual([decoy]);
+
+  // The same falsification for the socket seam, which the HTTP decoy cannot reach: a guard
+  // installed only on `page.route` leaves this one unrecorded and unblocked.
+  const socketDecoy = `ws://127.0.0.1:${new URL(DEMO).port}0/hmr`;
+  await page.evaluate((url) => {
+    // Opening is enough; whether it then errors or closes is the browser's business.
+    new WebSocket(url);
+  }, socketDecoy);
+  await expect
+    .poll(() => observed.socketEgress, { message: "a prefix-sharing socket origin was forwarded" })
+    .toEqual([socketDecoy]);
 });

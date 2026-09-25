@@ -1110,6 +1110,8 @@ statement about it follows from 2e; the lattice candidate stays untouched; no fi
 ## Result, 2026-09-25 — increment 2e: the comparison was computed, and lost
 
 One dispatch, approved by the owner against the verified `origin/main` tip, with no inputs.
+Posted to issue #30 on 2026-09-25
+([comment](https://github.com/gosha70/mapatlas/issues/30#issuecomment-5825765436)).
 **Run [36077914754](https://github.com/gosha70/mapatlas/actions/runs/36077914754)**, job
 `107893180196`, head **`e2cd2222eb25a06bb23dcbbd021efc8b4ca495cc`**, 00:31:16Z → 02:00:32Z
 (89m16s, under the 180-minute ceiling). Runner: linux/x64, node **v24.21.0**, vitest 4.1.11,

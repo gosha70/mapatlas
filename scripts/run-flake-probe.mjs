@@ -34,6 +34,7 @@ import {
   runExperiment,
   verdict,
 } from "./flake-experiment.mjs";
+import { appendStepSummary, openTranscript, writeReport } from "./probe-output.mjs";
 import { classifyRun, interpretSpawn } from "./flake-probe.mjs";
 import { spawnArm } from "./spawn-arm.mjs";
 
@@ -53,6 +54,20 @@ if (environmentRefusal !== undefined) {
   process.exit(2);
 }
 
+/**
+ * The durable transcript, opened **before the first run** so nothing the loop prints is only ever
+ * in the job log. Increment 2e's report was lost to that log's size cap; see `probe-output.mjs`.
+ */
+const transcript = openTranscript(process.cwd());
+
+/** Print and persist, in that order, so the two can never disagree about what happened. */
+const say = (text) => {
+  console.log(text);
+  transcript.append(text);
+};
+
+say(`transcript: ${transcript.path}`);
+
 // The environment first, so a log that is later read in isolation says what machine produced it.
 for (const line of environmentReport({
   availableParallelism: availableParallelism(),
@@ -61,9 +76,9 @@ for (const line of environmentReport({
   platform: process.platform,
   arch: process.arch,
 })) {
-  console.log(line);
+  say(line);
 }
-console.log(
+say(
   `\nrunning the full suite ${String(RUNS_PER_ARM)} times per arm, alternating ` +
     `${CONTROL} and ${VARIANT} (${RUNTIME_MODES[VARIANT].join(" ")}), sequentially\n`,
 );
@@ -86,7 +101,7 @@ const counts = runExperiment({
     const where = `run ${String(index)}/${String(total)} [${arm} ${String(armRun)}/${String(RUNS_PER_ARM)}]`;
     const interpreted = interpretSpawn(spawn);
     if (interpreted.spawned === false) {
-      console.log(`${where}: could not start (${seconds}s)`);
+      say(`${where}: could not start (${seconds}s)`);
       return interpreted;
     }
     // Judged here, against the arm this loop scheduled — the worker can only agree with itself.
@@ -99,7 +114,7 @@ const counts = runExperiment({
         ? ""
         : ` [ALSO FAILED, unrelated: ${result.unrelated.join("; ")}]`) +
       (result.instrumentFault === undefined ? "" : ` [INSTRUMENT: ${result.instrumentFault}]`);
-    console.log(`${where}: ${kind}${note} (${seconds}s)`);
+    say(`${where}: ${kind}${note} (${seconds}s)`);
     return result;
   },
   onRun: ({ index, arm, armRun, kind, output, truncated, unrelated, instrumentFault }) => {
@@ -115,17 +130,29 @@ const counts = runExperiment({
             ? "a run with an instrument fault"
             : "an unrelated failure";
     const where = `run ${String(index)} (${arm} ${String(armRun)})`;
-    console.log(`\n===== ${where}: ${what} — full output follows =====`);
-    console.log(output);
-    console.log(`===== end of ${where} =====\n`);
+    say(`\n===== ${where}: ${what} — full output follows =====`);
+    say(output);
+    say(`===== end of ${where} =====\n`);
   },
 });
 
 const result = verdict(counts);
-console.log(`\n${report(result).join("\n")}`);
+const lines = report(result);
+say(`\n${lines.join("\n")}`);
+
+// **Before `process.exit`, because there is no after.** The report is the one thing a reader
+// needs and the one thing increment 2e lost; it goes to a file of its own and to the job summary
+// while the process still exists to write it.
+const reportPath = writeReport(process.cwd(), lines);
+const summary = appendStepSummary(lines);
+say(
+  `\nreport: ${reportPath}` +
+    (summary.written ? "; appended to the job summary" : `; no job summary (${summary.reason})`),
+);
 
 // Green only when the experiment answered its own question: both arms intact and the control
 // reproduced, whichever way the comparison then came out. The rule itself lives in
 // `flake-experiment.mjs` and is asserted there — here it would be unreachable without spending a
-// job to find out.
+// job to find out. **The durable copies are written above, so this exit code never costs a
+// reader the result**: a non-zero exit is exactly when the detail is most worth reading.
 process.exit(exitCode(result));

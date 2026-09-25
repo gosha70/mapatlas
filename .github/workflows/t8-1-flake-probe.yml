@@ -100,5 +100,48 @@ jobs:
 
       # Reports the environment, then loops. One step rather than two: the runner prints the
       # environment before run 1, so it is in the log even if the loop is later cut short.
+      #
+      # It also writes `probe-output/transcript.log` as it goes and `probe-output/report.txt`
+      # before it exits, which the steps below check and upload. That is not belt and braces: increment 2e's
+      # 150-per-arm run completed with both arms intact and a control that reproduced, and its
+      # report was **lost** — printed only to this log, at the end of 300 runs' output, past the
+      # 114,903-byte cap GitHub applies to a step. The comparison was computed and is unrecoverable.
       - name: Probe
         run: npm run probe:flake
+
+      # **Both files, or the job says so.** The upload below cannot make this check:
+      # `if-no-files-found: error` rejects an *empty* directory and accepts one holding only the
+      # transcript — which is exactly the half-written case worth catching, a probe that recorded
+      # its runs and died before its report. Its own step, **after the probe and before the
+      # upload**, and `if: always()` so it still runs when the probe exited non-zero, which is
+      # when an incomplete output is most likely.
+      #
+      # It does not discard anything: the upload below is `if: always()` too, so a transcript that
+      # survived is still archived when this step fails. Saying the output is incomplete and
+      # keeping what there is are not in tension.
+      - name: Check the probe left both outputs
+        if: always()
+        run: npm run check:probe-output
+
+      # **`if: always()`, and it is the point of the step.** A null control and a contaminated arm
+      # both exit non-zero, and those are the runs whose transcript is most worth reading — an
+      # upload that only ran on success would preserve exactly the results that need it least.
+      # The probe's own exit status is untouched: this step does not swallow it, and the job still
+      # fails when the probe does.
+      #
+      # `if-no-files-found: error` catches the empty-directory case. It does **not** catch half the
+      # pair — the step above does that, which is why it exists.
+      #
+      # A job killed by `timeout-minutes` runs no further steps and so uploads nothing — **the
+      # incremental transcript does not survive it either**, since the runner is ephemeral. That is
+      # understood and not worked around: a timeout kills the job **before a verdict exists**, so
+      # what is lost is runs that never finished, not a result. Writing incrementally protects
+      # against the probe *process* failing, after which these `always()` steps still run.
+      - name: Preserve the probe's output
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: t8-1-probe-output
+          path: probe-output/
+          if-no-files-found: error
+          retention-days: 90

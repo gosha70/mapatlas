@@ -6,7 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import { ROOT } from "./consumer-project.mjs";
 import { RUNS_PER_ARM } from "./flake-experiment.mjs";
-import { runCommandsOf, timeoutOf, triggersOf } from "./workflow-triggers.mjs";
+import { OUTPUT_DIR } from "./probe-output.mjs";
+import { runCommandsOf, stepsOf, timeoutOf, triggersOf } from "./workflow-triggers.mjs";
 
 const yaml = (...lines) => lines.join("\n");
 
@@ -74,7 +75,87 @@ describe("the T8.1 flake probe", () => {
       "npm run build",
       "npm run check:runtime-mode",
       "npm run probe:flake",
+      // After the probe, not before: it checks what the probe was supposed to leave behind.
+      "npm run check:probe-output",
     ]);
+  });
+
+  /**
+   * **Falsifier: the probe's output left in a log that can truncate it.** This is the repair for
+   * increment 2e, whose result was computed and then lost: both arms intact, the control
+   * reproduced, and the report unreadable because it existed only in a step log GitHub capped at
+   * 114,903 bytes. Every clause below is one of the ways that loss could recur.
+   */
+  it("preserves the probe's output in an artifact, after the probe and whatever it exits", () => {
+    const steps = stepsOf(workflow);
+    const probe = steps.findIndex((step) => step.run === "npm run probe:flake");
+    const upload = steps.findIndex((step) =>
+      (step.uses ?? "").startsWith("actions/upload-artifact"),
+    );
+
+    expect(probe, "no probe step").toBeGreaterThanOrEqual(0);
+    expect(upload, "the probe's output is not uploaded anywhere").toBeGreaterThanOrEqual(0);
+
+    // **Order, not presence.** An upload scheduled before the probe archives an empty directory,
+    // and "the file contains an upload step" stays true either way.
+    expect(upload, "the upload runs before the probe that writes the files").toBeGreaterThan(probe);
+
+    // **`always()`, because a null control and a contaminated arm both exit non-zero** — and
+    // those are the runs whose transcript is worth most. An upload that ran only on success
+    // would preserve exactly the results that need preserving least.
+    expect(steps[upload]?.if, "the upload does not run when the probe fails").toBe("always()");
+
+    // **A silent empty artifact is the failure mode this step exists to prevent.**
+    expect(steps[upload]?.with["if-no-files-found"]).toBe("error");
+
+    // It uploads the directory the runner writes, so the two cannot drift apart.
+    expect(steps[upload]?.with["path"]).toBe(`${OUTPUT_DIR}/`);
+  });
+
+  /**
+   * **Falsifier: half the pair uploaded as a whole one.** `if-no-files-found: error` rejects an
+   * empty directory and accepts one holding only the transcript, so completeness is checked by a
+   * step of its own — **after the probe, before the upload**, and `if: always()` so it runs when
+   * the probe exited non-zero, which is when an incomplete output is likeliest.
+   *
+   * **And the upload stays behind it, also `always()`.** A failed completeness check must not
+   * cost the transcript that did survive: the job's business is to say the output is incomplete,
+   * not to discard what there is.
+   */
+  it("checks both outputs exist between the probe and the upload, without discarding either", () => {
+    const steps = stepsOf(workflow);
+    const probe = steps.findIndex((step) => step.run === "npm run probe:flake");
+    const check = steps.findIndex((step) => step.run === "npm run check:probe-output");
+    const upload = steps.findIndex((step) =>
+      (step.uses ?? "").startsWith("actions/upload-artifact"),
+    );
+
+    expect(check, "nothing checks that both outputs were written").toBeGreaterThanOrEqual(0);
+    expect(check, "the completeness check runs before the probe writes anything").toBeGreaterThan(
+      probe,
+    );
+    expect(check, "the completeness check runs after the upload it should gate").toBeLessThan(
+      upload,
+    );
+    expect(steps[check]?.if, "the check is skipped when the probe fails").toBe("always()");
+    expect(
+      steps[upload]?.if,
+      "a failed completeness check would discard the transcript that survived",
+    ).toBe("always()");
+  });
+
+  /**
+   * **Falsifier: the probe's exit status swallowed.** `continue-on-error` on the probe, or an
+   * `|| true` in its command, would turn a null control or a contaminated arm into a green job —
+   * the durability repair quietly becoming a change to what the experiment reports.
+   */
+  it("leaves the probe's own exit status alone", () => {
+    const probe = stepsOf(workflow).find((step) => step.run === "npm run probe:flake");
+
+    expect(probe).toBeDefined();
+    expect(probe?.["continue-on-error"]).toBeUndefined();
+    expect(probe?.run).toBe("npm run probe:flake");
+    expect(probe?.if).toBeUndefined();
   });
 
   /**

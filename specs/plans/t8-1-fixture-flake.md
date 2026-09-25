@@ -1107,6 +1107,137 @@ the 2026-09-21 options list does**, and B was never claimed to. It buys one comp
 budget where a null control says something, on one job, on one day. `M` stays frozen and no
 statement about it follows from 2e; the lattice candidate stays untouched; no fix is authorised.
 
+## Result, 2026-09-25 — increment 2e: the comparison was computed, and lost
+
+One dispatch, approved by the owner against the verified `origin/main` tip, with no inputs.
+**Run [36077914754](https://github.com/gosha70/mapatlas/actions/runs/36077914754)**, job
+`107893180196`, head **`e2cd2222eb25a06bb23dcbbd021efc8b4ca495cc`**, 00:31:16Z → 02:00:32Z
+(89m16s, under the 180-minute ceiling). Runner: linux/x64, node **v24.21.0**, vitest 4.1.11,
+`availableParallelism 4`.
+
+**This is recorded as "comparison result lost", not as "inconclusive".** The two are different
+outcomes, and conflating them would misstate what is known in both directions. 2d was
+inconclusive: it ran, and its control did not reproduce. 2e ran, its control *did* reproduce, a
+Fisher test *was* computed — and the numbers no longer exist.
+
+### What is known, and how
+
+The job's conclusion was **success**, and `exitCode` returns 0 only when `comparison` is defined,
+which requires passing both gates. So, with certainty:
+
+- **150 of 150 runs completed in each arm**, with **zero unrelated failures** and **zero
+  instrument faults** — which is what `intact` means, in both arms.
+- **The default control reproduced.** A null control returns exit 1; this did not.
+- **A two-sided Fisher exact test was computed** at α = 0.05.
+- From the surviving head of the log: **run 1/300, default 1/150, was an exact-signature hit**
+  (17.4 s).
+- The instrument certified on this job's own Node before the loop: worker arguments exactly as
+  expected and differing by exactly `--no-opt`; **91 files collected in each arm, 93 unmarked** —
+  the workload 2e is scoped to; tiers default `1010001`, `--no-opt` `110001`, `--no-turbofan`
+  `110001`.
+
+### What is lost, and why
+
+**Both arms' hit counts, both rates and their intervals, the p-value, and the outcome — DIFFERS or
+UNDISTINGUISHED.** The exit code does not separate those two, so nothing distinguishes them.
+
+`run-flake-probe.mjs` printed the report with `console.log` and nowhere else, at the end of 300
+runs' output. GitHub capped the step log at **114,903 bytes**, cutting it off mid-word after run
+1. Confirmed through three channels — `gh run view --log`, the jobs API, and the raw log archive —
+all identical; the run uploaded no artifacts, and the owner checked check-run annotations, which
+preserved one exact-signature annotation and no counts, no arm, no run index, no p-value.
+
+**The budget caused it.** At 60 per arm the output fit under the cap; at 150 it did not. The
+amendment that raised the budget did not consider that the result's only copy sat at the end of a
+stream whose length scales with the budget, and none of its eleven falsifiers tested whether the
+report survives to be read — every one tested what it says. That is the gap, stated plainly.
+
+### What follows
+
+**No statement about `--no-opt` is permitted from 2e.** Not "undistinguished", not "differs", not
+a direction. The comparison happened and its result is unavailable; that is the whole of it.
+
+**No rerun** (owner's ruling, 2026-09-25). The one-dispatch rule stands, and re-running because
+the first run's *record* disappointed is the selection the 2026-09-21 amendment ruled out, one
+step removed. `M` stays frozen; no fix, no lattice-candidate work.
+
+**Corroboration, recorded separately and not part of 2e.** On the same commit `e2cd222`, about 75
+minutes before this dispatch, an ordinary `ci.yml` run
+([36071861141](https://github.com/gosha70/mapatlas/actions/runs/36071861141)) failed its Test step
+with a message **byte-identical** to the recorded signature — `isRecordedFailure` and
+`carriesSignature` both true against `RECORDED_FIRST_LINES[1]`, with the familiar diagnostic of
+crops `[0] 46x113` and `[1] 35x113` sharing one origin.
+
+**It is a reproduction on the 93-file ordinary suite, which is not the probe's workload.** That
+run was unmarked — no `MAPATLAS_PROBE_RUNTIME_MODE` — so `vitest.config.ts` applied no
+probe exclusion and collected **93** files; the probe's arms collect **91**, the same suite less
+the two a jitless worker cannot run. Related, and a different workload. An earlier draft of this
+section called it the 91-file suite, which was wrong.
+
+So it establishes that the failure still reproduces on this tree's ordinary suite under default
+Node. It is one observation, from a different job under a different harness, not predeclared, and
+it is **not** evidence about `M`, about `--no-opt`, or about 2e's arms.
+
+**T8.1 remains open, and is parked again after this attempted increment.**
+
+## Amendment, 2026-09-25 — the durability repair (instrument only)
+
+**Ruled by the owner, 2026-09-25.** Hardening, not a fourth experiment: it changes no measurement,
+no gate, no threshold and no conclusion, and **spends no alpha**. Implemented and under review;
+**no dispatch is authorised by this document.**
+
+- The runner opens `probe-output/transcript.log` **before the first run** and appends to it as the
+  loop goes, so a probe **process** that crashes or exits non-zero leaves everything it reached
+  for the `if: always()` steps below to check and preserve. Every line the loop emits goes through
+  one tee; a `console.log` reintroduced inside it turns a test red.
+- It writes `probe-output/report.txt` and appends the report to `$GITHUB_STEP_SUMMARY` **before
+  `process.exit`**, because there is no after. The summary is best-effort and reports rather than
+  throws; the artifact is the durable copy.
+- The workflow uploads `probe-output/` in a step **after** the probe, with **`if: always()`** —
+  a null control and a contaminated arm both exit non-zero, and those transcripts are worth most —
+  and **`if-no-files-found: error`**, since a silent empty artifact is the failure being repaired.
+- **The probe's exit status is untouched**: `continue-on-error` on the probe step turns a test red.
+- **A timeout leaves neither a verdict nor a transcript, and that is understood.** It kills the
+  job, no `always()` step runs, and the runner is ephemeral — so the incremental file dies with
+  it. Writing incrementally protects against the probe **process** failing, after which the
+  `always()` steps do run and preserve what the loop reached. An earlier draft of this amendment
+  claimed the transcript survived a timeout; it does not.
+- **Both files, or the job says so.** `if-no-files-found: error` rejects an *empty* directory and
+  accepts one holding only the transcript, so a separate `if: always()` step between the probe and
+  the upload requires both by name. The upload stays `if: always()` behind it, so a transcript
+  that survived is still archived when that check fails.
+
+**Fourteen falsifiers, all killed.** The complete inventory, so the total is auditable rather than
+asserted:
+
+| # | Mutation | What it would cost |
+|---|---|---|
+| 1 | the report write deleted | increment 2e's loss, reintroduced exactly |
+| 2 | the transcript never opened | the loop prints to the console only |
+| 3 | the transcript opened after the loop | a process failure preserves nothing |
+| 4 | the report written after `process.exit` | i.e. never |
+| 5 | the summary append removed | the verdict off the run's own page |
+| 6 | a `console.log` back in the loop | that line in the log, absent from the artifact |
+| 7 | the transcript buffers instead of appending | its tail lost when the process dies |
+| 8 | the upload moved before the probe | an empty directory archived |
+| 9 | `if-no-files-found` relaxed to `warn` | an empty artifact passing silently |
+| 10 | the completeness check accepts a transcript alone | half the pair uploaded as a whole one |
+| 11 | the completeness step removed | the upload left to accept half the pair |
+| 12 | the completeness check loses `if: always()` | skipped exactly when output is likeliest incomplete |
+| 13 | the **upload** loses `if: always()` | a failed check discarding the transcript that survived |
+| 14 | `continue-on-error` on the probe | an answerless job turning green |
+
+**Reconciling with the eleven this section first recorded:** rows 10, 11 and 12 are new with the
+completeness check, and row 13 is the former `upload-only-on-success` **reclassified, not added** —
+the same edit on the same anchor, renamed because with a check now in front of the upload it
+costs the surviving transcript as well as a failing probe's. So: eleven, minus none, one renamed,
+plus three. No falsifier was removed or weakened.
+
+Two harness defects were found and fixed while running them — a `stepsOf` reader that silently
+dropped `continue-on-error`, which made row 14 **invisible rather than survivable**, and an
+evaluation-order bug in the mutation script that truncated the workflow before reading it. Both
+are the [[validate-the-mutant]] shape: a mutant that appears to survive may be a broken mutant.
+
 ## Required mutations
 
 Each must turn a named assertion red:

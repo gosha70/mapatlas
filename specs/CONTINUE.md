@@ -24,16 +24,21 @@ packed one. It is not a reinterpretation of the note.
 
 **So there is no phase to finish. What was buildable is `tasks.md`'s Phase 8** — three follow-ups,
 post-v1, unowned and unordered, each with acceptance criteria written when they were recorded rather
-than when someone picks them up. Two are closed; T8.1 resumed on 2026-09-23 under option B and is
-the only one open.
+than when someone picks them up. Two are closed; T8.1 is the only one open, and is parked again
+after its 2026-09-25 dispatch lost its result.
 
 - **T8.1 — the fixture-build flake.** Tracked in **issue #30**; read it first. Its acceptance
   criterion is deliberately awkward: the failure must be made **reproducible on demand** before it
   is fixed, because a change that merely stops it being observed is indistinguishable from one that
-  fixed it. **Parked on 2026-09-22, resumed on 2026-09-23 when the owner ruled option B** — open
-  and not discharged. Increment 2e is the default-against-`--no-opt` cut at `N = 150` per arm,
+  fixed it. **Parked on 2026-09-22, resumed on 2026-09-23 under option B, dispatched once on
+  2026-09-25, and parked again** — open and not discharged. Increment 2e is the default-against-`--no-opt` cut at `N = 150` per arm,
   predeclared so that a null control is a bound rather than a shrug; it is **implemented and
-  under review, and has not been dispatched**. **It is a follow-on, not 2d at a larger budget**:
+  under review when it was dispatched**. It ran (36077914754, head `e2cd222`, 89m16s): both arms
+  intact at 150/150, **the control reproduced**, a Fisher test was computed — and **the report was
+  lost**, because it existed only in a job log GitHub truncated at 114,903 bytes. **No statement
+  about `--no-opt` follows**; this is "comparison result lost", not "inconclusive". No rerun, by
+  ruling. A durability repair is under review: the probe writes its transcript as it goes and its
+  report before exiting, and the workflow uploads both with `if: always()`. **It is a follow-on, not 2d at a larger budget**:
   the measured suite is 91 files where 2c's and 2d's was 95, because T8.2 added one test file and
   T8.3 removed five and nothing pins the count. The suite is the workload being measured, so the
   95-file evidence — 2c's 8/60, the 13% design rate, the `M = 61` candidate — stays scoped to a

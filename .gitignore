@@ -177,3 +177,6 @@ build/fixture/
 # Written by the Playwright CLI when it is driven directly rather than through
 # `npm run test:browser`; `prettier --check .` trips on the yml it leaves behind.
 /.playwright-cli/
+
+# The T8.1 probe writes its durable transcript and report here (scripts/probe-output.mjs).
+probe-output/

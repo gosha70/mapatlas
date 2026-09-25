@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import type { Id, LatLng, TileSource, Track } from "@mapatlas/core";
 
-// Mock the renderer so <MapCanvas> is tested without a real Leaflet map. The
+// Mock the renderer so <MapCanvas> is tested without a real MapLibre map. The
 // dynamic import inside the component resolves to this mock.
 const controller = {
   setSources: vi.fn(),
@@ -27,7 +27,7 @@ let tapCb: ((at: LatLng) => void) | undefined;
 let clickCb: ((id: Id) => void) | undefined;
 const createMapController = vi.fn(() => controller);
 
-vi.mock("@mapatlas/leaflet", () => ({ createMapController }));
+vi.mock("@mapatlas/maplibre", () => ({ createMapController }));
 
 import { MapCanvas } from "./MapCanvas";
 

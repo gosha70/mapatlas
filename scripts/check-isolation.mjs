@@ -3,10 +3,11 @@
 // Import-isolation scan (T0.5). Enforces the one architectural rule: the engine
 // depends on nothing consumer- or renderer-specific.
 //
-//   @mapatlas/core    — must not import `react`/`react-dom`, `leaflet`, or the DOM,
-//                       and must not mention any domain token.
-//   @mapatlas/leaflet — must not import `react`/`react-dom`, and must not mention
-//                       any domain token. (Leaflet legitimately uses the DOM.)
+//   @mapatlas/core     — must not import `react`/`react-dom`, `maplibre-gl`, or
+//                        the DOM, and must not mention any domain token.
+//   @mapatlas/maplibre — must not import `react`/`react-dom`, and must not
+//                        mention any domain token. (The renderer legitimately
+//                        uses the DOM.)
 //
 // The scan is intentionally cheap and text-based so it can run in CI without a
 // build step. The pure `scanContent` function is exported so it can be unit
@@ -38,7 +39,7 @@ const DOM_GLOBALS = ["window", "document", "navigator", "localStorage"];
 const SOURCE_EXT = /\.(m|c)?tsx?$/;
 
 /**
- * @param {"core"|"leaflet"} pkg
+ * @param {"core"|"maplibre"} pkg
  * @param {string} content  file contents
  * @returns {string[]} human-readable violation messages (empty when clean)
  */
@@ -47,7 +48,7 @@ export function scanContent(pkg, content) {
 
   const forbiddenModules =
     pkg === "core"
-      ? [/^react($|\/)/, /^react-dom($|\/)/, /^leaflet($|\/)/]
+      ? [/^react($|\/)/, /^react-dom($|\/)/, /^maplibre-gl($|\/)/]
       : [/^react($|\/)/, /^react-dom($|\/)/];
 
   for (const match of content.matchAll(IMPORT_RE)) {
@@ -92,7 +93,7 @@ function* walk(dir) {
 function main() {
   const targets = [
     { pkg: "core", dir: join(ROOT, "packages/core/src") },
-    { pkg: "leaflet", dir: join(ROOT, "packages/leaflet/src") },
+    { pkg: "maplibre", dir: join(ROOT, "packages/maplibre/src") },
   ];
 
   let failed = false;

@@ -1,9 +1,9 @@
 {
-  "name": "@mapatlas/leaflet",
+  "name": "@mapatlas/maplibre",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "MAP-ATLAS Leaflet renderer",
+  "description": "MAP-ATLAS MapLibre GL renderer",
   "license": "Apache-2.0",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -22,10 +22,8 @@
   },
   "dependencies": {
     "@mapatlas/core": "*",
-    "leaflet": "^1.9.4",
+    "@types/geojson": "^7946.0.14",
+    "maplibre-gl": "^5.24.0",
     "pmtiles": "^3.2.1"
-  },
-  "devDependencies": {
-    "@types/leaflet": "^1.9.12"
   }
 }

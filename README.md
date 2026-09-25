@@ -34,14 +34,14 @@ loop in an afternoon.
 | [`@mapatlas/core`](packages/core) | Framework-agnostic model, sampling/simplify, `EventLog`, GeoJSON, seams, `noopAnalyzer`, in-memory store + conformance suite |
 | [`@mapatlas/storage-idb`](packages/storage-idb) | Default `StorageAdapter` over IndexedDB |
 | [`@mapatlas/recorder-web`](packages/recorder-web) | Web `TrackRecorder` (`watchPosition` + Screen Wake Lock) |
-| [`@mapatlas/leaflet`](packages/leaflet) | Leaflet `MapController`, tile + offline layers |
+| [`@mapatlas/maplibre`](packages/maplibre) | MapLibre GL `MapController`, tile + offline layers |
 | [`@mapatlas/react`](packages/react) | `<MapCanvas>`, `<EventComposer>`, `<TripReview>` + hooks |
 | [`@mapatlas/offline-pmtiles`](packages/offline-pmtiles) | PMTiles `OfflineRegionStore` + storage-persistence helpers |
 | [`apps/demo`](apps/demo) | A generic field-logger demo wiring the whole engine (`npm run dev`) |
 
 The engine core stays DOM-free and domain-free — an [import-isolation
-scan](scripts/check-isolation.mjs) fails the build on any `react`/`leaflet`/DOM import or
-domain token in `@mapatlas/core` (or `react` in `@mapatlas/leaflet`).
+scan](scripts/check-isolation.mjs) fails the build on any `react`/`maplibre-gl`/DOM import or
+domain token in `@mapatlas/core` (or `react` in `@mapatlas/maplibre`).
 
 ## What's here now (the build seed)
 
@@ -60,7 +60,7 @@ the same `specs/`. Any other harness should read `specs/` directly.
 
 ## Design at a glance
 
-- **TypeScript**, framework-agnostic **core** + a **Leaflet** renderer + thin **React** bindings.
+- **TypeScript**, framework-agnostic **core** + a **MapLibre GL** renderer + thin **React** bindings.
 - **Offline-first**: PMTiles offline map regions; a pluggable storage adapter (default IndexedDB).
 - **Track recording** behind a `TrackRecorder` abstraction (web `watchPosition` + Wake Lock;
   a native adapter for background tracking in a Capacitor/Cordova shell).

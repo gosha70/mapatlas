@@ -5,16 +5,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MAP-ATLAS field logger</title>
-    <!-- Leaflet CSS. A production consumer should self-host this asset. -->
+    <!-- MapLibre GL CSS. A production consumer should self-host this asset. -->
     <link
       rel="stylesheet"
-      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css"
     />
     <style>
-      /* Field logger: clicking the map drops an event → crosshair affordance. */
-      .leaflet-container { cursor: crosshair; }
-      .leaflet-container.leaflet-dragging,
-      .leaflet-dragging .leaflet-container { cursor: grabbing; }
+      /* Field logger: clicking the map drops an event → crosshair affordance.
+         MapLibre sets an inline "grabbing" cursor on its canvas during a
+         drag-pan and clears it afterward, falling back to this rule — no
+         separate ".dragging" selector is needed (unlike Leaflet). */
+      .maplibregl-canvas {
+        cursor: crosshair;
+      }
     </style>
   </head>
   <body>

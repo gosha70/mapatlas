@@ -2,7 +2,7 @@
 
 /**
  * MAP-ATLAS React bindings — hooks and components (the integration face).
- * Components that mount Leaflet load it dynamically so this entry point is
+ * Components that mount MapLibre load it dynamically so this entry point is
  * SSR-safe (no `window` at import). Imports no domain concepts.
  */
 export { useTrackRecorder } from "./use-track-recorder";

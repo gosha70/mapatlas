@@ -13,13 +13,12 @@
   },
   "dependencies": {
     "@mapatlas/core": "*",
-    "@mapatlas/leaflet": "*",
+    "@mapatlas/maplibre": "*",
     "@mapatlas/offline-pmtiles": "*",
     "@mapatlas/react": "*",
     "@mapatlas/recorder-web": "*",
     "@mapatlas/storage-idb": "*",
     "idb": "^8.0.0",
-    "leaflet": "^1.9.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

@@ -279,15 +279,20 @@ export function isStoragePersisted(nav?): Promise<boolean>;
 export function installGuidance(userAgent?): { platform; reason; steps: string[] };
 ```
 
-The offline render side is a decoupled Leaflet layer (`@mapatlas/leaflet`):
+The offline render side is a decoupled MapLibre GL layer (`@mapatlas/maplibre`):
 
 ```ts
+export interface OfflineTileLayer {
+  addTo(map: maplibregl.Map): OfflineTileLayer;
+  remove(): OfflineTileLayer;
+}
 export function createOfflineTileLayer(
-  read: (z, x, y) => Promise<ArrayBuffer | undefined>, options?,
-): L.GridLayer;   // wire `store.readTile.bind(store, regionId)` as `read`
+  read: (z, x, y) => Promise<ArrayBuffer | undefined>,
+  options?: { attribution?: string; minZoom?: number; maxZoom?: number; opacity?: number },
+): OfflineTileLayer;   // wire `store.readTile.bind(store, regionId)` as `read`
 ```
 
-## 6. Renderer (`@mapatlas/leaflet`)
+## 6. Renderer (`@mapatlas/maplibre`)
 
 ```ts
 export interface MapControllerOptions {
@@ -308,14 +313,27 @@ export interface MapController {
 }
 export declare function createMapController(o: MapControllerOptions): MapController;
 
-// Additive helper: build a Leaflet layer for any TileSource kind (xyz | wms |
-// pmtiles). pmtiles renders raster tiles read from the archive by (z, x, y).
-export declare function createTileLayer(source: TileSource, mime?: string): L.Layer;
+// Additive helper: build a MapLibre GL source+layer pair for any TileSource
+// kind (xyz | wms | pmtiles). pmtiles renders raster tiles read from the
+// archive via a global `pmtiles://` protocol. Mirrors a Leaflet layer's
+// `addTo`/`remove` shape rather than exposing raw addSource/addLayer calls.
+export interface MapLibreTileLayer {
+  addTo(map: maplibregl.Map): MapLibreTileLayer;
+  remove(): MapLibreTileLayer;
+}
+export declare function createTileLayer(source: TileSource): MapLibreTileLayer;
 ```
 
-Rendering notes: event markers are keyboard-reachable Leaflet `DivIcon`s (no image
-assets); a visible-focus stylesheet is injected once; `fitTrack`/`recenter` pass
-`animate: false` when `prefers-reduced-motion: reduce` is set.
+Rendering notes: event markers are keyboard-reachable HTML `Marker`s (no image
+assets) — `role="button"`, `tabindex="0"`, an `aria-label`, and Enter/Space
+activate them the same as a click; a visible-focus stylesheet is injected
+once. `fitTrack`/`recenter` pass `animate: false` (`recenter` uses `jumpTo`
+instead of `easeTo`) when `prefers-reduced-motion: reduce` is set.
+Attribution is engine-owned: the map is constructed with
+`attributionControl: false` and an explicit `AttributionControl` is added
+with no default/branded prefix, so only the per-source `attribution` strings
+declared in `TileSource[]` are ever rendered (see ADR-0014's neutral-
+attribution dependency criterion).
 
 ## 7. React bindings (`@mapatlas/react`)
 
@@ -341,7 +359,7 @@ export function useOfflineRegions(store: OfflineRegionStore): {
   remove(id: Id): Promise<void>;
 };
 
-// Components. MapCanvas is SSR-safe (loads Leaflet dynamically on mount, so no
+// Components. MapCanvas is SSR-safe (loads MapLibre GL dynamically on mount, so no
 // `window` at import). `className`/`style` are additive, optional layout props.
 export function MapCanvas(props: {
   sources: TileSource[]; track?: Track; events?: MapEvent[]; livePoint?: TrackPoint;

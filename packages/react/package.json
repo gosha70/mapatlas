@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@mapatlas/core": "*",
-    "@mapatlas/leaflet": "*",
+    "@mapatlas/maplibre": "*",
     "@mapatlas/recorder-web": "*"
   },
   "peerDependencies": {

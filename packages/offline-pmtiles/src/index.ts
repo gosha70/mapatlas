@@ -2,7 +2,7 @@
 
 /**
  * MAP-ATLAS offline map regions — a PMTiles-backed OfflineRegionStore plus
- * storage-persistence helpers. Renderer-neutral (no Leaflet, no React): a
+ * storage-persistence helpers. Renderer-neutral (no MapLibre GL, no React): a
  * renderer reads a downloaded region's tiles via the store's `readTile`.
  */
 export { tilesForRegion, countTiles } from "./tiles";

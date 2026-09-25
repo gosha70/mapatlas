@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 // T5.2 contract: the package entry point must be importable where there is no
-// DOM (server-side rendering). Leaflet touches `window` when it loads, so
+// DOM (server-side rendering). MapLibre GL touches `window` when it loads, so
 // <MapCanvas> imports it dynamically on mount rather than at module scope.
 describe("SSR safety", () => {
   it("imports the entry point with no window/document present", async () => {

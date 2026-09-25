@@ -5,7 +5,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { createMemoryStorageAdapter } from "@mapatlas/core";
 
 // Render <MapCanvas> against a stub controller so the demo test needs no real map.
-vi.mock("@mapatlas/leaflet", () => ({
+vi.mock("@mapatlas/maplibre", () => ({
   createMapController: vi.fn(() => ({
     setSources: vi.fn(),
     renderTrack: vi.fn(),

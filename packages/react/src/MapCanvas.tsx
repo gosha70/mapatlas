@@ -8,10 +8,10 @@ import type {
   Track,
   TrackPoint,
 } from "@mapatlas/core";
-// Type-only import: erased at build, so this module pulls in no Leaflet (and no
+// Type-only import: erased at build, so this module pulls in no MapLibre (and no
 // `window`) at import time. The renderer is loaded dynamically on mount below,
-// which keeps <MapCanvas> SSR-safe (Leaflet touches `window` when it loads).
-import type { MapController } from "@mapatlas/leaflet";
+// which keeps <MapCanvas> SSR-safe (MapLibre touches `window` when it loads).
+import type { MapController } from "@mapatlas/maplibre";
 
 export interface MapCanvasProps {
   sources: TileSource[];
@@ -43,7 +43,7 @@ export function MapCanvas(props: MapCanvasProps): React.JSX.Element {
     const el = containerRef.current;
     if (!el) return;
 
-    void import("@mapatlas/leaflet").then(({ createMapController }) => {
+    void import("@mapatlas/maplibre").then(({ createMapController }) => {
       if (cancelled || !containerRef.current) return;
       const controller = createMapController({
         container: el,
@@ -77,7 +77,8 @@ export function MapCanvas(props: MapCanvasProps): React.JSX.Element {
   useEffect(() => {
     controllerRef.current?.renderTrack(props.track ?? null);
     // Demo fix: keep the recorded track in view as it appears / grows.
-    const n = props.track?.simplified?.length ?? props.track?.points.length ?? 0;
+    const n =
+      props.track?.simplified?.length ?? props.track?.points.length ?? 0;
     if (props.track && n >= 2) controllerRef.current?.fitTrack(props.track);
   }, [props.track]);
   useEffect(() => {

@@ -67,7 +67,7 @@ export function createMemoryTileCache(): TileCache {
 /**
  * The concrete store adds `readTile` — the offline read path a renderer uses to
  * serve a downloaded region's tiles from the cache (see
- * `@mapatlas/leaflet`'s `createOfflineTileLayer`).
+ * `@mapatlas/maplibre`'s `createOfflineTileLayer`).
  */
 export interface PMTilesOfflineRegionStore extends OfflineRegionStore {
   readTile(

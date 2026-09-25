@@ -15,22 +15,22 @@ Pick the packages you need. `@mapatlas/react` is the integration face; the rest
 are swappable implementations behind the engine's seams.
 
 ```bash
-npm install @mapatlas/core @mapatlas/react @mapatlas/leaflet \
+npm install @mapatlas/core @mapatlas/react @mapatlas/maplibre \
             @mapatlas/storage-idb @mapatlas/recorder-web @mapatlas/offline-pmtiles \
-            react react-dom leaflet
+            react react-dom maplibre-gl
 ```
 
-Load Leaflet's stylesheet once (self-host it in production):
+Load MapLibre GL's stylesheet once (self-host it in production):
 
 ```html
-<link rel="stylesheet" href="/assets/leaflet.css" />
+<link rel="stylesheet" href="/assets/maplibre-gl.css" />
 ```
 
 | Package | Provides | Seam it implements |
 | --- | --- | --- |
 | `@mapatlas/core` | types, sampling/simplify, `EventLog`, GeoJSON, `noopAnalyzer`, `createMemoryStorageAdapter` | — |
 | `@mapatlas/react` | `<MapCanvas>`, `<EventComposer>`, `<TripReview>`, hooks | — |
-| `@mapatlas/leaflet` | `createMapController`, `createTileLayer`, `createOfflineTileLayer` | renderer |
+| `@mapatlas/maplibre` | `createMapController`, `createTileLayer`, `createOfflineTileLayer` | renderer |
 | `@mapatlas/storage-idb` | `createIdbStorageAdapter` | `StorageAdapter` |
 | `@mapatlas/recorder-web` | `createWebTrackRecorder` | `TrackRecorder` |
 | `@mapatlas/offline-pmtiles` | `createPMTilesOfflineRegionStore`, persistence helpers | `OfflineRegionStore` |
@@ -79,7 +79,7 @@ function Recorder() {
 
 ## 4. Show the map and drop events
 
-`<MapCanvas>` is SSR-safe (it loads Leaflet on mount). Tap the map to place an
+`<MapCanvas>` is SSR-safe (it loads MapLibre GL on mount). Tap the map to place an
 event with `<EventComposer>` — a comment plus in-place photo capture. Pass a
 `store` so photos persist by `blobKey` (durable across reload). Pass an
 `analyzer` to offer "Analyze photo"; if it `runsRemotely`, a disclosure is shown
@@ -141,7 +141,7 @@ const geojson = JSON.stringify(trackToGeoJSON(rec.track!, events.events));
 ## 6. Go offline
 
 Download a bbox × zoom region, then render it with the network down.
-`OfflineRegionStore` is renderer-neutral; wire its `readTile` into the Leaflet
+`OfflineRegionStore` is renderer-neutral; wire its `readTile` into the MapLibre
 offline layer.
 
 ```ts
@@ -149,7 +149,7 @@ import {
   createPMTilesOfflineRegionStore, pmtilesTileByteSource,
   requestPersistentStorage, installGuidance,
 } from "@mapatlas/offline-pmtiles";
-import { createOfflineTileLayer } from "@mapatlas/leaflet";
+import { createOfflineTileLayer } from "@mapatlas/maplibre";
 
 const offline = createPMTilesOfflineRegionStore({
   source: pmtilesTileByteSource("https://cdn.example/region.pmtiles"),
@@ -184,7 +184,7 @@ without touching the engine:
 - **Analyzer** — implement `MediaAnalyzer` (on-device ONNX, or a remote vision
   model); set `runsRemotely` truthfully so the UI can disclose egress.
 - **Recorder** — implement `TrackRecorder` (e.g. a native background recorder).
-- **Renderer** — the engine is renderer-agnostic; Leaflet is one implementation.
+- **Renderer** — the engine is renderer-agnostic; MapLibre GL is one implementation.
 
 See [`specs/api.md`](../specs/api.md) for every signature and
 [`specs/architecture.md`](../specs/architecture.md) for the why.

@@ -5,7 +5,7 @@
     { "path": "packages/storage-idb" },
     { "path": "packages/recorder-web" },
     { "path": "packages/offline-pmtiles" },
-    { "path": "packages/leaflet" },
+    { "path": "packages/maplibre" },
     { "path": "packages/react" },
     { "path": "apps/demo" }
   ]

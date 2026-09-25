@@ -158,3 +158,41 @@ network) are tested; the demo (T7.1) wires the full path. `api.md §5` is update
 **Consequences.** The store is reusable by any future renderer (e.g. a MapLibre sibling) without
 change; Leaflet stays offline-store-agnostic; the network-disabled render path is machine-tested.
 Seams (source/cache) are faked in tests — no live tile host, no bundled tiles.
+
+## ADR-0014 — Renderer replaced: MapLibre GL supersedes Leaflet (`@mapatlas/maplibre`)
+**Context.** ADR-0002 chose Leaflet for a light, raster-only, all-day-battery renderer. That
+calculus changes once overlays carry meaningful vector content: nautical charts and seamarks
+benefit from vector-tile rendering (crisp at any zoom, stylable per attribute — e.g. bathymetry
+and water-depth contours shaded by value, not baked into raster tiles), which needs a WebGL
+renderer. MapLibre GL is the FOSS (BSD-2) vector-tile engine with that capability, and — unlike
+Mapbox GL — carries no mandatory branded attribution, satisfying ADR-0006's open-core posture and
+this engine's *neutral-dependency* criterion (the engine must never surface a vendor's logo or
+flagged default attribution on a consumer's behalf; only the per-source attributions the consumer
+declares in `TileSource[]`).
+**Decision.** Replace the renderer outright: `@mapatlas/leaflet` is renamed `@mapatlas/maplibre`
+and reimplemented against `maplibre-gl`, with `core` still renderer-agnostic and the
+`MapController` interface (`api.md §6`) kept byte-for-byte identical. Notable adaptations forced
+by MapLibre's model (not by any interface change):
+- MapLibre requires the style to finish loading before `addSource`/`addLayer` (Leaflet's layer
+  model was synchronous). Tile-source and track-line setup queue behind `map.once("load", ...)`
+  so calls made before load still take effect; markers, click handling, and camera moves need no
+  such queue since they work as soon as the map instance exists.
+- `createTileLayer`/`createOfflineTileLayer` return an `{ addTo(map), remove() }` handle instead
+  of a Leaflet `L.Layer` — the closest MapLibre-native analogue of Leaflet's own `addTo`/`remove`
+  layer idiom, so callers attach/detach a tile stack the same way as before.
+- Event markers are keyboard-reachable HTML `Marker`s (`role="button"`, `tabindex="0"`,
+  `aria-label`, Enter/Space activation) in place of Leaflet `DivIcon`s — same accessibility
+  contract, different DOM construction.
+- The engine owns attribution explicitly: the map is constructed with `attributionControl: false`
+  and an `AttributionControl` is added with no default/branded prefix, so only the per-source
+  `attribution` strings ever render (the neutral-dependency criterion above).
+- `packages/maplibre`'s own unit tests mock `maplibre-gl` entirely (`vi.mock`) rather than
+  exercising a real WebGL context, which jsdom cannot provide.
+`api.md §5`/`§6`, `tasks.md` Phase 4, and `roadmap.md` Phase 4 are updated in the same change; the
+roadmap's former post-v1 "MapLibre sibling" line is removed since MapLibre is now the only
+renderer, not a future addition.
+**Consequences.** Vector overlays (seamarks, depth-shaded bathymetry) become stylable without a
+raster re-tiling pipeline; the engine gains a WebGL dependency (heavier than Leaflet's SVG/DOM
+renderer) in exchange. The import-isolation scan now forbids `core` importing `maplibre-gl`
+(previously `leaflet`). No consumer-facing interface changed — only the renderer package's name
+and internals.

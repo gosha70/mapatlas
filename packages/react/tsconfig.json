@@ -9,7 +9,7 @@
   },
   "references": [
     { "path": "../core" },
-    { "path": "../leaflet" },
+    { "path": "../maplibre" },
     { "path": "../recorder-web" }
   ],
   "include": ["src/**/*.ts", "src/**/*.tsx"],

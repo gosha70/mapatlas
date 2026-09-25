@@ -15,8 +15,8 @@ export const PACKAGE_NAME = "@mapatlas/core";
     expect(scanContent("core", bad).length).toBeGreaterThan(0);
   });
 
-  it("fails when core imports leaflet (planted violation)", () => {
-    const bad = `import L from "leaflet";`;
+  it("fails when core imports maplibre-gl (planted violation)", () => {
+    const bad = `import maplibregl from "maplibre-gl";`;
     expect(scanContent("core", bad).length).toBeGreaterThan(0);
   });
 
@@ -30,15 +30,15 @@ export const PACKAGE_NAME = "@mapatlas/core";
     expect(scanContent("core", bad).length).toBeGreaterThan(0);
   });
 
-  it("fails when leaflet imports react (planted violation)", () => {
+  it("fails when maplibre imports react (planted violation)", () => {
     const bad = `import React from "react";`;
-    expect(scanContent("leaflet", bad).length).toBeGreaterThan(0);
+    expect(scanContent("maplibre", bad).length).toBeGreaterThan(0);
   });
 
-  it("allows the DOM in leaflet but still rejects domain tokens", () => {
-    expect(scanContent("leaflet", `const c = document.body;`)).toEqual([]);
+  it("allows the DOM in maplibre but still rejects domain tokens", () => {
+    expect(scanContent("maplibre", `const c = document.body;`)).toEqual([]);
     expect(
-      scanContent("leaflet", `const p = "mushroom";`).length,
+      scanContent("maplibre", `const p = "mushroom";`).length,
     ).toBeGreaterThan(0);
   });
 });

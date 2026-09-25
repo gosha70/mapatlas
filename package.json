@@ -28,6 +28,7 @@
     "docs:write": "node scripts/check-docs.mjs --write",
     "report:environment": "node scripts/report-environment.mjs",
     "probe:flake": "node scripts/run-flake-probe.mjs",
+    "check:probe-output": "node scripts/check-probe-output.mjs",
     "check:runtime-mode": "node scripts/check-runtime-mode.mjs",
     "verify": "npm run build && npm run typecheck && npm run lint && npm run test:coverage && npm run scan:isolation && npm run scan:spdx && npm run format:check && npm run check:docs && npm run check:runtime-mode && npm run check:packaging",
     "test:coverage": "vitest run --coverage",

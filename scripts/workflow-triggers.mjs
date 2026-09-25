@@ -121,3 +121,74 @@ export function timeoutOf(yaml) {
   }
   return Number(found[0][1]);
 }
+
+/** A step's own keys, at the indentation `- name:`/`- uses:` sets. */
+/**
+ * The step keys an assertion in this repository needs.
+ *
+ * **`continue-on-error` is here because leaving it out made a falsifier invisible.** A mutant that
+ * added `continue-on-error: true` to the probe — turning an answerless job green — survived, not
+ * because the assertion was wrong but because this reader silently dropped the key it asserted on.
+ * A reader that omits a key reports `undefined` for it, which is indistinguishable from absence.
+ */
+const STEP_KEYS = "name|uses|run|if|continue-on-error";
+const STEP_START = new RegExp(`^(\\s*)- (${STEP_KEYS}):[ \\t]*(.*)$`);
+const STEP_KEY = new RegExp(`^\\s*(${STEP_KEYS}):[ \\t]*(.*)$`);
+const WITH_KEY = /^\s*([a-z0-9-]+):[ \t]*(.*)$/i;
+
+/**
+ * A workflow's steps in order, each with the keys an assertion needs.
+ *
+ * **Ordering is the property, which is why this returns a list and not a lookup.** The probe's
+ * durable output is uploaded by a step that has to come *after* the probe — an upload scheduled
+ * before it would archive an empty directory — and "the file contains an upload step" stays true
+ * however the two are arranged. `runCommandsOf` already makes this argument for `run:` steps;
+ * this extends it to steps that `uses:` an action, which have no command to read.
+ *
+ * **Deliberately shallow.** It reads `name`, `uses`, `run`, `if` and a flat `with:` block, which
+ * is what this repository's workflows contain; anything nested inside `with:` is not represented
+ * rather than half-represented. It is not a YAML parser and does not pretend to be one — the same
+ * bargain the readers above make, with the same reason: a reader that returned something for
+ * input it could not understand would let an assertion compare against noise.
+ *
+ * @param {string} yaml
+ * @returns {{ name?: string, uses?: string, run?: string, if?: string, with: Record<string, string> }[]}
+ */
+export function stepsOf(yaml) {
+  const steps = [];
+  let current;
+  /** Indentation of the open `with:` block, or `null` when not inside one. */
+  let withIndent = null;
+  for (const raw of yaml.split("\n")) {
+    if (raw.trimStart().startsWith("#") || raw.trim() === "") continue;
+    const indent = raw.length - raw.trimStart().length;
+
+    // **A `with:` block ends at the first line no deeper than the `with:` itself.** Tracked by
+    // indentation rather than by key name, because `with:` legitimately contains keys that are
+    // also step keys — `name:` is one, and reading it as the step's name renamed the upload step
+    // after its artifact and emptied its `with` block. Found by running this against the real
+    // file rather than by reasoning about it.
+    if (withIndent !== null && indent > withIndent) {
+      const pair = WITH_KEY.exec(raw);
+      if (pair !== null && current !== undefined) current.with[pair[1]] = pair[2].trim();
+      continue;
+    }
+    withIndent = null;
+
+    const start = STEP_START.exec(raw);
+    if (start !== null) {
+      current = { with: {} };
+      steps.push(current);
+      current[start[2]] = start[3].trim();
+      continue;
+    }
+    if (current === undefined) continue;
+    if (/^\s*with:\s*$/.test(raw)) {
+      withIndent = indent;
+      continue;
+    }
+    const key = STEP_KEY.exec(raw);
+    if (key !== null) current[key[1]] = key[2].trim();
+  }
+  return steps;
+}

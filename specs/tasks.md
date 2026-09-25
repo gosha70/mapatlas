@@ -1564,7 +1564,7 @@ and can be picked up like anything else. Unowned and unordered.
   knife edge (both boundaries are exact lattice integers), and test-order dependence inside the
   file (fifteen shuffled runs).
 
-  **Resumed, 2026-09-23 — open, and not discharged.** This is a status record, not a Done record:
+  **Parked again, 2026-09-25 — open, and not discharged.** This is a status record, not a Done record:
   the acceptance criterion above is **not met** — no cause is identified, the failure is not
   reproducible on demand, and no fix has been attempted. Parked on 2026-09-22 under option A of
   the plan's amendment of 2026-09-21, and **un-parked on 2026-09-23 when the owner ruled option
@@ -1574,9 +1574,26 @@ and can be picked up like anything else. Unowned and unordered.
   by hand as 2d's was. **2e is a follow-on, not 2d at a larger budget**: the measured suite is 91
   files where 2c's and 2d's was 95 (T8.2 added one, T8.3 removed five), nothing pinned the count,
   and the suite is the workload whose flakiness is measured — so 2e is read on its own terms and
-  the 95-file evidence, `M = 61` included, stays scoped to that suite. Increment 2e is
-  **implemented and under review; no dispatch has been made**, and the dispatch is a separate
-  instruction. What stands, all recorded on issue #30
+  the 95-file evidence, `M = 61` included, stays scoped to that suite.
+
+  **2e ran on 2026-09-25, and its comparison was lost.** Run 36077914754, head `e2cd222`, 89m16s.
+  Both arms completed all 150 runs with no unrelated failures and no instrument faults, **the
+  default control reproduced**, and a Fisher test was computed — then the report was lost, because
+  it existed only in a job log GitHub capped at 114,903 bytes and truncated after run 1 of 300.
+  The counts, rates, p-value and outcome are unrecoverable, so **no statement about `--no-opt`
+  follows from 2e**. This is "comparison result lost", which is not 2d's "inconclusive": 2d's
+  control did not reproduce, and 2e's did. The owner ruled **no rerun** — the one-dispatch rule
+  stands, and re-running because a record disappointed is selection one step removed. A
+  **durability repair** to the instrument (transcript written as the loop runs, report written
+  before exit, both uploaded with `if: always()`) is implemented and under review; it is
+  hardening, spends no alpha, and is not a fourth experiment. Recorded separately as
+  corroboration and **not** as part of 2e: an ordinary `ci.yml` run on the same commit failed
+  with a message byte-identical to the recorded signature. That run was **unmarked**, so it
+  collected the **93-file ordinary suite** rather than the probe's 91 — a related but different
+  workload. It establishes that the failure still reproduces there under default Node, and is not
+  evidence about `M` or `--no-opt`.
+
+  What stands, all recorded on issue #30
   and in [`specs/plans/t8-1-fixture-flake.md`](plans/t8-1-fixture-flake.md): the failure is
   localised to `cropFor`'s construction of the second crop (a position, not a mechanism); the rate
   differed between default Node and `--jitless` on one runner on one day (2c, 8/60 against 0/60,

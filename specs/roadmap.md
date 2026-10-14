@@ -101,8 +101,9 @@ The heart, with no browser or renderer.
 
 ## Phase 8 — Follow-ups (post-v1, recorded and unscheduled)
 - Work that is real, is not part of M1, and would otherwise live only in `CONTINUE.md`.
-  `tasks.md` carries the three with acceptance criteria: the fixture-build flake tracked in issue
-  #30, per-package READMEs, and the `/lab` retirement audit. **Not part of M1** — Phases 0–7 are
+  `tasks.md` carries them with acceptance criteria: the fixture-build flake tracked in issue
+  #30, per-package READMEs, the `/lab` retirement audit, and — requested by the first consumer —
+  the `@mapatlas/react` client boundary and React 18 coverage in a Next 14 consumer (T8.4, T8.5). **Not part of M1** — Phases 0–7 are
   what `PRD.md §6` measures, and nothing here is required by it.
 
 ## Milestones (do not conflate these two)

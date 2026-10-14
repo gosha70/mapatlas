@@ -89,5 +89,16 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 300_000,
     },
+    {
+      // **A Next 14 App Router consumer on React 18, built from packed tarballs** (ADR-0043). The
+      // first real consumer's stack, not this repository's: webpack, server rendering then
+      // hydration, and the React major `@mapatlas/react`'s peer range admits but nothing else
+      // here runs. Never reused, for the example server's reason — the tarballs are repacked from
+      // the current `dist` on every start.
+      command: "node scripts/serve-next-consumer.mjs",
+      url: "http://127.0.0.1:5179/",
+      reuseExistingServer: false,
+      timeout: 300_000,
+    },
   ],
 });

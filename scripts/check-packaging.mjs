@@ -90,6 +90,30 @@ const TEST_ONLY_DEPENDENCIES = [{ package: "@mapatlas/react", dependency: "react
 const EXACT_PEERS = [{ package: "@mapatlas/maplibre", peer: "maplibre-gl" }];
 
 /**
+ * The package whose modules carry the React Server Components client boundary (ADR-0043).
+ *
+ * **The rule is derived from each module, not listed.** A module that imports from `react` runs
+ * hooks or creates elements, so under an RSC bundler it must open with `"use client"`; without
+ * it, a Server Component that imports `MapCanvas` evaluates `useRef` on the server runtime and
+ * the consumer's build fails (`useRef is not a function`). A module that does *not* import React
+ * must *not* carry it: the barrel exports `PACKAGE_NAME`, a plain value, and marking the barrel
+ * would turn that value into a client reference a Server Component cannot read. A hand-kept list
+ * would pass the day a new hook module shipped without the directive; this cannot.
+ */
+const CLIENT_BOUNDARY_PACKAGE = "@mapatlas/react";
+const IMPORTS_REACT = /^import\s[^;]*\sfrom\s+"react";/m;
+
+/** The first statement of an emitted module, after its leading line comments and blank lines. */
+function firstStatement(source) {
+  return (
+    source
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line !== "" && !line.startsWith("//")) ?? ""
+  );
+}
+
+/**
  * Every file a package itself ships, so an artifact can be searched rather than sampled.
  *
  * `node_modules` is skipped, and that is not tidiness: under `--install-strategy=nested` a
@@ -217,6 +241,34 @@ try {
   for (const { package: name, path, why } of FORBIDDEN_PATHS) {
     if (existsSync(join(scratch, "node_modules", name, path))) {
       failures.push(`${name} ships "${path}" — ${why}`);
+    }
+  }
+
+  {
+    const installed = join(scratch, "node_modules", CLIENT_BOUNDARY_PACKAGE);
+    const modules = filesUnder(join(installed, "dist")).filter((file) => file.endsWith(".js"));
+    for (const file of modules) {
+      const source = readFileSync(file, "utf8");
+      const marked = firstStatement(source) === '"use client";';
+      const relative = file.slice(installed.length + 1);
+      if (IMPORTS_REACT.test(source) && !marked) {
+        failures.push(
+          `${CLIENT_BOUNDARY_PACKAGE}'s ${relative} imports React but does not open with ` +
+            `"use client" — a Server Component importing it fails the consumer's build`,
+        );
+      }
+      if (!IMPORTS_REACT.test(source) && marked) {
+        failures.push(
+          `${CLIENT_BOUNDARY_PACKAGE}'s ${relative} opens with "use client" but imports no React — ` +
+            `its plain exports become client references a Server Component cannot read`,
+        );
+      }
+    }
+    if (!modules.some((file) => IMPORTS_REACT.test(readFileSync(file, "utf8")))) {
+      failures.push(
+        `${CLIENT_BOUNDARY_PACKAGE}'s packed output has no module importing React — the ` +
+          `client-boundary check would pass vacuously`,
+      );
     }
   }
 

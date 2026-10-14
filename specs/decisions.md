@@ -1616,3 +1616,49 @@ recorded as post-v1 so it is chosen deliberately rather than arrived at.
 **amendment to this ADR and to `roadmap.md`'s exit note, plus a release task** — not a
 reinterpretation of either. The reading is recorded here precisely so that changing it has to be
 done out loud.
+
+
+## ADR-0043 — `@mapatlas/react` marks its client boundary, and React 18 is tested in a Next 14 consumer
+
+**Status.** Proposed 2026-10-14, on the branch `feat/react18-next14-consumer`; for owner review.
+
+**Context.** The first real consumer (gosha70/hookatlas#5) is a Next 14 App Router application on
+React 18. A spike on 2026-10-14 installed this repository's packed tarballs (engine `7c3a8de`) into
+it and found two things. First, a Server Component that imports `MapCanvas` fails the consumer's
+`next build` while prerendering — `TypeError: (0, U.useRef) is not a function` — because nothing in
+`@mapatlas/react` marks a client boundary, so the RSC graph evaluates hooks on the server runtime.
+Second, `@mapatlas/react` declares `react: ">=18"` while the workspace pins `react@19.2.8`: every
+test of the bindings ran on 19, so the lower half of the range was a claim no test supported.
+
+**Decision.**
+1. Every `@mapatlas/react` module that imports React opens with `"use client"`, and no other module
+   does. The barrel stays unmarked: it exports `PACKAGE_NAME`, a plain value, which a marked barrel
+   would turn into a client reference a Server Component cannot read. `check:packaging` enforces the
+   rule on the **installed tarball**, derived per module (imports React ⇔ opens with the directive)
+   rather than from a hand-kept list, so a new hook module cannot ship unmarked.
+2. A browser lane builds a **Next 14 App Router project on React 18** from packed tarballs
+   (`scripts/serve-next-consumer.mjs`, `examples/next14-react18/`) and drives the complete
+   foreground loop in it: record → pause → resume → pin with a photo → reload → resume the recovered
+   trip → stop → review (`e2e/next14-react18.e2e.ts`). A second route imports `MapCanvas` directly
+   into a Server Component. The lane's versions are read from the fixture's own `versions.json`,
+   exact pins only — deliberately not the root manifest's, because the point is to differ from it —
+   and are the ones HookAtlas resolves (Next 14.2.29, React 18.3.1, TypeScript 5.9.3).
+3. The lane records the engine it ran: `build/next14-react18/ENGINE_PIN.json` holds the commit,
+   whether `packages/` was dirty, and each tarball's SHA-256. Consumers pin tarballs to a commit
+   until publishing is scheduled; this ADR does not touch ADR-0042.
+
+**Consequences.**
+- The peer range `>=18` is now tested at both ends (18.3 here, 19.x everywhere else).
+- A webpack-based consumer has to serve MapLibre's worker itself: under Next 14 the worker was
+  created from the page URL and the map drew nothing, with no error. The fixture does what such a
+  consumer must — copies `maplibre-gl-worker.mjs` and `maplibre-gl-shared.mjs` from its own
+  `maplibre-gl` into `public/` and calls `setWorkerUrl` before the map mounts — and api.md §0 now
+  says so beside Vite's `?worker&url`.
+- The browser job installs Next 14 from the registry, which adds time to that job.
+- Mutants, each killed: the directive removed from one module fails `check:packaging` and the
+  Server Component build; the directive added to the barrel fails `check:packaging`; "resume the
+  recovered trip" replaced by a fresh start fails the loop — first on the recovered-trip offer
+  still being on screen afterwards, ahead of the track-id assertion that would also catch it.
+
+**Reversal rule.** Narrowing the peer to `>=19` instead would delete the lane and this ADR's second
+decision together, and has to say which consumers it drops.

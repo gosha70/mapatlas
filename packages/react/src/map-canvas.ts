@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+"use client";
 
 import { createElement, useEffect, useRef } from "react";
 import type { ReactElement } from "react";

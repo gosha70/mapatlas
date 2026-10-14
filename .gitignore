@@ -169,6 +169,10 @@ build/fixture/
 # tarballs, a `node_modules` of its own and a bundle, rebuilt from empty on every browser run.
 /build/quick-start/
 
+# The Next 14 / React 18 consumer (T8.5, ADR-0043): same as the quick start, plus `.next/` and the
+# `ENGINE_PIN.json` that names the commit and tarball digests a run used.
+/build/next14-react18/
+
 # Playwright
 /test-results/
 /playwright-report/

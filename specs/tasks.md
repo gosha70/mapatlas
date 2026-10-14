@@ -1761,6 +1761,31 @@ and can be picked up like anything else. Unowned and unordered.
   from; and the plan's own "fails on a 404" expectation was false — the dev server's SPA fallback
   serves `/lab` as the application — and is amended in place.
 
+- **T8.4 `"use client"` on `@mapatlas/react`** (requested by the first consumer, gosha70/hookatlas#5;
+  plan: [`specs/plans/hookatlas-consumer-engine-work.md`](plans/hookatlas-consumer-engine-work.md)
+  E3; ADR-0043). A Server Component importing `MapCanvas` failed a Next 14 consumer's build with
+  `useRef is not a function`. _AC:_ every React-importing module in the **packed** package opens
+  with `"use client"` and no other module does, enforced by `check:packaging` per module rather
+  than by list; a Next App Router Server Component that imports `MapCanvas` directly builds,
+  prerenders and hydrates in a browser; the existing SSR-safety tests still pass; Vite consumers
+  are unaffected.
+
+  **Status** (2026-10-14): implemented on `feat/react18-next14-consumer`, staged for review, not
+  committed. Both AC halves have killed mutants (ADR-0043).
+
+- **T8.5 React 18 coverage in a Next 14 consumer** (same origin; plan E2; ADR-0043).
+  `@mapatlas/react` declares `react: ">=18"` and every lane ran 19. _AC:_ packed tarballs installed
+  into a Next 14 App Router project on React 18.3 (versions pinned exactly in the fixture) complete
+  record → pause → resume → pin with a photo → reload → resume the recovered trip → stop → review
+  in a real browser, each step on its own evidence (segment count, a paused-only position recorded
+  nowhere, one track id across the reload, a photo that decodes in the review, the consumer's own
+  IndexedDB, a clean console); the basemap paints under the consumer's bundler; the run records the
+  engine commit and tarball digests.
+
+  **Status** (2026-10-14): implemented on `feat/react18-next14-consumer`, staged for review, not
+  committed. Lane green locally (3/3) with only its own server started, because another checkout's
+  long-running demo holds ports 5175–5176; the full `test:browser` run is for CI.
+
 ## Global definition of done (every task)
 `build` + `typecheck` (strict) + `lint` + `test` green · isolation & SPDX scans green ·
 public API changes mirrored into `api.md` · consequential decisions appended to `decisions.md`.

@@ -374,6 +374,15 @@ createRoot(mount).render(
 );
 ```
 
+**Under webpack (Next.js and others), serve the worker yourself.** `?worker&url` is Vite's syntax.
+A webpack build rewrites MapLibre's module URL so that it resolves its worker from the page itself;
+the map constructs and draws nothing, with no error. Copy `maplibre-gl-worker.mjs` and the one
+module it imports, `maplibre-gl-shared.mjs`, from your installed `maplibre-gl/dist` into your
+static directory and call `setWorkerUrl` with that same-origin URL before the first map mounts —
+in a Next App Router project, from a client effect, since `maplibre-gl` must not be imported on
+the server. `examples/next14-react18` does exactly this, and `e2e/next14-react18.e2e.ts` asserts
+the basemap paints (ADR-0043).
+
 ### The page
 
 The height rules are not decoration. `MapCanvas` renders at 100% of its container, so a container
@@ -1613,6 +1622,12 @@ immediate jump instead of an eased move. A preference changed after controller c
 therefore honoured by the next operation.
 
 ## 9. React bindings (`@mapatlas/react`)
+
+**Client boundary.** Every component and hook below lives in a module that opens with
+`"use client"`, so a React Server Component may import them directly; only serialisable props can
+then cross from the server, which rules out callbacks and a `store`. The package barrel itself is
+unmarked, so `PACKAGE_NAME` stays a plain value. React `>=18` is the peer range, tested on 18.3 in
+a Next 14 App Router consumer and on 19.x everywhere else (ADR-0043).
 
 ```ts
 export function useTrackRecorder(opts?: {

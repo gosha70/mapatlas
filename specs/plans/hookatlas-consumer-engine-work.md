@@ -1,6 +1,6 @@
 # Engine work requested by the first real consumer (HookAtlas trip map)
 
-> Status: **E3 and E2 implemented** (T8.4, T8.5, ADR-0043; staged on `feat/react18-next14-consumer`); **E1 deferred** by owner ruling 2026-10-14 · Date: 2026-10-14 · Origin: gosha70/hookatlas#5 (real-time fishing-trip
+> Status: **E3 and E2 implemented** (T8.4, T8.5, ADR-0043; in review as PR #75 on `feat/react18-next14-consumer`, not merged); **E1 deferred** by owner ruling 2026-10-14 · Date: 2026-10-14 · Origin: gosha70/hookatlas#5 (real-time fishing-trip
 > map). Consumer-side plan: `hookatlas/specs/pitches/0034-trip-map-web-mvp/plan.md`.
 >
 > Owner preference recorded with the request: *where the enhancement belongs to MAP-ATLAS core

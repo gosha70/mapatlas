@@ -1770,8 +1770,9 @@ and can be picked up like anything else. Unowned and unordered.
   prerenders and hydrates in a browser; the existing SSR-safety tests still pass; Vite consumers
   are unaffected.
 
-  **Status** (2026-10-14): implemented on `feat/react18-next14-consumer`, staged for review, not
-  committed. Both AC halves have killed mutants (ADR-0043).
+  **Status** (2026-10-14): implemented on `feat/react18-next14-consumer`, in review as PR #75, not
+  merged. Both AC halves have killed mutants (ADR-0043); the barrel mutant is killed with the
+  directive either first or after the barrel's leading doc comment.
 
 - **T8.5 React 18 coverage in a Next 14 consumer** (same origin; plan E2; ADR-0043).
   `@mapatlas/react` declares `react: ">=18"` and every lane ran 19. _AC:_ packed tarballs installed
@@ -1782,9 +1783,9 @@ and can be picked up like anything else. Unowned and unordered.
   IndexedDB, a clean console); the basemap paints under the consumer's bundler; the run records the
   engine commit and tarball digests.
 
-  **Status** (2026-10-14): implemented on `feat/react18-next14-consumer`, staged for review, not
-  committed. Lane green locally (3/3) with only its own server started, because another checkout's
-  long-running demo holds ports 5175–5176; the full `test:browser` run is for CI.
+  **Status** (2026-10-14): implemented on `feat/react18-next14-consumer`, in review as PR #75, not
+  merged. Lane green locally (3/3) with only its own server started, because another checkout's
+  long-running demo holds ports 5175–5176; the full `test:browser` run passed in CI on `049ff07`.
 
 ## Global definition of done (every task)
 `build` + `typecheck` (strict) + `lint` + `test` green · isolation & SPDX scans green ·

@@ -103,10 +103,14 @@ const EXACT_PEERS = [{ package: "@mapatlas/maplibre", peer: "maplibre-gl" }];
 const CLIENT_BOUNDARY_PACKAGE = "@mapatlas/react";
 const IMPORTS_REACT = /^import\s[^;]*\sfrom\s+"react";/m;
 
-/** The first statement of an emitted module, after its leading line comments and blank lines. */
+/**
+ * The first statement of an emitted module, after its leading comments and blank lines. Block
+ * comments count: a directive after a JSDoc header is still in the directive prologue.
+ */
 function firstStatement(source) {
   return (
     source
+      .replace(/\/\*[\s\S]*?\*\//g, "")
       .split("\n")
       .map((line) => line.trim())
       .find((line) => line !== "" && !line.startsWith("//")) ?? ""

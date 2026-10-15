@@ -1549,8 +1549,16 @@ and can be picked up like anything else. Unowned and unordered.
   by its own id, in the order coverage returned them"* — fails intermittently in CI with a
   byte-identical signature: `0 sample(s) covered by none and 3955 by more than one, over 46x113`.
   Three occurrences on three different commits (`9c05be6` PR #28, `fcd5194` PR #31, `d8410f0`
-  PR #42), each green on re-run with no code change. Tracked in **issue #30**, which holds the
-  leads and what has been eliminated — read it before investigating. _AC:_ the cause is identified
+  PR #42), each green on re-run with no code change. **Recounted 2026-10-14: fourteen** ordinary
+  `ci.yml` jobs on fourteen commits, each that job's only failure — `001c895`, `6765fd1`,
+  `4e24b72`, `9c05be6`, `fcd5194`, `24eaa18`, `3156ea5`, `d8410f0`, `65548da`, `025cdbe`,
+  `acca267`, `e2cd222`, `049ff07`, `b44b65a` — found by scanning the failed jobs of every attempt of
+  all 267 `ci.yml` runs (`gh run list` shows only a run's latest attempt, so a hit that went green
+  on re-run is invisible there). Probe dispatches are counted separately below. A fifteenth job,
+  `b3ebc93`, failed with the same byte-identical message in a **different** test of the same file,
+  *"judges the floor on the declared region, not on the envelope it had to read"*. Tracked in
+  **issue #30**, which holds the leads and what has been eliminated — read it before investigating.
+  _AC:_ the cause is identified
   and the failure is made **reproducible on demand** before it is fixed; the fix is falsified by a
   mutation that reproduces the original signature. A change that merely stops the failure being
   observed does not discharge this — an intermittent test that has gone quiet is indistinguishable

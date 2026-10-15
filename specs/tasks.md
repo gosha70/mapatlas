@@ -1770,9 +1770,14 @@ and can be picked up like anything else. Unowned and unordered.
   prerenders and hydrates in a browser; the existing SSR-safety tests still pass; Vite consumers
   are unaffected.
 
-  **Status** (2026-10-14): implemented on `feat/react18-next14-consumer`, in review as PR #75, not
-  merged. Both AC halves have killed mutants (ADR-0043); the barrel mutant is killed with the
-  directive either first or after the barrel's leading doc comment.
+  **Done** (2026-10-14, PR #75 — `049ff07` and the review fix `b44b65a` — merged as `80b797a`).
+  Every React-importing module in the packed `@mapatlas/react` opens with `"use client"` and the
+  barrel does not; `check:packaging` derives the rule per module from the installed tarball.
+  Mutants, each killed: the directive removed from `map-canvas`; the directive on the barrel, as
+  its first line or after its leading doc comment — the second placement survived until
+  `b44b65a` taught `check:packaging` to skip block comments (ADR-0043). The Server Component route
+  builds, prerenders and hydrates in CI's `browser · real Chromium` job on both PR commits and on
+  the merge commit; the SSR-safety tests and the Vite quick-start lane pass unchanged.
 
 - **T8.5 React 18 coverage in a Next 14 consumer** (same origin; plan E2; ADR-0043).
   `@mapatlas/react` declares `react: ">=18"` and every lane ran 19. _AC:_ packed tarballs installed
@@ -1783,9 +1788,12 @@ and can be picked up like anything else. Unowned and unordered.
   IndexedDB, a clean console); the basemap paints under the consumer's bundler; the run records the
   engine commit and tarball digests.
 
-  **Status** (2026-10-14): implemented on `feat/react18-next14-consumer`, in review as PR #75, not
-  merged. Lane green locally (3/3) with only its own server started, because another checkout's
-  long-running demo holds ports 5175–5176; the full `test:browser` run passed in CI on `049ff07`.
+  **Done** (2026-10-14, PR #75, merged as `80b797a`). `e2e/next14-react18.e2e.ts` — the basemap
+  painting under Next's webpack, the Server Component route, and the full loop — passed in CI's
+  `browser · real Chromium` job on `049ff07`, on `b44b65a`, and on the merge commit (run
+  38631440861). Versions are pinned exactly in `examples/next14-react18/versions.json` (Next
+  14.2.29, React 18.3.1), and each run writes `build/next14-react18/ENGINE_PIN.json`. The peer
+  range `react: ">=18"` is now tested at both ends (ADR-0043).
 
 ## Global definition of done (every task)
 `build` + `typecheck` (strict) + `lint` + `test` green · isolation & SPDX scans green ·

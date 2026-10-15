@@ -1,6 +1,6 @@
 # Engine work requested by the first real consumer (HookAtlas trip map)
 
-> Status: **E3 and E2 implemented** (T8.4, T8.5, ADR-0043; in review as PR #75 on `feat/react18-next14-consumer`, not merged); **E1 deferred** by owner ruling 2026-10-14 · Date: 2026-10-14 · Origin: gosha70/hookatlas#5 (real-time fishing-trip
+> Status: **E3 and E2 complete** (T8.4, T8.5, ADR-0043; PR #75, merged as `80b797a` on 2026-10-14); **E1 deferred** by owner ruling 2026-10-14 · Date: 2026-10-14 · Origin: gosha70/hookatlas#5 (real-time fishing-trip
 > map). Consumer-side plan: `hookatlas/specs/pitches/0034-trip-map-web-mvp/plan.md`.
 >
 > Owner preference recorded with the request: *where the enhancement belongs to MAP-ATLAS core
@@ -100,7 +100,7 @@ an ADR, not "enhancing core logic":
 
 ## 5. Order
 
-E3 and E2 first (done on the branch, T8.4 / T8.5). E1 is deferred; consumers use commit-pinned
+E3 and E2 first (done: T8.4 / T8.5, merged as `80b797a`). E1 is deferred; consumers use commit-pinned
 tarballs. HookAtlas Phase 1 integration can start on tarballs from the commit that lands E2/E3. E4
 is scheduled with HookAtlas Phase 2, not before. Beta deployment remains HookAtlas's next release
 priority; engine work is in a different repository but still consumes engineering time.

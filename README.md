@@ -33,7 +33,7 @@ compiled against the packed packages by `check:packaging` and run in a real brow
 
 <!-- generated:status -->
 
-[`specs/tasks.md`](specs/tasks.md) carries a **Done** record for 15 of its 54 tasks; the first in document order is T4.6.
+[`specs/tasks.md`](specs/tasks.md) carries a **Done** record for 17 of its 54 tasks; the first in document order is T4.6.
 A zero below means *no Done record*, not *no completed work*: this table reports what that
 file records, and is generated from it.
 
@@ -47,7 +47,7 @@ file records, and is generated from it.
 | 5 — `@mapatlas/react` | 6 | 5 |
 | 6 — Offline regions | 2 | 2 |
 | 7 — Demo + docs | 4 | 4 |
-| 8 — Follow-ups (post-v1, recorded and unscheduled) | 5 | 2 |
+| 8 — Follow-ups (post-v1, recorded and unscheduled) | 5 | 4 |
 
 <!-- /generated:status -->
 
